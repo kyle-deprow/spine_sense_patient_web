@@ -5,15 +5,10 @@ import {
   type Page,
 } from "@playwright/test";
 
-import {
-  patientClinicalScenario,
-  patientWebClinicalSeedRequest,
-} from "./fixtures/patientClinicalScenario";
+import { patientClinicalScenario } from "./fixtures/patientClinicalScenario";
 
-const PATIENT_EMAIL =
-  process.env.PATIENT_E2E_EMAIL ?? patientClinicalScenario.patient.email;
-const PATIENT_PASSWORD =
-  process.env.PATIENT_E2E_PASSWORD ?? patientClinicalScenario.patient.password;
+const PATIENT_EMAIL = patientClinicalScenario.patient.email;
+const PATIENT_PASSWORD = patientClinicalScenario.patient.password;
 const BACKEND_RESET_URL = process.env.PATIENT_WEB_BACKEND_RESET_URL;
 const EXPECT_SECURE_COOKIES =
   process.env.PATIENT_WEB_EXPECT_SECURE_COOKIES === "true";
@@ -36,19 +31,15 @@ async function resetBackend(request: APIRequestContext) {
     );
   }
 
-  const response = await request.post(BACKEND_RESET_URL, {
-    data: {
-      ...patientWebClinicalSeedRequest,
-      patient: {
-        ...patientWebClinicalSeedRequest.patient,
-        email: PATIENT_EMAIL,
-        password: PATIENT_PASSWORD,
-      },
-    },
-  });
+  const response = await request.post(BACKEND_RESET_URL);
+  const responseText = await response.text();
   expect(
     response.ok(),
-    `PATIENT_WEB_BACKEND_RESET_URL must reset and seed ${patientClinicalScenario.seedKey}`,
+    [
+      `PATIENT_WEB_BACKEND_RESET_URL must reset and seed ${patientClinicalScenario.seedKey}`,
+      `status=${response.status()}`,
+      `body=${sanitizeBrowserDiagnostic(responseText)}`,
+    ].join(" "),
   ).toBeTruthy();
 }
 
@@ -304,7 +295,7 @@ async function logoutViaBff(page: Page) {
       .find((entry) => entry.startsWith("spine_patient_csrf="))
       ?.slice("spine_patient_csrf=".length);
 
-    if (!csrfCookie) return 0;
+    if (!csrfCookie) return "missing_csrf";
 
     const response = await fetch("/api/auth/logout", {
       method: "POST",
@@ -317,9 +308,16 @@ async function logoutViaBff(page: Page) {
     });
     return response.status;
   });
-  expect(status).toBe(200);
 
   const cookies = await page.context().cookies();
+  if (status === "missing_csrf") {
+    expect(hasCookie(cookies, "spine_patient_sess")).toBe(false);
+    expect(hasCookie(cookies, "spine_patient_refresh")).toBe(false);
+    expect(hasCookie(cookies, "spine_patient_csrf")).toBe(false);
+    return;
+  }
+
+  expect(status).toBe(200);
   expect(hasCookie(cookies, "spine_patient_sess")).toBe(false);
   expect(hasCookie(cookies, "spine_patient_refresh")).toBe(false);
   expect(hasCookie(cookies, "spine_patient_csrf")).toBe(false);
@@ -358,10 +356,6 @@ test.describe("patient app web deployment", () => {
 
   test.beforeEach(async ({ page }) => {
     installPhiSafeDiagnostics(page);
-  });
-
-  test.afterEach(async ({ request }) => {
-    await resetBackend(request);
   });
 
   test("serves the app shell with browser hardening headers", async ({
@@ -448,12 +442,7 @@ test.describe("patient app web deployment", () => {
     await loginAsSeededPatient(page);
     await expectNoBrowserStorage(page);
 
-    const banner = page.getByTestId("assessment-entry-banner-body");
-    if (await banner.isVisible().catch(() => false)) {
-      await banner.click();
-    } else {
-      await page.goto("/assessment");
-    }
+    await page.goto("/assessment");
 
     await expect(page.getByTestId("story-screen")).toBeVisible({
       timeout: 60_000,

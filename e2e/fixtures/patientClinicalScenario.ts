@@ -178,12 +178,3 @@ export const patientClinicalScenario = {
     ],
   },
 } as const satisfies PatientWebClinicalScenarioFixture;
-
-export const patientWebClinicalSeedRequest = {
-  fixtures: {
-    patientWebClinicalScenario: patientClinicalScenario.seedKey,
-  },
-  patient: patientClinicalScenario.patient,
-  assessmentStory: patientClinicalScenario.assessmentStory,
-  analysis: patientClinicalScenario.analysis,
-} as const;
