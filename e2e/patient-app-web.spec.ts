@@ -1,0 +1,484 @@
+import {
+  expect,
+  test,
+  type APIRequestContext,
+  type Page,
+} from "@playwright/test";
+
+import {
+  patientClinicalScenario,
+  patientWebClinicalSeedRequest,
+} from "./fixtures/patientClinicalScenario";
+
+const PATIENT_EMAIL =
+  process.env.PATIENT_E2E_EMAIL ?? patientClinicalScenario.patient.email;
+const PATIENT_PASSWORD =
+  process.env.PATIENT_E2E_PASSWORD ?? patientClinicalScenario.patient.password;
+const BACKEND_RESET_URL = process.env.PATIENT_WEB_BACKEND_RESET_URL;
+const EXPECT_SECURE_COOKIES =
+  process.env.PATIENT_WEB_EXPECT_SECURE_COOKIES === "true";
+const ASSESSMENT_STORY = patientClinicalScenario.assessmentStory;
+const SIGNUP_PASSWORD =
+  process.env.PATIENT_E2E_SIGNUP_PASSWORD ?? "E2eSignup123!!";
+
+type BrowserCookie = {
+  name: string;
+  httpOnly: boolean;
+  path: string;
+  sameSite: "Lax" | "None" | "Strict";
+  secure: boolean;
+};
+
+async function resetBackend(request: APIRequestContext) {
+  if (!BACKEND_RESET_URL) {
+    throw new Error(
+      "PATIENT_WEB_BACKEND_RESET_URL is required so patient web E2E starts from seeded state",
+    );
+  }
+
+  const response = await request.post(BACKEND_RESET_URL, {
+    data: {
+      ...patientWebClinicalSeedRequest,
+      patient: {
+        ...patientWebClinicalSeedRequest.patient,
+        email: PATIENT_EMAIL,
+        password: PATIENT_PASSWORD,
+      },
+    },
+  });
+  expect(
+    response.ok(),
+    `PATIENT_WEB_BACKEND_RESET_URL must reset and seed ${patientClinicalScenario.seedKey}`,
+  ).toBeTruthy();
+}
+
+function sanitizeBrowserDiagnostic(value: string): string {
+  return value
+    .replace(/https?:\/\/[^/\s)]+/g, "[origin]")
+    .replace(
+      /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi,
+      "[uuid]",
+    )
+    .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, "[email]")
+    .slice(0, 800);
+}
+
+function installPhiSafeDiagnostics(page: Page) {
+  page.on("console", (message) => {
+    if (!["error", "warning"].includes(message.type())) return;
+    console.log(
+      `[browser:${message.type()}] ${sanitizeBrowserDiagnostic(message.text())}`,
+    );
+  });
+  page.on("pageerror", (error) => {
+    console.log(`[pageerror] ${sanitizeBrowserDiagnostic(error.message)}`);
+  });
+  page.on("response", (response) => {
+    if (response.status() < 400) return;
+    const url = new URL(response.url());
+    console.log(`[response:${response.status()}] ${url.pathname}`);
+  });
+}
+
+function cookieHasExpectedShape(
+  cookies: BrowserCookie[],
+  name: string,
+  expected: {
+    httpOnly: boolean;
+    path: string;
+    sameSite: "Lax" | "Strict";
+    secure: boolean;
+  },
+): boolean {
+  const cookie = cookies.find((entry) => entry.name === name);
+  return (
+    cookie?.httpOnly === expected.httpOnly &&
+    cookie.path === expected.path &&
+    cookie.sameSite === expected.sameSite &&
+    cookie.secure === expected.secure
+  );
+}
+
+function hasCookie(cookies: BrowserCookie[], name: string): boolean {
+  return cookies.some((entry) => entry.name === name);
+}
+
+async function expectNoTokenLeak(responseText: string) {
+  expect(responseText.includes("access_token")).toBe(false);
+  expect(responseText.includes("refresh_token")).toBe(false);
+  expect(responseText.includes("accessToken")).toBe(false);
+  expect(responseText.includes("refreshToken")).toBe(false);
+}
+
+function uniqueSyntheticEmail(): string {
+  const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return `patient-web-signup-${unique}@e2e.example.com`;
+}
+
+async function expectNoBrowserStorage(page: Page) {
+  const storage = await page.evaluate(async () => {
+    const indexedDbDatabases =
+      typeof indexedDB.databases === "function"
+        ? await indexedDB.databases()
+        : [];
+
+    return {
+      localStorageLength: localStorage.length,
+      sessionStorageLength: sessionStorage.length,
+      indexedDbDatabases: indexedDbDatabases
+        .map((db) => db.name)
+        .filter(Boolean),
+      serviceWorkerCount: navigator.serviceWorker
+        ? (await navigator.serviceWorker.getRegistrations()).length
+        : 0,
+    };
+  });
+
+  expect(storage).toEqual({
+    localStorageLength: 0,
+    sessionStorageLength: 0,
+    indexedDbDatabases: [],
+    serviceWorkerCount: 0,
+  });
+}
+
+async function expectSeededClinicalDashboard(page: Page) {
+  const {
+    clinicalSummaryHeadline,
+    clinicalSummarySubheadline,
+    activeProblemCondition,
+    activeProblemLevels,
+    activeProblemSummary,
+  } = patientClinicalScenario.dashboardAssertions;
+
+  const clinicalSummary = page.getByTestId("clinical-summary-card");
+  await expect(
+    clinicalSummary,
+    `Missing seeded clinical summary card for ${patientClinicalScenario.seedKey}`,
+  ).toBeVisible();
+  await expect(
+    clinicalSummary.getByText(clinicalSummaryHeadline),
+    `Missing seeded clinical summary headline: ${clinicalSummaryHeadline}`,
+  ).toBeVisible();
+  await expect(
+    clinicalSummary.getByText(clinicalSummarySubheadline),
+    `Missing seeded clinical summary subheadline: ${clinicalSummarySubheadline}`,
+  ).toBeVisible();
+
+  const activeProblems = page.getByTestId("active-problems-card");
+  await expect(
+    activeProblems,
+    `Missing seeded active problems card for ${patientClinicalScenario.seedKey}`,
+  ).toBeVisible();
+  await expect(
+    activeProblems.getByTestId("symptom-summary-text"),
+    `Missing seeded active problem summary: ${activeProblemSummary}`,
+  ).toContainText(activeProblemSummary);
+  await expect(
+    activeProblems.getByTestId("top-condition"),
+    `Missing seeded active problem condition: ${activeProblemCondition}`,
+  ).toContainText(activeProblemCondition);
+
+  for (const level of activeProblemLevels) {
+    await expect(
+      activeProblems.getByTestId("top-condition-levels"),
+      `Missing seeded active problem spinal level: ${level}`,
+    ).toContainText(level);
+  }
+}
+
+async function expectSeededClinicalResults(page: Page) {
+  const {
+    diagnosisLabel,
+    spinalLevel,
+    symptomNames,
+    treatmentLabels,
+    activityLabels,
+  } = patientClinicalScenario.resultsAssertions;
+
+  await expect(
+    page.getByTestId("results-screen"),
+    `Missing seeded results screen for ${patientClinicalScenario.seedKey}`,
+  ).toBeVisible({ timeout: 60_000 });
+
+  const diagnosis = page.getByTestId("results-diagnosis");
+  await expect(
+    diagnosis.getByText(diagnosisLabel),
+    `Missing seeded results diagnosis label: ${diagnosisLabel}`,
+  ).toBeVisible();
+  await expect(
+    diagnosis.getByText(spinalLevel),
+    `Missing seeded results spinal level: ${spinalLevel}`,
+  ).toBeVisible();
+
+  const symptoms = page.getByTestId("results-symptoms");
+  for (const symptomName of symptomNames) {
+    await expect(
+      symptoms.getByText(symptomName),
+      `Missing seeded results symptom: ${symptomName}`,
+    ).toBeVisible();
+  }
+
+  const treatment = page.getByTestId("results-treatment");
+  for (const treatmentLabel of treatmentLabels) {
+    await expect(
+      treatment.getByText(treatmentLabel),
+      `Missing seeded results treatment label: ${treatmentLabel}`,
+    ).toBeVisible();
+  }
+
+  const activity = page.getByTestId("results-activity");
+  for (const activityLabel of activityLabels) {
+    await expect(
+      activity.getByText(activityLabel),
+      `Missing seeded results activity label: ${activityLabel}`,
+    ).toBeVisible();
+  }
+}
+
+async function loginAsSeededPatient(page: Page) {
+  await page.request.get("/api/auth/session");
+  await page.goto("/login");
+  await expect(page.getByTestId("login-screen")).toBeVisible();
+
+  const loginResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes("/api/auth/login") &&
+      response.request().method() === "POST",
+  );
+
+  await page.getByTestId("login-email-input").fill(PATIENT_EMAIL);
+  await page.getByTestId("login-password-input").fill(PATIENT_PASSWORD);
+  await page.getByTestId("login-submit").click();
+
+  const response = await loginResponse;
+  expect(response.ok()).toBeTruthy();
+  const responseText = await response.text();
+  expect(
+    responseText.includes("access_token") ||
+      responseText.includes("refresh_token"),
+  ).toBe(false);
+
+  await expect(page.getByTestId("home-screen")).toBeVisible({
+    timeout: 60_000,
+  });
+
+  const browserVisibleCookies = await page.evaluate(() => document.cookie);
+  expect(
+    browserVisibleCookies.includes("spine_patient_sess") ||
+      browserVisibleCookies.includes("spine_patient_refresh"),
+  ).toBe(false);
+
+  const cookies = await page.context().cookies();
+  expect(
+    cookieHasExpectedShape(cookies, "spine_patient_sess", {
+      httpOnly: true,
+      path: "/",
+      sameSite: "Lax",
+      secure: EXPECT_SECURE_COOKIES,
+    }),
+  ).toBe(true);
+  expect(
+    cookieHasExpectedShape(cookies, "spine_patient_refresh", {
+      httpOnly: true,
+      path: "/api/auth/refresh",
+      sameSite: "Strict",
+      secure: EXPECT_SECURE_COOKIES,
+    }),
+  ).toBe(true);
+  expect(
+    cookieHasExpectedShape(cookies, "spine_patient_csrf", {
+      httpOnly: false,
+      path: "/",
+      sameSite: "Strict",
+      secure: EXPECT_SECURE_COOKIES,
+    }),
+  ).toBe(true);
+}
+
+async function logoutViaBff(page: Page) {
+  const status = await page.evaluate(async () => {
+    const csrfCookie = document.cookie
+      .split(";")
+      .map((entry) => entry.trim())
+      .find((entry) => entry.startsWith("spine_patient_csrf="))
+      ?.slice("spine_patient_csrf=".length);
+
+    if (!csrfCookie) return 0;
+
+    const response = await fetch("/api/auth/logout", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "content-type": "application/json",
+        "x-csrf-token": decodeURIComponent(csrfCookie),
+      },
+      body: "{}",
+    });
+    return response.status;
+  });
+  expect(status).toBe(200);
+
+  const cookies = await page.context().cookies();
+  expect(hasCookie(cookies, "spine_patient_sess")).toBe(false);
+  expect(hasCookie(cookies, "spine_patient_refresh")).toBe(false);
+  expect(hasCookie(cookies, "spine_patient_csrf")).toBe(false);
+}
+
+async function answerFirstScreeningQuestion(page: Page) {
+  const control = page
+    .locator(
+      [
+        '[data-testid^="question-"][data-testid*="-zone-"]',
+        '[data-testid^="question-"][data-testid*="-option-"]',
+        '[data-testid^="question-"][data-testid*="-region-"]',
+        '[data-testid^="question-"][data-testid*="-stop-"]',
+        '[data-testid^="question-"][data-testid$="-acknowledge-btn"]',
+      ].join(", "),
+    )
+    .or(page.getByRole("checkbox"))
+    .first();
+
+  if (await control.isVisible().catch(() => false)) {
+    await control.click();
+    return;
+  }
+
+  const input = page
+    .locator('[data-testid^="question-"][data-testid$="-input"]')
+    .first();
+  await expect(input).toBeVisible({ timeout: 30_000 });
+  await input.fill("Synthetic E2E questionnaire answer.");
+}
+
+test.describe("patient app web deployment", () => {
+  test.beforeEach(async ({ request }) => {
+    await resetBackend(request);
+  });
+
+  test.beforeEach(async ({ page }) => {
+    installPhiSafeDiagnostics(page);
+  });
+
+  test.afterEach(async ({ request }) => {
+    await resetBackend(request);
+  });
+
+  test("serves the app shell with browser hardening headers", async ({
+    page,
+  }) => {
+    const response = await page.goto("/login");
+    expect(response?.ok()).toBeTruthy();
+    expect(response?.headers()["cache-control"]).toContain("no-store");
+    const csp = response?.headers()["content-security-policy"] ?? "";
+    expect(csp).toContain("script-src 'self' 'nonce-");
+    expect(csp).toContain("worker-src 'none'");
+    expect(csp).not.toContain("require-trusted-types-for 'script'");
+
+    await expect(page.getByTestId("login-screen")).toBeVisible();
+    await expectNoBrowserStorage(page);
+  });
+
+  test("registers a new patient through the BFF without exposing tokens", async ({
+    page,
+  }) => {
+    const email = uniqueSyntheticEmail();
+
+    await page.request.get("/api/auth/session");
+    await page.goto("/register");
+    await expect(page.getByTestId("register-screen")).toBeVisible();
+
+    const registerResponsePromise = page.waitForResponse(
+      (response) =>
+        response.url().includes("/api/auth/register") &&
+        response.request().method() === "POST",
+    );
+    await page.getByTestId("register-first-name").fill("Synthetic");
+    await page.getByTestId("register-last-name").fill("Patient");
+    await page.getByTestId("register-email").fill(email);
+    await page.getByTestId("register-phone").fill("5551234567");
+    await page.getByTestId("register-date-of-birth").fill("1990-01-15");
+    await page.getByTestId("register-password").fill(SIGNUP_PASSWORD);
+    await page.getByTestId("register-confirm-password").fill(SIGNUP_PASSWORD);
+    await page.getByTestId("register-consent-storage").click();
+    await expect(page.getByTestId("register-submit")).toBeEnabled();
+    await page.getByTestId("register-submit").click();
+
+    const registerResponse = await registerResponsePromise;
+    expect(registerResponse.ok()).toBeTruthy();
+    await expectNoTokenLeak(await registerResponse.text());
+
+    await expect(page.getByTestId("verify-screen")).toBeVisible({
+      timeout: 60_000,
+    });
+    expect(page.url()).not.toContain("verificationToken");
+    const resendResponsePromise = page.waitForResponse(
+      (response) =>
+        response.url().includes("/api/auth/verify/registration/send") &&
+        response.request().method() === "POST",
+    );
+    await page.getByTestId("verify-resend").click();
+    const resendResponse = await resendResponsePromise;
+    expect(resendResponse.ok()).toBeTruthy();
+    await expectNoTokenLeak(await resendResponse.text());
+
+    const cookies = await page.context().cookies();
+    expect(hasCookie(cookies, "spine_patient_sess")).toBe(false);
+    expect(hasCookie(cookies, "spine_patient_refresh")).toBe(false);
+    await expectNoBrowserStorage(page);
+  });
+
+  test("renders seeded synthetic clinical dashboard and results without exposing tokens", async ({
+    page,
+  }) => {
+    await loginAsSeededPatient(page);
+    await expectNoBrowserStorage(page);
+
+    await expectSeededClinicalDashboard(page);
+    await page.getByTestId("clinical-summary-card").click();
+    await expectSeededClinicalResults(page);
+
+    await expectNoBrowserStorage(page);
+    await logoutViaBff(page);
+  });
+
+  test("matches the Maestro login and assessment questionnaire entry flow with the synthetic story", async ({
+    page,
+  }) => {
+    await loginAsSeededPatient(page);
+    await expectNoBrowserStorage(page);
+
+    const banner = page.getByTestId("assessment-entry-banner-body");
+    if (await banner.isVisible().catch(() => false)) {
+      await banner.click();
+    } else {
+      await page.goto("/assessment");
+    }
+
+    await expect(page.getByTestId("story-screen")).toBeVisible({
+      timeout: 60_000,
+    });
+    await page.getByTestId("story-capture-text-tab").click();
+    await page.getByTestId("story-capture-text-input").fill(ASSESSMENT_STORY);
+    await page.getByTestId("story-capture-continue-btn").click();
+
+    await expect(page.getByTestId("documents-screen")).toBeVisible({
+      timeout: 60_000,
+    });
+    await page.getByTestId("documents-skip-btn").click();
+
+    await expect(page.getByTestId("screening-screen")).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(
+      page.locator('[data-testid^="question-"]').first(),
+    ).toBeVisible();
+
+    await answerFirstScreeningQuestion(page);
+
+    await expect(page.getByTestId("screening-nav-next")).toBeVisible();
+    await expect(page.getByTestId("screening-nav-next")).toBeEnabled();
+    await expectNoBrowserStorage(page);
+    await logoutViaBff(page);
+  });
+});

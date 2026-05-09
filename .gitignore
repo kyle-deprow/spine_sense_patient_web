@@ -1,0 +1,12 @@
+.next/
+coverage/
+node_modules/
+out/
+patient-app-export/
+test-results/
+playwright-report/
+blob-report/
+*.tsbuildinfo
+.env
+.env.local
+.env.*.local

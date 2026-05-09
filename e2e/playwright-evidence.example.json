@@ -1,0 +1,18 @@
+{
+  "environment": "patient-web-staging-phi-capable",
+  "generated_at": "2026-05-04T00:00:00.000Z",
+  "gates": {
+    "csp-security-headers": "passed",
+    "xss-assessment-document-symptom-results": "passed",
+    "phi-free-console": "passed",
+    "idle-session-expiry-clears-phi": "passed",
+    "refresh-rotation-no-token-exposure": "passed",
+    "csrf-failure-modes": "passed",
+    "cookie-flags-path-scope": "passed",
+    "proxy-allowlist-smuggling-traversal": "passed",
+    "no-store-headers": "passed",
+    "object-url-revocation": "passed",
+    "autocomplete-bfcache-logout": "passed",
+    "direct-backend-blocked": "passed"
+  }
+}
