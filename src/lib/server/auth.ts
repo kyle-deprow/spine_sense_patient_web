@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server'
 
 import { COOKIE_NAMES, clearAuthCookies, setAuthCookies, setCsrfCookie } from '@/lib/auth/cookies'
 import { createCsrfToken } from '@/lib/auth/csrf'
-import { backendFetch, hasTokenPair, readJsonBody, stripTokens } from '@/lib/server/backend'
+import { BackendUnavailableError, backendFetch, hasTokenPair, readJsonBody, stripTokens } from '@/lib/server/backend'
 import { getPatientWebConfig } from '@/lib/server/config'
 import { jsonNoStore, withNoStore } from '@/lib/server/responses'
 import type { BackendTokenPair } from '@/types/auth'
@@ -79,8 +79,16 @@ export async function refreshWithCookie(request: NextRequest): Promise<NextRespo
 export async function logoutWithCookie(request: NextRequest): Promise<NextResponse> {
   const accessToken = request.cookies.get(COOKIE_NAMES.access)?.value
 
-  if (accessToken) {
-    await backendFetch('/api/v1/auth/logout', {
+  if (!accessToken) {
+    // Already logged out — cookies are absent, nothing to revoke.
+    const response = jsonNoStore({ success: true })
+    clearAuthCookies(response)
+    return response
+  }
+
+  let backendOk = false
+  try {
+    const backendResponse = await backendFetch('/api/v1/auth/logout', {
       method: 'POST',
       headers: {
         Accept: 'application/json',
@@ -88,7 +96,19 @@ export async function logoutWithCookie(request: NextRequest): Promise<NextRespon
         'Content-Type': 'application/json',
       },
       body: '{}',
-    }).catch(() => null)
+    })
+    backendOk = backendResponse.ok
+  } catch (err) {
+    if (!(err instanceof BackendUnavailableError)) throw err
+    // BackendUnavailableError — fall through to clear cookies and return 502.
+  }
+
+  // Always clear browser cookies: even on backend failure the local session
+  // must be invalidated so the patient is not left in a half-logged-out state.
+  if (!backendOk) {
+    const response = jsonNoStore({ error: 'logout_backend_failed' }, { status: 502 })
+    clearAuthCookies(response)
+    return response
   }
 
   const response = jsonNoStore({ success: true })
