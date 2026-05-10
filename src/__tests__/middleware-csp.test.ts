@@ -6,7 +6,7 @@ describe('middleware CSP', () => {
     const csp = buildCspHeader('nonce-value')
 
     expect(csp).toContain("script-src 'self' 'nonce-nonce-value'")
-    expect(csp).toContain("style-src-elem 'self' 'unsafe-inline'")
+    expect(csp).toContain("style-src-elem 'self' 'nonce-nonce-value'")
     expect(csp).toContain("worker-src 'none'")
     expect(csp).toContain("object-src 'none'")
     expect(csp).toContain("frame-ancestors 'none'")
@@ -19,11 +19,11 @@ describe('middleware CSP', () => {
     expect(csp).toContain("require-trusted-types-for 'script'")
   })
 
-  it('omits Trusted Types for the Expo app shell routes', () => {
-    expect(buildCspHeaderForPath('nonce-value', '/login')).not.toContain(
+  it('includes Trusted Types on Expo app shell routes (PHI pages)', () => {
+    expect(buildCspHeaderForPath('nonce-value', '/login')).toContain(
       "require-trusted-types-for 'script'",
     )
-    expect(buildCspHeaderForPath('nonce-value', '/login.html')).not.toContain(
+    expect(buildCspHeaderForPath('nonce-value', '/login.html')).toContain(
       "require-trusted-types-for 'script'",
     )
   })

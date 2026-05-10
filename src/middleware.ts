@@ -12,9 +12,9 @@ export function buildCspHeader(nonce: string, options: CspOptions = {}): string 
   const directives = [
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}'`,
-    `style-src 'self' 'nonce-${nonce}' 'unsafe-inline'`,
-    "style-src-elem 'self' 'unsafe-inline'",
-    "style-src-attr 'unsafe-inline'",
+    `style-src 'self' 'nonce-${nonce}'`,
+    `style-src-elem 'self' 'nonce-${nonce}'`,
+    "style-src-attr 'none'",
     "img-src 'self' blob: data:",
     "font-src 'self'",
     `connect-src 'self' ${storageOrigins}`,
@@ -35,7 +35,7 @@ export function buildCspHeader(nonce: string, options: CspOptions = {}): string 
 }
 
 export function buildCspHeaderForPath(nonce: string, pathname: string): string {
-  return buildCspHeader(nonce, { requireTrustedTypes: !isPatientAppShellPath(pathname) })
+  return buildCspHeader(nonce, { requireTrustedTypes: true })
 }
 
 function applySecurityHeaders(response: NextResponse, nonce: string, pathname: string): void {
