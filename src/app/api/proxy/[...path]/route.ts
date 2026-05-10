@@ -5,6 +5,7 @@ import { COOKIE_NAMES } from '@/lib/auth/cookies'
 import { validateUnsafeRequest } from '@/lib/auth/csrf'
 import { validateProxyTarget } from '@/lib/proxy/allowlist'
 import { buildProxyRequestHeaders, buildProxyResponseHeaders } from '@/lib/proxy/headers'
+import { auditLog, deriveResourceType, extractUserIdFromToken } from '@/lib/server/audit'
 import { backendFetch } from '@/lib/server/backend'
 import { getPatientWebConfig } from '@/lib/server/config'
 import { csrfFailureResponse, jsonNoStore } from '@/lib/server/responses'
@@ -46,6 +47,20 @@ async function handler(request: NextRequest, context: ProxyContext) {
     `${target.targetPath}${request.nextUrl.search}`,
     backendRequest,
   )
+
+  // Emit audit event after the backend response so status is available.
+  // userId is extracted from the access token JWT payload (sub claim) without
+  // signature verification — for audit correlation only, not authentication.
+  // resourceType is derived from the target path, never the full request path.
+  auditLog({
+    ts: new Date().toISOString(),
+    event: 'phi.proxy.access',
+    method: request.method,
+    resourceType: deriveResourceType(target.targetPath),
+    userId: extractUserIdFromToken(accessToken),
+    status: backendResponse.status,
+    requestId: request.headers.get('x-request-id') ?? undefined,
+  })
 
   const responseHeaders = buildProxyResponseHeaders(backendResponse)
   if (backendResponse.status === 204) {
