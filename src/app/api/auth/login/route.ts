@@ -6,7 +6,6 @@ import { auditLog } from '@/lib/server/audit'
 import { BackendUnavailableError } from '@/lib/server/backend'
 import { jsonNoStore } from '@/lib/server/responses'
 import { rateLimit, getClientIp } from '@/lib/server/rate-limit'
-import type { LoginResponse } from '@/types/auth'
 
 const WINDOW_MS = 15 * 60 * 1000 // 15 minutes
 
@@ -30,7 +29,7 @@ export async function POST(request: NextRequest) {
 
   let response: Response
   try {
-    response = await forwardCredentialAuth('/api/v1/auth/login', body)
+    response = await forwardCredentialAuth('/api/v1/auth/login', body, request)
   } catch (err) {
     if (err instanceof BackendUnavailableError) {
       return jsonNoStore({ error: 'service_unavailable' }, { status: 503 })
@@ -38,18 +37,7 @@ export async function POST(request: NextRequest) {
     throw err
   }
 
-  if (response.ok) {
-    // Clone to read body without consuming the response sent to the client
-    const data = await response.clone().json() as LoginResponse
-    auditLog({
-      ts: new Date().toISOString(),
-      event: 'auth.login.success',
-      method: 'POST',
-      userId: data.user_id ?? undefined,
-      status: response.status,
-      requestId,
-    })
-  } else {
+  if (!response.ok) {
     auditLog({
       ts: new Date().toISOString(),
       event: 'auth.login.failure',

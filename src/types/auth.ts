@@ -4,11 +4,17 @@ export interface BackendTokenPair {
   token_type?: string
 }
 
-export interface LoginResponse extends Partial<BackendTokenPair> {
+/** Raw shape returned by the backend — never serialised into a browser response. */
+export interface BackendLoginResponse extends Partial<BackendTokenPair> {
   mfa_required?: boolean
   mfa_token?: string | null
   user_id?: string | null
   mfa_method_id?: string | null
+}
+
+/** Browser-facing login response — sensitive credentials and identifiers are stripped by stripTokens. */
+export interface LoginResponse {
+  mfa_required?: boolean
 }
 
 export interface RegisterResponse {

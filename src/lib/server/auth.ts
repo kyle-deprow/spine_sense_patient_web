@@ -6,7 +6,8 @@ import { createCsrfToken } from '@/lib/auth/csrf'
 import { BackendUnavailableError, backendFetch, hasTokenPair, readJsonBody, stripTokens } from '@/lib/server/backend'
 import { getPatientWebConfig } from '@/lib/server/config'
 import { jsonNoStore, withNoStore } from '@/lib/server/responses'
-import type { BackendTokenPair } from '@/types/auth'
+import { auditLog } from '@/lib/server/audit'
+import type { BackendLoginResponse, BackendTokenPair } from '@/types/auth'
 
 type JsonRecord = Record<string, unknown>
 
@@ -34,15 +35,47 @@ export function authBackendRequest(body: unknown): RequestInit {
 export async function forwardCredentialAuth(
   backendPath: string,
   requestBody: unknown,
+  request?: NextRequest,
 ): Promise<NextResponse> {
   const backendResponse = await backendFetch(backendPath, authBackendRequest(requestBody))
-  const data = await readJsonBody<JsonRecord>(backendResponse)
+  const data = await readJsonBody<BackendLoginResponse>(backendResponse)
 
   if (!backendResponse.ok) {
     return jsonNoStore(data ?? { error: 'auth_failed' }, { status: backendResponse.status })
   }
 
-  const response = jsonNoStore(safeAuthResponse(data), { status: backendResponse.status })
+  // Capture user_id and mfa_required before hasTokenPair narrows the type.
+  const userId = data?.user_id ?? undefined
+  const mfaRequired = data?.mfa_required
+
+  // Derive audit event name from the backend path before stripTokens discards user_id.
+  const requestId = request?.headers.get('x-request-id') ?? undefined
+  const isMfaVerify = backendPath.includes('/mfa/verify')
+  const successEvent = isMfaVerify ? 'auth.mfa.verify.success' : 'auth.login.success'
+
+  if (hasTokenPair(data)) {
+    // Full authentication succeeded — tokens are present.
+    auditLog({
+      ts: new Date().toISOString(),
+      event: successEvent,
+      method: 'POST',
+      userId,
+      status: backendResponse.status,
+      requestId,
+    })
+  } else if (mfaRequired) {
+    // First-factor succeeded but MFA step is still required.
+    auditLog({
+      ts: new Date().toISOString(),
+      event: 'auth.mfa.interim',
+      method: 'POST',
+      userId,
+      status: backendResponse.status,
+      requestId,
+    })
+  }
+
+  const response = jsonNoStore(safeAuthResponse(data as JsonRecord), { status: backendResponse.status })
   if (hasTokenPair(data)) {
     setAuthCookies(response, toTokenPair(data))
     issueCsrfCookie(response)
