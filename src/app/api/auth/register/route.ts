@@ -5,11 +5,19 @@ import { forwardCredentialAuth, readRequestJson } from '@/lib/server/auth'
 import { auditLog } from '@/lib/server/audit'
 import { BackendUnavailableError } from '@/lib/server/backend'
 import { jsonNoStore } from '@/lib/server/responses'
+import { rateLimit, getClientIp } from '@/lib/server/rate-limit'
 import type { RegisterResponse } from '@/types/auth'
+
+const WINDOW_MS = 60 * 60 * 1000 // 60 minutes
 
 export async function POST(request: NextRequest) {
   const failure = validateAuthMutation(request)
   if (failure) return failure
+
+  const ip = getClientIp(request)
+  if (!rateLimit(ip, { limit: 5, windowMs: WINDOW_MS })) {
+    return jsonNoStore({ error: 'too_many_requests' }, { status: 429, headers: { 'Retry-After': '3600' } })
+  }
 
   const requestId = request.headers.get('x-request-id') ?? undefined
 
