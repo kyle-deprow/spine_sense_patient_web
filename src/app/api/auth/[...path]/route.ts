@@ -2,7 +2,7 @@ import type { NextRequest } from 'next/server'
 
 import { COOKIE_NAMES, setAuthCookies } from '@/lib/auth/cookies'
 import { validateAuthMutation } from '@/lib/auth/route-guards'
-import { backendFetch, hasTokenPair, readJsonBody, stripTokens } from '@/lib/server/backend'
+import { BackendUnavailableError, backendFetch, hasTokenPair, readJsonBody, stripTokens } from '@/lib/server/backend'
 import { issueCsrfCookie } from '@/lib/server/auth'
 import { jsonNoStore } from '@/lib/server/responses'
 import type { BackendTokenPair } from '@/types/auth'
@@ -37,10 +37,18 @@ async function handler(request: NextRequest, context: AuthProxyContext) {
     backendRequest.body = await request.arrayBuffer()
   }
 
-  const backendResponse = await backendFetch(
-    `/api/v1/auth/${authPath}${request.nextUrl.search}`,
-    backendRequest,
-  )
+  let backendResponse: Response
+  try {
+    backendResponse = await backendFetch(
+      `/api/v1/auth/${authPath}${request.nextUrl.search}`,
+      backendRequest,
+    )
+  } catch (err) {
+    if (err instanceof BackendUnavailableError) {
+      return jsonNoStore({ error: 'service_unavailable' }, { status: 503 })
+    }
+    throw err
+  }
   const data = await readJsonBody<JsonRecord>(backendResponse)
 
   const response = jsonNoStore(safeAuthBody(data), { status: backendResponse.status })

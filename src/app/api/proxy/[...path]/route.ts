@@ -6,7 +6,7 @@ import { validateUnsafeRequest } from '@/lib/auth/csrf'
 import { validateProxyTarget } from '@/lib/proxy/allowlist'
 import { buildProxyRequestHeaders, buildProxyResponseHeaders } from '@/lib/proxy/headers'
 import { auditLog, deriveResourceType, extractUserIdFromToken } from '@/lib/server/audit'
-import { backendFetch } from '@/lib/server/backend'
+import { BackendUnavailableError, backendFetch } from '@/lib/server/backend'
 import { getPatientWebConfig } from '@/lib/server/config'
 import { csrfFailureResponse, jsonNoStore } from '@/lib/server/responses'
 
@@ -43,10 +43,18 @@ async function handler(request: NextRequest, context: ProxyContext) {
     backendRequest.body = await request.arrayBuffer()
   }
 
-  const backendResponse = await backendFetch(
-    `${target.targetPath}${request.nextUrl.search}`,
-    backendRequest,
-  )
+  let backendResponse: Response
+  try {
+    backendResponse = await backendFetch(
+      `${target.targetPath}${request.nextUrl.search}`,
+      backendRequest,
+    )
+  } catch (err) {
+    if (err instanceof BackendUnavailableError) {
+      return jsonNoStore({ error: 'service_unavailable' }, { status: 503 })
+    }
+    throw err
+  }
 
   // Emit audit event after the backend response so status is available.
   // userId is extracted from the access token JWT payload (sub claim) without

@@ -4,6 +4,8 @@ import { validateAuthMutation } from '@/lib/auth/route-guards'
 import { refreshWithCookie } from '@/lib/server/auth'
 import { auditLog, extractUserIdFromToken } from '@/lib/server/audit'
 import { COOKIE_NAMES } from '@/lib/auth/cookies'
+import { BackendUnavailableError } from '@/lib/server/backend'
+import { jsonNoStore } from '@/lib/server/responses'
 
 export async function POST(request: NextRequest) {
   const failure = validateAuthMutation(request)
@@ -14,7 +16,15 @@ export async function POST(request: NextRequest) {
 
   auditLog({ ts: new Date().toISOString(), event: 'auth.refresh.attempt', method: 'POST', userId, requestId })
 
-  const response = await refreshWithCookie(request)
+  let response: Response
+  try {
+    response = await refreshWithCookie(request)
+  } catch (err) {
+    if (err instanceof BackendUnavailableError) {
+      return jsonNoStore({ error: 'service_unavailable' }, { status: 503 })
+    }
+    throw err
+  }
 
   if (response.ok) {
     auditLog({

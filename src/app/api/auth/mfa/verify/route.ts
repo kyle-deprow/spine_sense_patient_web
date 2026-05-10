@@ -3,6 +3,7 @@ import type { NextRequest } from 'next/server'
 import { validateAuthMutation } from '@/lib/auth/route-guards'
 import { forwardCredentialAuth, readRequestJson } from '@/lib/server/auth'
 import { auditLog } from '@/lib/server/audit'
+import { BackendUnavailableError } from '@/lib/server/backend'
 import { jsonNoStore } from '@/lib/server/responses'
 import type { LoginResponse } from '@/types/auth'
 
@@ -19,7 +20,15 @@ export async function POST(request: NextRequest) {
     return jsonNoStore({ error: 'invalid_json' }, { status: 400 })
   }
 
-  const response = await forwardCredentialAuth('/api/v1/auth/mfa/verify', body)
+  let response: Response
+  try {
+    response = await forwardCredentialAuth('/api/v1/auth/mfa/verify', body)
+  } catch (err) {
+    if (err instanceof BackendUnavailableError) {
+      return jsonNoStore({ error: 'service_unavailable' }, { status: 503 })
+    }
+    throw err
+  }
 
   if (response.ok) {
     const data = await response.clone().json() as LoginResponse
