@@ -19,6 +19,40 @@ function requireSecret(name: string, fallback?: string): string {
   throw new Error(`${name} is required outside development`)
 }
 
+function validateBackendUrl(url: string): void {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    throw new Error(`BACKEND_INTERNAL_URL is not a valid URL: ${url}`)
+  }
+
+  const allowedProtocols = new Set(['http:', 'https:'])
+  if (!allowedProtocols.has(parsed.protocol)) {
+    throw new Error(`BACKEND_INTERNAL_URL must use http or https, got: ${parsed.protocol}`)
+  }
+
+  // In production, require HTTPS unless the host is localhost/127.0.0.1 (Docker internal)
+  if (process.env.NODE_ENV === 'production') {
+    const isLocalhost = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1'
+    if (!isLocalhost && parsed.protocol !== 'https:') {
+      throw new Error(
+        `BACKEND_INTERNAL_URL must use https in production for non-localhost hosts, got: ${url}`,
+      )
+    }
+  }
+
+  // Block cloud metadata endpoints
+  const blockedHosts = new Set([
+    '169.254.169.254',
+    'metadata.google.internal',
+    'metadata.azure.com',
+  ])
+  if (blockedHosts.has(parsed.hostname)) {
+    throw new Error(`BACKEND_INTERNAL_URL points to a blocked host: ${parsed.hostname}`)
+  }
+}
+
 export function getPatientWebConfig(): PatientWebConfig {
   const isDevelopment = process.env.NODE_ENV === 'development'
   const csrfSecret = requireSecret(
@@ -26,8 +60,11 @@ export function getPatientWebConfig(): PatientWebConfig {
     isDevelopment ? 'development-only-patient-web-csrf-secret' : undefined,
   )
 
+  const backendInternalUrl = process.env.BACKEND_INTERNAL_URL ?? 'http://localhost:8000'
+  validateBackendUrl(backendInternalUrl)
+
   return {
-    backendInternalUrl: process.env.BACKEND_INTERNAL_URL ?? 'http://localhost:8000',
+    backendInternalUrl,
     csrfSecret,
     allowedOrigins: splitList(process.env.PATIENT_WEB_ALLOWED_ORIGINS),
     storageOrigins: splitList(
