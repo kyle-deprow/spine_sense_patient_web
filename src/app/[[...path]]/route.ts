@@ -6,13 +6,14 @@ import { NextResponse } from 'next/server'
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
+const BLOCKED_EXTENSIONS = new Set(['.map', '.ts', '.tsx', '.env'])
+
 const CONTENT_TYPES = new Map<string, string>([
   ['.css', 'text/css; charset=utf-8'],
   ['.html', 'text/html; charset=utf-8'],
   ['.ico', 'image/x-icon'],
   ['.js', 'application/javascript; charset=utf-8'],
   ['.json', 'application/json; charset=utf-8'],
-  ['.map', 'application/json; charset=utf-8'],
   ['.png', 'image/png'],
   ['.svg', 'image/svg+xml'],
   ['.txt', 'text/plain; charset=utf-8'],
@@ -72,6 +73,7 @@ async function findFile(root: string, pathname: string): Promise<{ filePath: str
       if (!fileStat.isFile()) continue
 
       const extension = path.extname(candidate)
+      if (BLOCKED_EXTENSIONS.has(extension)) return null
       return {
         filePath: candidate,
         contentType: CONTENT_TYPES.get(extension) ?? 'application/octet-stream',
