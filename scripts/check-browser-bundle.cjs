@@ -94,6 +94,8 @@ function scanFile(filePath) {
   }));
 }
 
+const PATIENT_APP_EXPORT_ROOT = 'patient-app-export';
+
 function main() {
   const rootDir = process.cwd();
   const bundleRoot = path.resolve(rootDir, process.argv[2] ?? DEFAULT_BUNDLE_ROOT);
@@ -109,6 +111,19 @@ function main() {
   if (files.length === 0) {
     console.error(`No browser bundle files found under ${path.relative(rootDir, bundleRoot)}.`);
     process.exit(1);
+  }
+
+  // Also scan the patient app export bundle if it exists. It lives outside
+  // .next/static but is served directly by the BFF, so the same PHI/token
+  // constraints apply. Skip with a warning when not yet built.
+  const patientAppExportRoot = path.resolve(rootDir, PATIENT_APP_EXPORT_ROOT);
+  if (fs.existsSync(patientAppExportRoot)) {
+    const exportFiles = collectBundleFiles(patientAppExportRoot);
+    files.push(...exportFiles);
+  } else {
+    console.warn(
+      `Warning: patient app export directory not found (${PATIENT_APP_EXPORT_ROOT}). Run pnpm build:patient-app to include it in the scan.`,
+    );
   }
 
   const violations = files.flatMap(scanFile);

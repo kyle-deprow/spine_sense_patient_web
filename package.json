@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "next build",
-    "build:patient-app": "EXPO_PUBLIC_ENVIRONMENT=e2e EXPO_PUBLIC_API_BASE_URL=/api/proxy/api/v1 pnpm --dir ../spine_sense_app build:web -- --output-dir ../spine_sense_patient_web/patient-app-export",
+    "build:patient-app": "EXPO_PUBLIC_ENVIRONMENT=${PATIENT_APP_ENVIRONMENT:-production} EXPO_PUBLIC_API_BASE_URL=/api/proxy/api/v1 pnpm --dir ../spine_sense_app build:web -- --output-dir ../spine_sense_patient_web/patient-app-export",
     "copy:patient-app-export": "node scripts/copy-patient-app-export.cjs",
     "start": "node .next/standalone/server.js",
     "lint": "eslint src/",
