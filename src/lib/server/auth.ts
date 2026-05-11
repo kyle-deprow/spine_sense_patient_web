@@ -1,15 +1,34 @@
 import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
 
-import { COOKIE_NAMES, clearAuthCookies, setAuthCookies, setCsrfCookie } from '@/lib/auth/cookies'
+import { COOKIE_NAMES, SESSION_MAX_AGE_SECONDS, clearAuthCookies, issueSessionIssuedAt, setAuthCookies, setCsrfCookie } from '@/lib/auth/cookies'
 import { createCsrfToken } from '@/lib/auth/csrf'
 import { BackendUnavailableError, backendFetch, hasTokenPair, readJsonBody, stripTokens } from '@/lib/server/backend'
 import { getPatientWebConfig } from '@/lib/server/config'
 import { jsonNoStore, withNoStore } from '@/lib/server/responses'
-import { auditLog } from '@/lib/server/audit'
+import { auditLog, extractUserIdFromToken } from '@/lib/server/audit'
 import type { BackendLoginResponse, BackendTokenPair } from '@/types/auth'
 
 type JsonRecord = Record<string, unknown>
+
+function normalizeAuthError(backendStatus: number): { status: number; body: { error: string } } {
+  if (backendStatus === 429) {
+    // Rate limit from the backend — safe to surface
+    return { status: 429, body: { error: 'too_many_requests' } }
+  }
+  if (backendStatus === 422 || backendStatus === 400) {
+    // Validation error (e.g. malformed request body) — safe to surface as 400
+    return { status: 400, body: { error: 'invalid_request' } }
+  }
+  if (backendStatus === 503 || backendStatus === 502) {
+    // Backend unavailable — already handled upstream via BackendUnavailableError,
+    // but guard here in case the backend returns a 503 response body
+    return { status: 503, body: { error: 'service_unavailable' } }
+  }
+  // 401, 403, 404, 423, 500, and anything else → generic auth_failed at 401
+  // This collapses "wrong password", "email not found", "account locked" into one shape
+  return { status: 401, body: { error: 'auth_failed' } }
+}
 
 export async function readRequestJson(request: NextRequest): Promise<unknown> {
   try {
@@ -41,7 +60,8 @@ export async function forwardCredentialAuth(
   const data = await readJsonBody<BackendLoginResponse>(backendResponse)
 
   if (!backendResponse.ok) {
-    return jsonNoStore(data ?? { error: 'auth_failed' }, { status: backendResponse.status })
+    const normalized = normalizeAuthError(backendResponse.status)
+    return jsonNoStore(normalized.body, { status: normalized.status })
   }
 
   // Capture user_id and mfa_required before hasTokenPair narrows the type.
@@ -78,6 +98,7 @@ export async function forwardCredentialAuth(
   const response = jsonNoStore(safeAuthResponse(data as JsonRecord), { status: backendResponse.status })
   if (hasTokenPair(data)) {
     setAuthCookies(response, toTokenPair(data))
+    issueSessionIssuedAt(response)
     issueCsrfCookie(response)
   }
   return response
