@@ -62,6 +62,8 @@ describe('csrf helpers', () => {
             'Content-Type': 'application/json',
           },
         }),
+        // Pass an explicit allowed origin so validation is active (empty list skips validation)
+        [sameOrigin],
       ),
     ).toEqual({ ok: false, status: 403, code: 'origin_forbidden' })
 

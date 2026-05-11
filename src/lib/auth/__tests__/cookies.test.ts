@@ -34,11 +34,17 @@ describe('patient web cookie helpers', () => {
     expect(refreshCookieOptions().httpOnly).toBe(true)
   })
 
-  it('uses secure cookies outside development unless explicitly running local E2E on localhost', () => {
+  it('uses secure cookies outside development; allows insecure only in non-production local E2E', () => {
     expect(shouldUseSecureCookies('production')).toBe(true)
     expect(shouldUseSecureCookies('test')).toBe(true)
 
-    expect(shouldUseSecureCookies('production', 'false', 'true', 'http://127.0.0.1:43101')).toBe(false)
+    // PATIENT_WEB_E2E_ALLOW_INSECURE_COOKIES throws in production regardless of origins
+    expect(() =>
+      shouldUseSecureCookies('production', 'false', 'true', 'http://127.0.0.1:43101'),
+    ).toThrow('PATIENT_WEB_E2E_ALLOW_INSECURE_COOKIES must not be set in production')
+
+    // Non-production local E2E still works
+    expect(shouldUseSecureCookies('development', 'false', 'true', 'http://127.0.0.1:43101')).toBe(false)
     expect(shouldUseSecureCookies('development', 'false')).toBe(false)
   })
 
@@ -46,7 +52,9 @@ describe('patient web cookie helpers', () => {
     expect(shouldUseSecureCookies('production', 'false', '', 'http://127.0.0.1:43101')).toBe(true)
   })
 
-  it('ignores the insecure cookie override in production when origins are not local', () => {
-    expect(shouldUseSecureCookies('production', 'false', 'true', 'https://patient.example.com')).toBe(true)
+  it('throws when PATIENT_WEB_E2E_ALLOW_INSECURE_COOKIES is set in production regardless of origins', () => {
+    expect(() =>
+      shouldUseSecureCookies('production', 'false', 'true', 'https://patient.example.com'),
+    ).toThrow('PATIENT_WEB_E2E_ALLOW_INSECURE_COOKIES must not be set in production')
   })
 })
