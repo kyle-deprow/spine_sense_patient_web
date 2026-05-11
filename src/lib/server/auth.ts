@@ -112,6 +112,22 @@ export async function refreshWithCookie(request: NextRequest): Promise<NextRespo
     return response
   }
 
+  const iatCookie = request.cookies.get(COOKIE_NAMES.sessionIssuedAt)?.value
+  const iat = iatCookie ? parseInt(iatCookie, 10) : null
+  const now = Math.floor(Date.now() / 1000)
+
+  if (iat !== null && !isNaN(iat) && now - iat > SESSION_MAX_AGE_SECONDS) {
+    // Session has exceeded absolute lifetime — force re-login
+    const response = jsonNoStore({ error: 'session_expired' }, { status: 401 })
+    clearAuthCookies(response)
+    auditLog({
+      ts: new Date().toISOString(),
+      event: 'auth.session.absolute_timeout',
+      userId: extractUserIdFromToken(request.cookies.get(COOKIE_NAMES.access)?.value),
+    })
+    return response
+  }
+
   const backendResponse = await backendFetch(
     '/api/v1/auth/refresh',
     authBackendRequest({ refresh_token: refreshToken }),
