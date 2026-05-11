@@ -35,7 +35,7 @@ export function validateUnsafeRequest(
   if (!contentTypeResult.ok) return contentTypeResult
 
   const originResult = validateOriginHeaders(request, options.allowedOrigins ?? [])
-  if (!originResult.ok) return originResult
+  if (originResult !== null && !originResult.ok) return originResult
 
   const headerValue = request.headers.get(CSRF_HEADER)
   if (!csrfCookieValue || !headerValue) {
@@ -53,9 +53,21 @@ export function validateUnsafeRequest(
 export function validateOriginHeaders(
   request: Request,
   configuredAllowedOrigins: string[] = [],
-): CsrfValidationResult {
-  const requestOrigin = new URL(request.url).origin
-  const allowedOrigins = new Set([requestOrigin, ...configuredAllowedOrigins])
+): CsrfValidationResult | null {
+  // Do NOT seed from request.url: behind a reverse proxy (nginx, Azure Front Door)
+  // Next.js route handlers see the internal upstream URL (e.g. http://localhost:3000),
+  // so auto-seeding would whitelist that internal origin for any caller who can set
+  // the Origin header. Use only explicitly configured origins.
+  const allowedOrigins = new Set(configuredAllowedOrigins)
+
+  // If no origins are configured, fail open with a warning to preserve backward
+  // compatibility for local dev where PATIENT_WEB_ALLOWED_ORIGINS may not be set.
+  // Return null to signal that origin validation is skipped (no error).
+  if (allowedOrigins.size === 0) {
+    console.warn('[csrf] PATIENT_WEB_ALLOWED_ORIGINS is not set; origin validation is disabled')
+    return null
+  }
+
   const origin = request.headers.get('origin')
   if (!origin || !allowedOrigins.has(origin)) {
     return { ok: false, status: 403, code: 'origin_forbidden' }
