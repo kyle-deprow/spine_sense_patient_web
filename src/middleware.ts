@@ -34,7 +34,7 @@ export function buildCspHeader(nonce: string, options: CspOptions = {}): string 
   return directives.join('; ')
 }
 
-export function buildCspHeaderForPath(nonce: string, pathname: string): string {
+export function buildCspHeaderForPath(nonce: string, _pathname: string): string {
   return buildCspHeader(nonce, { requireTrustedTypes: true })
 }
 

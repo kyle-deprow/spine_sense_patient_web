@@ -27,7 +27,9 @@ export function rateLimit(key: string, opts: { limit: number; windowMs: number }
 
   // Sliding window: drop timestamps that have fallen outside the window
   let start = 0
-  while (start < timestamps.length && timestamps[start]! < windowStart) {
+  while (start < timestamps.length) {
+    const timestamp = timestamps[start]
+    if (timestamp === undefined || timestamp >= windowStart) break
     start++
   }
   if (start > 0) {
@@ -50,7 +52,7 @@ export function getClientIp(request: NextRequest): string {
   try {
     const forwarded = request.headers.get('x-forwarded-for')
     if (forwarded) {
-      const first = forwarded.split(',')[0]!.trim()
+      const first = forwarded.split(',').at(0)?.trim()
       if (first) return first
     }
     const realIp = request.headers.get('x-real-ip')

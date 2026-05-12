@@ -72,5 +72,5 @@ export function auditLog(record: AuditRecord): void {
   if (record.userId !== undefined) entry['userId'] = record.userId
   if (record.status !== undefined) entry['status'] = record.status
   if (record.requestId !== undefined) entry['requestId'] = record.requestId
-  console.log(JSON.stringify(entry))
+  process.stdout.write(`${JSON.stringify(entry)}\n`)
 }
