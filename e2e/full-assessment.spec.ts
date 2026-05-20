@@ -321,6 +321,24 @@ async function completeRefinementIfPresent(page: Page) {
   await waitForEnabledAndClick(page, 'refinement-submit')
 }
 
+async function completeProfileIfPresent(page: Page) {
+  if (!(await page.getByTestId('step-profile').isVisible({ timeout: 1000 }).catch(() => false))) {
+    return
+  }
+
+  const { registration, onboarding } = fullAssessmentScenario
+  await fillByTestId(page, 'profile-first-name', registration.firstName)
+  await fillByTestId(page, 'profile-last-name', registration.lastName)
+  await fillByTestId(page, 'profile-dob', onboarding.dateOfBirthDisplay)
+  await clickByTestId(page, `profile-sex-${onboarding.sexAtBirth}`)
+  await fillByTestId(page, 'profile-height-ft', onboarding.heightFeet)
+  await fillByTestId(page, 'profile-height-in', onboarding.heightInches)
+  await fillByTestId(page, 'profile-weight', onboarding.weightPounds)
+  await fillByTestId(page, 'profile-occupation', onboarding.occupation)
+  await clickByTestId(page, `profile-activity-${onboarding.activityLevel}`)
+  await waitForEnabledAndClick(page, 'profile-continue-btn')
+}
+
 test.describe('patient web full assessment flow', () => {
   test.beforeEach(async ({ request }) => {
     await resetBackend(request)
@@ -386,7 +404,8 @@ test.describe('patient web full assessment flow', () => {
     await waitForEnabledAndClick(page, 'consent-accept')
 
     await expect(page.getByTestId('onboarding-layout')).toBeVisible({ timeout: 60_000 })
-    await expect(page.getByTestId('intake-step-chief-complaint')).toBeVisible()
+    await completeProfileIfPresent(page)
+    await expect(page.getByTestId('intake-step-chief-complaint')).toBeVisible({ timeout: 60_000 })
     await clickByTestId(page, 'chief-complaint-text-option')
     await expect(page.getByTestId('step-chief-complaint-text')).toBeVisible()
     await fillByTestId(page, 'narrative-input', onboarding.chiefComplaint)

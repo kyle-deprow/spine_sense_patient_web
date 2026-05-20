@@ -22,6 +22,13 @@ export const fullAssessmentScenario = {
     verificationCode: '000000',
   },
   onboarding: {
+    dateOfBirthDisplay: '04/22/1988',
+    sexAtBirth: 'female',
+    heightFeet: '5',
+    heightInches: '6',
+    weightPounds: '145',
+    occupation: 'Synthetic desk worker',
+    activityLevel: 'lightly-active',
     chiefComplaint:
       'Lower back pain radiating down to my left leg, started about three weeks ago after lifting',
   },
