@@ -249,11 +249,14 @@ async function findVisibleCandidate(
   candidates: readonly string[],
 ): Promise<Locator | null> {
   for (const testId of candidates) {
-    const locator = page.getByTestId(testId)
-    if ((await locator.count()) === 0) continue
-    await locator.scrollIntoViewIfNeeded().catch(() => undefined)
-    if (await locator.isVisible({ timeout: 1000 }).catch(() => false)) {
-      return locator
+    const locators = page.getByTestId(testId)
+    const count = await locators.count()
+    for (let index = 0; index < count; index += 1) {
+      const locator = locators.nth(index)
+      await locator.scrollIntoViewIfNeeded().catch(() => undefined)
+      if (await locator.isVisible({ timeout: 1000 }).catch(() => false)) {
+        return locator
+      }
     }
   }
   return null
