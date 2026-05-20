@@ -83,6 +83,7 @@ export const fullAssessmentScenario = {
     { id: 'T06_Q2', value: 'yes' },
   ] satisfies readonly AssessmentAnswer[],
   adaptive: [
+    { id: 'L05_Q2', value: 7 },
     { id: 'lumbar_leg_distribution', value: 'none' },
     { id: 'lumbar_sitting_tolerance', value: 'under_10_min' },
     { id: 'lumbar_bending_effect', value: 'worsens' },

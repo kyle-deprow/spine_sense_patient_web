@@ -9,7 +9,7 @@ export class BackendUnavailableError extends Error {
 }
 
 export const BACKEND_TIMEOUT_MS = 30_000 // 30 seconds
-export const LONG_BACKEND_TIMEOUT_MS = 120_000 // LLM-backed assessment calls
+export const LONG_BACKEND_TIMEOUT_MS = 420_000 // LLM-backed assessment calls
 
 export async function backendFetch(
   path: string,
