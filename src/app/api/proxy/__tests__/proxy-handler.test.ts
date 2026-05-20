@@ -3,6 +3,7 @@ import { NextRequest } from 'next/server'
 
 import { CSRF_HEADER, createCsrfToken } from '@/lib/auth/csrf'
 import { BackendUnavailableError, LONG_BACKEND_TIMEOUT_MS, backendFetch } from '@/lib/server/backend'
+import { isLongAssessmentBackendCall } from '@/lib/server/assessment-timeouts'
 
 vi.mock('@/lib/server/backend', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/server/backend')>()
@@ -15,7 +16,7 @@ vi.mock('@/lib/server/backend', async (importOriginal) => {
 const mockedBackendFetch = vi.mocked(backendFetch)
 
 // Import after mocking so the route module picks up the mocked backendFetch.
-const { GET, POST, isLongAssessmentBackendCall } = await import('@/app/api/proxy/[...path]/route')
+const { GET, POST } = await import('@/app/api/proxy/[...path]/route')
 
 function makeProxyRequest(
   pathname: string,

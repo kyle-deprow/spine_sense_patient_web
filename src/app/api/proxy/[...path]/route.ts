@@ -6,7 +6,8 @@ import { validateUnsafeRequest } from '@/lib/auth/csrf'
 import { validateProxyTarget } from '@/lib/proxy/allowlist'
 import { buildProxyRequestHeaders, buildProxyResponseHeaders } from '@/lib/proxy/headers'
 import { auditLog, deriveResourceType, extractUserIdFromToken } from '@/lib/server/audit'
-import { BackendUnavailableError, LONG_BACKEND_TIMEOUT_MS, backendFetch } from '@/lib/server/backend'
+import { assessmentBackendTimeoutOptions } from '@/lib/server/assessment-timeouts'
+import { BackendUnavailableError, backendFetch } from '@/lib/server/backend'
 import { getPatientWebConfig } from '@/lib/server/config'
 import { csrfFailureResponse, jsonNoStore } from '@/lib/server/responses'
 
@@ -48,7 +49,7 @@ async function handler(request: NextRequest, context: ProxyContext) {
     backendResponse = await backendFetch(
       `${target.targetPath}${request.nextUrl.search}`,
       backendRequest,
-      backendTimeoutOptions(target.targetPath),
+      assessmentBackendTimeoutOptions(target.targetPath),
     )
   } catch (err) {
     if (err instanceof BackendUnavailableError) {
@@ -84,16 +85,6 @@ async function handler(request: NextRequest, context: ProxyContext) {
 
 function shouldForwardBody(method: string): boolean {
   return !['GET', 'HEAD'].includes(method.toUpperCase())
-}
-
-function backendTimeoutOptions(targetPath: string): { timeoutMs?: number } {
-  return isLongAssessmentBackendCall(targetPath) ? { timeoutMs: LONG_BACKEND_TIMEOUT_MS } : {}
-}
-
-export function isLongAssessmentBackendCall(targetPath: string): boolean {
-  return /^\/api\/v1\/patients\/me\/assessments\/[^/]+\/(?:adaptive\/prepare|refinement\/run|analysis\/run)\/?$/.test(
-    targetPath,
-  )
 }
 
 export { handler as DELETE, handler as GET, handler as PATCH, handler as POST, handler as PUT }
