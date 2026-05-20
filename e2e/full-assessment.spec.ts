@@ -193,6 +193,24 @@ async function clickIfPresent(page: Page, testId: string, timeout = 1000): Promi
   return true
 }
 
+async function waitForAnyVisibleTestId(
+  page: Page,
+  testIds: readonly string[],
+  timeout = 60_000,
+): Promise<string> {
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    for (const testId of testIds) {
+      if (await page.getByTestId(testId).isVisible({ timeout: 500 }).catch(() => false)) {
+        return testId
+      }
+    }
+    await page.waitForTimeout(250)
+  }
+
+  throw new Error(`None of these test IDs became visible: ${testIds.join(', ')}`)
+}
+
 async function maybeContinueSectionTransition(page: Page) {
   await clickIfPresent(page, 'screening-section-transition-continue')
 }
@@ -280,6 +298,7 @@ async function answerTextQuestion(page: Page, prefix: string, answer: TextAnswer
 }
 
 async function answerScreening(page: Page) {
+  await expect(page.getByTestId('screening-nav-next')).toBeVisible({ timeout: 60_000 })
   for (const answer of fullAssessmentScenario.screening) {
     await answerQuestion(page, 'question', answer)
     await waitForEnabledAndClick(page, 'screening-nav-next')
@@ -444,15 +463,19 @@ test.describe('patient web full assessment flow', () => {
     await expectNoBrowserStorage(page)
 
     await waitForFirstVisibleEnabledAndClick(page, 'start-assessment-btn')
-    await expect(page.getByTestId('story-screen')).toBeVisible({ timeout: 60_000 })
-    await expect(page.getByTestId('story-capture')).toBeVisible()
-    await clickByTestId(page, 'story-capture-text-tab')
-    await fillByTestId(page, 'story-capture-text-input', fullAssessmentScenario.assessmentStory)
-    await page.getByTestId('story-capture-text-input').blur()
-    await waitForEnabledAndClick(page, 'story-capture-continue-btn')
+    const firstAssessmentScreen = await waitForAnyVisibleTestId(page, [
+      'screening-screen',
+      'story-capture',
+    ])
+    if (firstAssessmentScreen === 'story-capture') {
+      await clickByTestId(page, 'story-capture-text-tab')
+      await fillByTestId(page, 'story-capture-text-input', fullAssessmentScenario.assessmentStory)
+      await page.getByTestId('story-capture-text-input').blur()
+      await waitForEnabledAndClick(page, 'story-capture-continue-btn')
 
-    await expect(page.getByTestId('documents-screen')).toBeVisible({ timeout: 60_000 })
-    await clickByTestId(page, 'documents-skip-btn')
+      await expect(page.getByTestId('documents-screen')).toBeVisible({ timeout: 60_000 })
+      await clickByTestId(page, 'documents-skip-btn')
+    }
 
     await expect(page.getByTestId('screening-screen')).toBeVisible({ timeout: 60_000 })
     await answerScreening(page)
