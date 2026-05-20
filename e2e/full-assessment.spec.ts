@@ -205,6 +205,23 @@ async function waitForEnabledAndClick(page: Page, testId: string, timeout = 30_0
   await locator.click()
 }
 
+async function waitForFirstVisibleEnabledAndClick(page: Page, testId: string, timeout = 30_000) {
+  const locators = page.getByTestId(testId)
+  await expect(locators.first()).toBeVisible({ timeout })
+
+  const count = await locators.count()
+  for (let index = 0; index < count; index += 1) {
+    const locator = locators.nth(index)
+    if (!(await locator.isVisible({ timeout: 1000 }).catch(() => false))) continue
+    await expect(locator).toBeEnabled({ timeout })
+    await locator.scrollIntoViewIfNeeded()
+    await locator.click()
+    return
+  }
+
+  throw new Error(`No visible enabled control found for ${testId}`)
+}
+
 function answerValues(value: AssessmentAnswer['value']): readonly (string | number)[] {
   return typeof value === 'string' || typeof value === 'number' ? [value] : value
 }
@@ -423,10 +440,10 @@ test.describe('patient web full assessment flow', () => {
     await waitForEnabledAndClick(page, 'records-continue-btn')
 
     await expect(page.getByTestId('home-screen')).toBeVisible({ timeout: 60_000 })
-    await expect(page.getByTestId('assessment-entry-banner')).toBeVisible()
+    await expect(page.getByTestId('start-assessment-btn').first()).toBeVisible()
     await expectNoBrowserStorage(page)
 
-    await clickByTestId(page, 'start-assessment-btn')
+    await waitForFirstVisibleEnabledAndClick(page, 'start-assessment-btn')
     await expect(page.getByTestId('story-screen')).toBeVisible({ timeout: 60_000 })
     await expect(page.getByTestId('story-capture')).toBeVisible()
     await clickByTestId(page, 'story-capture-text-tab')
