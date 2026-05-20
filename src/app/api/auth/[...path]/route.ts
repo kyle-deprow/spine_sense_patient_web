@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server'
 
-import { COOKIE_NAMES, setAuthCookies } from '@/lib/auth/cookies'
+import { COOKIE_NAMES, issueSessionIssuedAt, setAuthCookies } from '@/lib/auth/cookies'
 import { validateAuthMutation } from '@/lib/auth/route-guards'
 import { BackendUnavailableError, backendFetch, hasTokenPair, readJsonBody, stripTokens } from '@/lib/server/backend'
 import { issueCsrfCookie } from '@/lib/server/auth'
@@ -18,6 +18,8 @@ const ALLOWED_AUTH_PATHS = new Set([
   'password-reset/confirm',
   'verify-email',
   'resend-verification',
+  'verify/registration/send',
+  'verify/registration/confirm',
   'mfa/setup',
   'mfa/disable',
   'mfa/methods',
@@ -82,6 +84,7 @@ async function handler(request: NextRequest, context: AuthProxyContext) {
   const response = jsonNoStore(safeAuthBody(data), { status: backendResponse.status })
   if (backendResponse.ok && hasTokenPair(data)) {
     setAuthCookies(response, toTokenPair(data))
+    issueSessionIssuedAt(response)
     issueCsrfCookie(response)
   }
   return response

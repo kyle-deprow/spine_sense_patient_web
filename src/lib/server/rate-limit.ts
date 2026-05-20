@@ -8,6 +8,8 @@ const MAX_KEYS = 10_000
 const store = new Map<string, number[]>()
 
 export function rateLimit(key: string, opts: { limit: number; windowMs: number }): boolean {
+  if (shouldBypassRateLimit()) return true
+
   const now = Date.now()
   const windowStart = now - opts.windowMs
 
@@ -45,6 +47,17 @@ export function rateLimit(key: string, opts: { limit: number; windowMs: number }
   }
 
   timestamps.push(now)
+  return true
+}
+
+export function shouldBypassRateLimit(
+  nodeEnv = process.env.NODE_ENV,
+  bypassFlag = process.env.PATIENT_WEB_E2E_BYPASS_RATE_LIMITS,
+): boolean {
+  if (bypassFlag !== 'true') return false
+  if (nodeEnv === 'production') {
+    throw new Error('PATIENT_WEB_E2E_BYPASS_RATE_LIMITS must not be set in production')
+  }
   return true
 }
 

@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 
-import { BackendUnavailableError, backendFetch } from '@/lib/server/backend'
+import { CSRF_HEADER, createCsrfToken } from '@/lib/auth/csrf'
+import { BackendUnavailableError, LONG_BACKEND_TIMEOUT_MS, backendFetch } from '@/lib/server/backend'
 
 vi.mock('@/lib/server/backend', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/server/backend')>()
@@ -14,7 +15,7 @@ vi.mock('@/lib/server/backend', async (importOriginal) => {
 const mockedBackendFetch = vi.mocked(backendFetch)
 
 // Import after mocking so the route module picks up the mocked backendFetch.
-const { GET, POST } = await import('@/app/api/proxy/[...path]/route')
+const { GET, POST, isLongAssessmentBackendCall } = await import('@/app/api/proxy/[...path]/route')
 
 function makeProxyRequest(
   pathname: string,
@@ -40,10 +41,13 @@ function makeContext(pathSegments: string[]): { params: Promise<{ path: string[]
 
 const VALID_PATHNAME = '/api/proxy/api/v1/patients/me/assessments'
 const VALID_SEGMENTS = ['api', 'v1', 'patients', 'me', 'assessments']
+const CSRF_SECRET = 'test-patient-web-csrf-secret'
+const ORIGIN = 'http://localhost'
 
 describe('proxy route handler', () => {
   beforeEach(() => {
-    vi.stubEnv('PATIENT_WEB_CSRF_SECRET', 'test-patient-web-csrf-secret')
+    vi.stubEnv('PATIENT_WEB_CSRF_SECRET', CSRF_SECRET)
+    vi.stubEnv('PATIENT_WEB_ALLOWED_ORIGINS', ORIGIN)
     mockedBackendFetch.mockReset()
   })
 
@@ -117,6 +121,70 @@ describe('proxy route handler', () => {
 
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toEqual({ data: 'test' })
+  })
+
+  it('keeps the default backend timeout for normal proxy calls', async () => {
+    mockedBackendFetch.mockResolvedValue(Response.json({ data: 'test' }))
+
+    const request = makeProxyRequest(
+      VALID_PATHNAME,
+      'GET',
+      { spine_patient_sess: 'access-token' },
+    )
+    const response = await GET(request, makeContext(VALID_SEGMENTS))
+
+    expect(response.status).toBe(200)
+    expect(mockedBackendFetch).toHaveBeenCalledWith(
+      '/api/v1/patients/me/assessments/',
+      expect.any(Object),
+      {},
+    )
+  })
+
+  it('uses the long backend timeout for LLM-backed assessment proxy calls', async () => {
+    mockedBackendFetch.mockResolvedValue(Response.json({ questions: [] }))
+    const csrf = createCsrfToken(CSRF_SECRET, 'proxy-route-test-nonce')
+
+    const request = makeProxyRequest(
+      '/api/proxy/api/v1/patients/me/assessments/assessment-123/adaptive/prepare',
+      'POST',
+      {
+        spine_patient_sess: 'access-token',
+        spine_patient_csrf: csrf,
+      },
+      {
+        'Content-Type': 'application/json',
+        [CSRF_HEADER]: csrf,
+        Origin: ORIGIN,
+      },
+    )
+    const response = await POST(
+      request,
+      makeContext(['api', 'v1', 'patients', 'me', 'assessments', 'assessment-123', 'adaptive', 'prepare']),
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockedBackendFetch).toHaveBeenCalledWith(
+      '/api/v1/patients/me/assessments/assessment-123/adaptive/prepare',
+      expect.any(Object),
+      { timeoutMs: LONG_BACKEND_TIMEOUT_MS },
+    )
+  })
+
+  it('classifies only adaptive, refinement, and analysis run assessment calls as long-running', () => {
+    expect(
+      isLongAssessmentBackendCall('/api/v1/patients/me/assessments/assessment-123/adaptive/prepare'),
+    ).toBe(true)
+    expect(
+      isLongAssessmentBackendCall('/api/v1/patients/me/assessments/assessment-123/refinement/run'),
+    ).toBe(true)
+    expect(
+      isLongAssessmentBackendCall('/api/v1/patients/me/assessments/assessment-123/analysis/run'),
+    ).toBe(true)
+    expect(
+      isLongAssessmentBackendCall('/api/v1/patients/me/assessments/assessment-123/analysis'),
+    ).toBe(false)
+    expect(isLongAssessmentBackendCall('/api/v1/patients/me/assessments')).toBe(false)
   })
 
   it('returns 405 when HTTP method is not allowed for the matched route', async () => {

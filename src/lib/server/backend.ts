@@ -8,13 +8,18 @@ export class BackendUnavailableError extends Error {
   }
 }
 
-const BACKEND_TIMEOUT_MS = 30_000 // 30 seconds
+export const BACKEND_TIMEOUT_MS = 30_000 // 30 seconds
+export const LONG_BACKEND_TIMEOUT_MS = 120_000 // LLM-backed assessment calls
 
-export async function backendFetch(path: string, init: RequestInit = {}): Promise<Response> {
+export async function backendFetch(
+  path: string,
+  init: RequestInit = {},
+  options: { timeoutMs?: number } = {},
+): Promise<Response> {
   const { backendInternalUrl } = getPatientWebConfig()
   const target = new URL(path, backendInternalUrl)
 
-  const timeoutSignal = AbortSignal.timeout(BACKEND_TIMEOUT_MS)
+  const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? BACKEND_TIMEOUT_MS)
   const signal =
     init.signal != null
       ? AbortSignal.any([init.signal, timeoutSignal])

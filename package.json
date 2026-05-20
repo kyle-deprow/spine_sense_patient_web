@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:e2e:full-assessment": "PATIENT_WEB_INCLUDE_FULL_ASSESSMENT=true playwright test --grep @full-assessment",
     "smoke:bundle": "node scripts/check-browser-bundle.cjs",
     "validate:local": "pnpm lint && pnpm type-check && pnpm test && pnpm build:patient-app && pnpm build && pnpm smoke:bundle",
     "test:e2e:verify": "node scripts/check-playwright-evidence.cjs",
