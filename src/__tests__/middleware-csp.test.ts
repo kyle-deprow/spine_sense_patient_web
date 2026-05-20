@@ -19,11 +19,11 @@ describe('middleware CSP', () => {
     expect(csp).toContain("require-trusted-types-for 'script'")
   })
 
-  it('includes Trusted Types on Expo app shell routes (PHI pages)', () => {
-    expect(buildCspHeaderForPath('nonce-value', '/login')).toContain(
+  it('does not require Trusted Types on Expo app shell routes', () => {
+    expect(buildCspHeaderForPath('nonce-value', '/login')).not.toContain(
       "require-trusted-types-for 'script'",
     )
-    expect(buildCspHeaderForPath('nonce-value', '/login.html')).toContain(
+    expect(buildCspHeaderForPath('nonce-value', '/login.html')).not.toContain(
       "require-trusted-types-for 'script'",
     )
   })

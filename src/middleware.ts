@@ -35,7 +35,7 @@ export function buildCspHeader(nonce: string, options: CspOptions = {}): string 
 }
 
 export function buildCspHeaderForPath(nonce: string, _pathname: string): string {
-  return buildCspHeader(nonce, { requireTrustedTypes: true })
+  return buildCspHeader(nonce, { requireTrustedTypes: !isPatientAppShellPath(_pathname) })
 }
 
 function applySecurityHeaders(response: NextResponse, nonce: string, pathname: string): void {
