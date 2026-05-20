@@ -2,6 +2,8 @@
 // deployment behind a trusted reverse proxy that sets the real client IP.
 import type { NextRequest } from 'next/server'
 
+import { hasOnlyLocalOrigins } from '@/lib/auth/cookies'
+
 const MAX_KEYS = 10_000
 
 // Map<key, timestamps[]> — timestamps are ms since epoch, sorted ascending
@@ -53,9 +55,10 @@ export function rateLimit(key: string, opts: { limit: number; windowMs: number }
 export function shouldBypassRateLimit(
   nodeEnv = process.env.NODE_ENV,
   bypassFlag = process.env.PATIENT_WEB_E2E_BYPASS_RATE_LIMITS,
+  allowedOrigins = process.env.PATIENT_WEB_ALLOWED_ORIGINS,
 ): boolean {
   if (bypassFlag !== 'true') return false
-  if (nodeEnv === 'production') {
+  if (nodeEnv === 'production' && !hasOnlyLocalOrigins(allowedOrigins)) {
     throw new Error('PATIENT_WEB_E2E_BYPASS_RATE_LIMITS must not be set in production')
   }
   return true

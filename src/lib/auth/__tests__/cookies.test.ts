@@ -34,16 +34,13 @@ describe('patient web cookie helpers', () => {
     expect(refreshCookieOptions().httpOnly).toBe(true)
   })
 
-  it('uses secure cookies outside development; allows insecure only in non-production local E2E', () => {
+  it('uses secure cookies outside development; allows insecure only for local E2E', () => {
     expect(shouldUseSecureCookies('production')).toBe(true)
     expect(shouldUseSecureCookies('test')).toBe(true)
 
-    // PATIENT_WEB_E2E_ALLOW_INSECURE_COOKIES throws in production regardless of origins
-    expect(() =>
-      shouldUseSecureCookies('production', 'false', 'true', 'http://127.0.0.1:43101'),
-    ).toThrow('PATIENT_WEB_E2E_ALLOW_INSECURE_COOKIES must not be set in production')
-
-    // Non-production local E2E still works
+    // The Make-managed standalone BFF runs with NODE_ENV=production, but only
+    // allows insecure cookies when explicitly scoped to local HTTP origins.
+    expect(shouldUseSecureCookies('production', 'false', 'true', 'http://127.0.0.1:43101')).toBe(false)
     expect(shouldUseSecureCookies('development', 'false', 'true', 'http://127.0.0.1:43101')).toBe(false)
     expect(shouldUseSecureCookies('development', 'false')).toBe(false)
   })
@@ -52,7 +49,7 @@ describe('patient web cookie helpers', () => {
     expect(shouldUseSecureCookies('production', 'false', '', 'http://127.0.0.1:43101')).toBe(true)
   })
 
-  it('throws when PATIENT_WEB_E2E_ALLOW_INSECURE_COOKIES is set in production regardless of origins', () => {
+  it('throws when PATIENT_WEB_E2E_ALLOW_INSECURE_COOKIES is set in production for non-local origins', () => {
     expect(() =>
       shouldUseSecureCookies('production', 'false', 'true', 'https://patient.example.com'),
     ).toThrow('PATIENT_WEB_E2E_ALLOW_INSECURE_COOKIES must not be set in production')

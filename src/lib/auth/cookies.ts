@@ -26,7 +26,11 @@ export function shouldUseSecureCookies(
   allowInsecureE2e = process.env.PATIENT_WEB_E2E_ALLOW_INSECURE_COOKIES,
   allowedOrigins = process.env.PATIENT_WEB_ALLOWED_ORIGINS,
 ): boolean {
-  if (allowInsecureE2e === 'true' && nodeEnv === 'production') {
+  if (
+    allowInsecureE2e === 'true' &&
+    nodeEnv === 'production' &&
+    !hasOnlyLocalOrigins(allowedOrigins)
+  ) {
     throw new Error('PATIENT_WEB_E2E_ALLOW_INSECURE_COOKIES must not be set in production')
   }
   if (override === 'true') return true
@@ -36,7 +40,7 @@ export function shouldUseSecureCookies(
   return nodeEnv !== 'development'
 }
 
-function hasOnlyLocalOrigins(value: string | undefined): boolean {
+export function hasOnlyLocalOrigins(value: string | undefined): boolean {
   if (!value) return false
   return value
     .split(',')

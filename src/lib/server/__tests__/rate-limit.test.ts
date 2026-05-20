@@ -18,7 +18,11 @@ describe('rate limiting', () => {
     expect(rateLimit('e2e-rate-limit-test', { limit: 0, windowMs: 60_000 })).toBe(true)
   })
 
-  it('rejects the E2E bypass in production', () => {
+  it('supports the E2E bypass in local production-mode standalone builds', () => {
+    expect(shouldBypassRateLimit('production', 'true', 'http://127.0.0.1:43101')).toBe(true)
+  })
+
+  it('rejects the E2E bypass in production for non-local origins', () => {
     expect(() => shouldBypassRateLimit('production', 'true')).toThrow(
       'PATIENT_WEB_E2E_BYPASS_RATE_LIMITS must not be set in production',
     )
