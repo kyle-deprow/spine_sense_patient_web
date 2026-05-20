@@ -172,6 +172,41 @@ describe('proxy route handler', () => {
     )
   })
 
+  it('forwards bodyless intake completion POSTs without an empty JSON body', async () => {
+    mockedBackendFetch.mockResolvedValue(Response.json({ id: 'intake-1', isComplete: true }))
+    const csrf = createCsrfToken(CSRF_SECRET, 'proxy-route-test-nonce')
+
+    const request = makeProxyRequest(
+      '/api/proxy/api/v1/patients/me/intake/progress/complete',
+      'POST',
+      {
+        spine_patient_sess: 'access-token',
+        spine_patient_csrf: csrf,
+      },
+      {
+        'Content-Type': 'application/json',
+        [CSRF_HEADER]: csrf,
+        Origin: ORIGIN,
+      },
+    )
+    const response = await POST(
+      request,
+      makeContext(['api', 'v1', 'patients', 'me', 'intake', 'progress', 'complete']),
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockedBackendFetch).toHaveBeenCalledWith(
+      '/api/v1/patients/me/intake/progress/complete',
+      expect.objectContaining({
+        method: 'POST',
+      }),
+      {},
+    )
+    const requestInit = mockedBackendFetch.mock.calls[0]?.[1]
+    expect(requestInit).not.toHaveProperty('body')
+    expect(new Headers(requestInit?.headers).has('content-type')).toBe(false)
+  })
+
   it('classifies only adaptive, refinement, and analysis run assessment calls as long-running', () => {
     expect(
       isLongAssessmentBackendCall('/api/v1/patients/me/assessments/assessment-123/adaptive/prepare'),

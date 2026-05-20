@@ -36,12 +36,18 @@ async function handler(request: NextRequest, context: ProxyContext) {
     return csrfFailureResponse(csrf.status, csrf.code)
   }
 
+  const headers = buildProxyRequestHeaders(request, accessToken)
   const backendRequest: RequestInit = {
     method: request.method,
-    headers: buildProxyRequestHeaders(request, accessToken),
+    headers,
   }
   if (shouldForwardBody(request.method)) {
-    backendRequest.body = await request.arrayBuffer()
+    const body = await request.arrayBuffer()
+    if (body.byteLength > 0) {
+      backendRequest.body = body
+    } else {
+      headers.delete('content-type')
+    }
   }
 
   let backendResponse: Response
