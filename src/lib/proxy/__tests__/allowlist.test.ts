@@ -22,6 +22,32 @@ describe('proxy allowlist', () => {
     ).toEqual({ ok: true, targetPath: '/api/v1/patients/me/symptom-trends' })
   })
 
+  it('allows patient intake onboarding calls', () => {
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'intake', 'steps', 'profile'],
+        'PUT',
+        '/api/proxy/api/v1/patients/me/intake/steps/profile',
+      ),
+    ).toEqual({ ok: true, targetPath: '/api/v1/patients/me/intake/steps/profile' })
+
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'intake', 'route'],
+        'POST',
+        '/api/proxy/api/v1/patients/me/intake/route',
+      ),
+    ).toEqual({ ok: true, targetPath: '/api/v1/patients/me/intake/route' })
+
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'intake', 'progress', 'complete'],
+        'POST',
+        '/api/proxy/api/v1/patients/me/intake/progress/complete',
+      ),
+    ).toEqual({ ok: true, targetPath: '/api/v1/patients/me/intake/progress/complete' })
+  })
+
   it('preserves explicit trailing slashes for FastAPI collection routes', () => {
     expect(
       validateProxyTarget(

@@ -16,6 +16,7 @@ export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
   { prefix: '/api/v1/patients/me/checkins', methods: ['GET', 'POST', 'PATCH', 'DELETE'] },
   { prefix: '/api/v1/patients/me/treatments', methods: ['GET'] },
   { prefix: '/api/v1/patients/me/documents', methods: ['GET', 'POST', 'DELETE'] },
+  { prefix: '/api/v1/patients/me/intake', methods: ['GET', 'POST', 'PUT'] },
   { prefix: '/api/v1/patients/me/providers', methods: ['GET'] },
   { prefix: '/api/v1/patients/me', methods: ['GET', 'PATCH'] },
   { prefix: '/api/v1/invite-codes', methods: ['GET', 'POST'] },
