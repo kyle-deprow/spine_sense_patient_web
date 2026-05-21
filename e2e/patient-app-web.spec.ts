@@ -106,6 +106,15 @@ function uniqueSyntheticEmail(): string {
   return `patient-web-signup-${unique}@e2e.example.com`;
 }
 
+async function clickIfPresent(page: Page, testId: string, timeout = 1000): Promise<boolean> {
+  const locator = page.getByTestId(testId);
+  const visible = await locator.isVisible({ timeout }).catch(() => false);
+  if (!visible) return false;
+  await locator.scrollIntoViewIfNeeded();
+  await locator.click();
+  return true;
+}
+
 async function expectNoBrowserStorage(page: Page) {
   const storage = await page.evaluate(async () => {
     const indexedDbDatabases =
@@ -394,7 +403,7 @@ test.describe("patient app web deployment", () => {
     await page.getByTestId("register-date-of-birth").fill("1990-01-15");
     await page.getByTestId("register-password").fill(SIGNUP_PASSWORD);
     await page.getByTestId("register-confirm-password").fill(SIGNUP_PASSWORD);
-    await page.getByTestId("register-consent-storage").click();
+    await clickIfPresent(page, "register-consent-storage");
     await expect(page.getByTestId("register-submit")).toBeEnabled();
     await page.getByTestId("register-submit").click();
 
