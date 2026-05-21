@@ -1,6 +1,10 @@
 const AUTH_PREFIX = '/api/v1/auth'
 const RAW_PROXY_PREFIX = '/api/proxy'
-const BACKEND_COLLECTION_PATHS_WITH_TRAILING_SLASH = new Set(['/api/v1/patients/me/assessments'])
+const BACKEND_ROOT_PATHS_WITH_TRAILING_SLASH = new Set([
+  '/api/v1/patients/me',
+  '/api/v1/patients/me/assessments',
+  '/api/v1/patients/me/symptoms',
+])
 
 export interface AllowedProxyRoute {
   prefix: string
@@ -44,7 +48,7 @@ export function validateProxyTarget(
 
   const baseTargetPath = `/${pathSegments.join('/')}`
   const targetPath =
-    rawPathname.endsWith('/') || BACKEND_COLLECTION_PATHS_WITH_TRAILING_SLASH.has(baseTargetPath)
+    rawPathname.endsWith('/') || BACKEND_ROOT_PATHS_WITH_TRAILING_SLASH.has(baseTargetPath)
       ? `${baseTargetPath}/`
       : baseTargetPath
   if (targetPath.startsWith(`${AUTH_PREFIX}/`) || targetPath === AUTH_PREFIX) {

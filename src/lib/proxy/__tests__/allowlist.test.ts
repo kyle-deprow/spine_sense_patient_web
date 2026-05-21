@@ -22,6 +22,24 @@ describe('proxy allowlist', () => {
     ).toEqual({ ok: true, targetPath: '/api/v1/patients/me/symptom-trends' })
   })
 
+  it('normalizes exact backend root routes to avoid auth-losing redirects', () => {
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me'],
+        'GET',
+        '/api/proxy/api/v1/patients/me',
+      ),
+    ).toEqual({ ok: true, targetPath: '/api/v1/patients/me/' })
+
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'symptoms'],
+        'GET',
+        '/api/proxy/api/v1/patients/me/symptoms',
+      ),
+    ).toEqual({ ok: true, targetPath: '/api/v1/patients/me/symptoms/' })
+  })
+
   it('allows patient intake onboarding calls', () => {
     expect(
       validateProxyTarget(
