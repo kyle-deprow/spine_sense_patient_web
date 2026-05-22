@@ -24,6 +24,10 @@ type TextAnswer = {
   readonly text: string
 }
 
+const SCREENING_ANSWERS_BY_ID = new Map(
+  fullAssessmentScenario.screening.map((answer) => [answer.id, answer]),
+)
+
 function uniqueSyntheticEmail(): string {
   const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
   return `casey.assessment.${unique}@e2e.example.com`
@@ -564,17 +568,6 @@ function answerCandidateTestIds(prefix: string, id: string, value: string | numb
   ]
 }
 
-async function isAnswerControlVisible(page: Page, prefix: string, answer: AssessmentAnswer) {
-  for (const value of answerValues(answer.value)) {
-    const locator = await findVisibleCandidate(page, answerCandidateTestIds(prefix, answer.id, value))
-    if (locator != null) return true
-
-    const input = page.getByTestId(`${prefix}-${answer.id}-input`)
-    if (await input.isVisible({ timeout: 500 }).catch(() => false)) return true
-  }
-  return false
-}
-
 async function answerOneValue(page: Page, prefix: string, id: string, value: string | number) {
   const normalized = String(value)
   const locator = await findVisibleCandidate(page, answerCandidateTestIds(prefix, id, value))
@@ -622,43 +615,43 @@ async function answerTextQuestion(page: Page, prefix: string, answer: TextAnswer
   return true
 }
 
-async function findNextVisibleScreeningAnswer(
-  page: Page,
-  startIndex: number,
-  timeout = 15_000,
-): Promise<number> {
-  const deadline = Date.now() + timeout
-  while (Date.now() < deadline) {
-    for (let index = startIndex; index < fullAssessmentScenario.screening.length; index += 1) {
-      const candidate = fullAssessmentScenario.screening[index]
-      if (candidate != null && (await isAnswerControlVisible(page, 'question', candidate))) {
-        return index
+async function currentVisibleScreeningAnswer(page: Page): Promise<AssessmentAnswer> {
+  const visibleQuestionIds = await page
+    .locator('[data-testid^="question-"]:visible')
+    .evaluateAll((elements) => {
+      const ids: string[] = []
+      for (const element of elements) {
+        const testId = element.getAttribute('data-testid')
+        const match = /^question-([A-Za-z0-9_]+)$/.exec(testId ?? '')
+        if (match?.[1] != null) {
+          ids.push(match[1])
+        }
       }
-    }
-    await page.waitForTimeout(250)
+      return ids
+    })
+
+  if (visibleQuestionIds.length === 0) {
+    throw new Error('No current visible screening question container was found')
   }
 
-  return -1
+  const questionId = visibleQuestionIds[0]!
+  const answer = SCREENING_ANSWERS_BY_ID.get(questionId)
+  if (answer == null) {
+    throw new Error(`No screening fixture answer is defined for current question ${questionId}`)
+  }
+
+  return answer
 }
 
 async function answerScreening(page: Page) {
-  let nextAnswerIndex = 0
   await expect(page.getByTestId('screening-nav-next')).toBeVisible({ timeout: 60_000 })
   for (let questionIndex = 0; questionIndex < 80; questionIndex += 1) {
-    const answerIndex = await findNextVisibleScreeningAnswer(page, nextAnswerIndex)
-
-    if (answerIndex !== -1) {
-      const answer = fullAssessmentScenario.screening[answerIndex]
-      if (answer == null) {
-        throw new Error(`Missing screening fixture answer at index ${answerIndex}`)
-      }
-      await answerQuestion(page, 'question', answer)
-      nextAnswerIndex = answerIndex + 1
-    }
+    const answer = await currentVisibleScreeningAnswer(page)
+    await answerQuestion(page, 'question', answer)
 
     await expect(
       page.getByTestId('screening-nav-next'),
-      `Expected fixture answer index ${nextAnswerIndex} to enable screening navigation`,
+      `Expected fixture answer ${answer?.id ?? 'unknown'} to enable screening navigation`,
     ).toBeEnabled({ timeout: 1000 })
     await waitForEnabledAndClick(page, 'screening-nav-next')
     await maybeContinueSectionTransition(page)
