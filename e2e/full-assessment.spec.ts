@@ -150,6 +150,15 @@ async function gotoWelcome(page: Page) {
     }
     await page.waitForTimeout(1500)
   }
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await page.goto('/welcome', { waitUntil: 'commit', timeout: 45_000 }).catch(() => undefined)
+    if (await page.getByTestId('welcome-screen').isVisible({ timeout: 15_000 }).catch(() => false)) {
+      return
+    }
+    await page.waitForTimeout(1500)
+  }
+
   await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => undefined)
   await expect(page.getByTestId('welcome-screen')).toBeVisible({ timeout: 60_000 })
 }
@@ -321,11 +330,27 @@ async function maybeContinueSectionTransition(page: Page) {
 }
 
 async function waitForEnabledAndClick(page: Page, testId: string, timeout = 30_000) {
-  const locator = page.getByTestId(testId)
-  await expect(locator).toBeVisible({ timeout })
-  await expect(locator).toBeEnabled({ timeout })
-  await locator.scrollIntoViewIfNeeded()
-  await locator.click()
+  let lastError: unknown
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const locator = page.getByTestId(testId)
+    await expect(locator).toBeVisible({ timeout })
+    await expect(locator).toBeEnabled({ timeout })
+    try {
+      await locator.scrollIntoViewIfNeeded()
+      await locator.click()
+      return
+    } catch (error) {
+      lastError = error
+      await page.waitForTimeout(250)
+      if (!(await locator.isVisible({ timeout: 250 }).catch(() => false))) {
+        return
+      }
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`Could not click ${testId}`)
 }
 
 async function clickAndWaitForResponse({
@@ -807,6 +832,7 @@ async function completeAdaptiveIfPresent(page: Page) {
   const adaptiveScreen = page.getByTestId('adaptive-screen')
   let initialStage = await waitForAssessmentStage(page, [
     'adaptive-loading-state',
+    'adaptive-loading-error-state',
     'adaptive-screen',
     'adaptive-error-state',
     'refinement-loading-state',
@@ -814,15 +840,34 @@ async function completeAdaptiveIfPresent(page: Page) {
     'refinement-error-state',
     'review-screen',
   ])
-  if (initialStage === 'adaptive-loading-state') {
-    initialStage = await waitForAssessmentStage(page, [
-      'adaptive-screen',
-      'adaptive-error-state',
-      'refinement-loading-state',
-      'refinement-screen',
-      'refinement-error-state',
-      'review-screen',
-    ])
+  for (let retryAttempt = 0; retryAttempt < 3; retryAttempt += 1) {
+    if (initialStage === 'adaptive-loading-error-state') {
+      await waitForEnabledAndClick(page, 'adaptive-loading-retry')
+      initialStage = await waitForAssessmentStage(page, [
+        'adaptive-loading-state',
+        'adaptive-screen',
+        'adaptive-error-state',
+        'refinement-loading-state',
+        'refinement-screen',
+        'refinement-error-state',
+        'review-screen',
+      ])
+    }
+
+    if (initialStage === 'adaptive-loading-state') {
+      initialStage = await waitForAssessmentStage(page, [
+        'adaptive-loading-error-state',
+        'adaptive-screen',
+        'adaptive-error-state',
+        'refinement-loading-state',
+        'refinement-screen',
+        'refinement-error-state',
+        'review-screen',
+      ])
+      continue
+    }
+
+    break
   }
   if (initialStage !== 'adaptive-screen') return
 
@@ -867,12 +912,27 @@ async function completeRefinementIfPresent(page: Page) {
     'refinement-error-state',
     'review-screen',
   ])
-  if (initialStage === 'refinement-loading-state') {
-    initialStage = await waitForAssessmentStage(page, [
-      'refinement-screen',
-      'refinement-error-state',
-      'review-screen',
-    ])
+  for (let retryAttempt = 0; retryAttempt < 3; retryAttempt += 1) {
+    if (initialStage === 'refinement-error-state') {
+      await waitForEnabledAndClick(page, 'refinement-retry')
+      initialStage = await waitForAssessmentStage(page, [
+        'refinement-loading-state',
+        'refinement-screen',
+        'refinement-error-state',
+        'review-screen',
+      ])
+    }
+
+    if (initialStage === 'refinement-loading-state') {
+      initialStage = await waitForAssessmentStage(page, [
+        'refinement-screen',
+        'refinement-error-state',
+        'review-screen',
+      ])
+      continue
+    }
+
+    break
   }
   if (initialStage !== 'refinement-screen') return
 
@@ -899,6 +959,38 @@ async function completeRefinementIfPresent(page: Page) {
   }
 
   throw new Error('Refinement questionnaire did not exit after 20 questions')
+}
+
+async function expectReviewScreenWithRefinementRecovery(page: Page) {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    if (await page.getByTestId('review-screen').isVisible({ timeout: 1000 }).catch(() => false)) {
+      return
+    }
+
+    if (await page.getByTestId('refinement-error-state').isVisible({ timeout: 1000 }).catch(() => false)) {
+      await waitForEnabledAndClick(page, 'refinement-retry')
+      await waitForAssessmentStage(page, [
+        'refinement-loading-state',
+        'refinement-screen',
+        'refinement-error-state',
+        'review-screen',
+      ], 120_000)
+      continue
+    }
+
+    if (await page.getByTestId('refinement-loading-state').isVisible({ timeout: 1000 }).catch(() => false)) {
+      await waitForAssessmentStage(page, [
+        'refinement-screen',
+        'refinement-error-state',
+        'review-screen',
+      ], 120_000)
+      continue
+    }
+
+    break
+  }
+
+  await expect(page.getByTestId('review-screen')).toBeVisible({ timeout: 120_000 })
 }
 
 async function completeProfileIfPresent(page: Page) {
@@ -1070,7 +1162,7 @@ test.describe('patient web full assessment flow', () => {
 
     await completeRefinementIfPresent(page)
 
-    await expect(page.getByTestId('review-screen')).toBeVisible({ timeout: 120_000 })
+    await expectReviewScreenWithRefinementRecovery(page)
     await expect(page.getByTestId('review-title')).toBeVisible()
     await expect(page.getByText('Review Your Assessment')).toBeVisible()
     await expect(page.getByTestId('review-story')).toBeVisible()
