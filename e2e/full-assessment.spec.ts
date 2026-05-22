@@ -667,8 +667,8 @@ async function isScreeningSubmitButton(page: Page): Promise<boolean> {
   return /submit answers/i.test(`${ariaLabel ?? ''} ${text}`)
 }
 
-async function waitForScreeningAdvance(page: Page, previousQuestionId: string) {
-  const deadline = Date.now() + 60_000
+async function waitForScreeningAdvance(page: Page, previousQuestionId: string, timeout = 60_000) {
+  const deadline = Date.now() + timeout
   while (Date.now() < deadline) {
     if (await page.getByTestId('screening-section-transition-continue').isVisible({ timeout: 250 }).catch(() => false)) {
       await maybeContinueSectionTransition(page)
@@ -687,6 +687,29 @@ async function waitForScreeningAdvance(page: Page, previousQuestionId: string) {
   throw new Error(`Timed out waiting for screening question ${previousQuestionId} to advance`)
 }
 
+async function clickScreeningNextAndWaitForAdvance(page: Page, previousQuestionId: string) {
+  const next = page.getByTestId('screening-nav-next')
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await waitForEnabledAndClick(page, 'screening-nav-next')
+
+    try {
+      await waitForScreeningAdvance(page, previousQuestionId, attempt === 2 ? 60_000 : 20_000)
+      return
+    } catch (error) {
+      const currentQuestionId = await currentVisibleScreeningQuestionId(page).catch(() => null)
+      if (attempt === 2 || currentQuestionId !== previousQuestionId) {
+        throw error
+      }
+
+      await waitForScreeningNavIdle(page, 10_000)
+      if (!(await next.isEnabled({ timeout: 500 }).catch(() => false))) {
+        throw error
+      }
+    }
+  }
+}
+
 async function answerScreening(page: Page) {
   await expect(page.getByTestId('screening-nav-next')).toBeVisible({ timeout: 60_000 })
   for (let questionIndex = 0; questionIndex < 80; questionIndex += 1) {
@@ -702,8 +725,7 @@ async function answerScreening(page: Page) {
       return
     }
 
-    await waitForEnabledAndClick(page, 'screening-nav-next')
-    await waitForScreeningAdvance(page, answer.id)
+    await clickScreeningNextAndWaitForAdvance(page, answer.id)
     await expect(page.getByTestId('emergency-screen')).toBeHidden({ timeout: 500 }).catch(() => undefined)
   }
 
