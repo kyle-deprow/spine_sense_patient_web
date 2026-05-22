@@ -572,18 +572,30 @@ async function answerTextQuestion(page: Page, prefix: string, answer: TextAnswer
   return true
 }
 
+async function findNextVisibleScreeningAnswer(
+  page: Page,
+  startIndex: number,
+  timeout = 15_000,
+): Promise<number> {
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    for (let index = startIndex; index < fullAssessmentScenario.screening.length; index += 1) {
+      const candidate = fullAssessmentScenario.screening[index]
+      if (candidate != null && (await isAnswerControlVisible(page, 'question', candidate))) {
+        return index
+      }
+    }
+    await page.waitForTimeout(250)
+  }
+
+  return -1
+}
+
 async function answerScreening(page: Page) {
   let nextAnswerIndex = 0
   await expect(page.getByTestId('screening-nav-next')).toBeVisible({ timeout: 60_000 })
   for (let questionIndex = 0; questionIndex < 80; questionIndex += 1) {
-    let answerIndex = -1
-    for (let index = nextAnswerIndex; index < fullAssessmentScenario.screening.length; index += 1) {
-      const candidate = fullAssessmentScenario.screening[index]
-      if (candidate != null && (await isAnswerControlVisible(page, 'question', candidate))) {
-        answerIndex = index
-        break
-      }
-    }
+    const answerIndex = await findNextVisibleScreeningAnswer(page, nextAnswerIndex)
 
     if (answerIndex !== -1) {
       const answer = fullAssessmentScenario.screening[answerIndex]
