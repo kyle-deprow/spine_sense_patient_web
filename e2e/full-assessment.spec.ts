@@ -470,7 +470,7 @@ async function findVisibleCandidate(
 
 async function clickPreferredVisibleOption(page: Page): Promise<boolean> {
   const visibleOptions: Array<{ label: string; locator: Locator }> = []
-  for (const role of ['button', 'checkbox'] as const) {
+  for (const role of ['button', 'checkbox', 'radio'] as const) {
     const optionControls = page.getByRole(role, { name: /^Option \d+ of \d+:/ })
     const count = await optionControls.count()
 
@@ -497,7 +497,8 @@ async function clickPreferredVisibleOption(page: Page): Promise<boolean> {
     }
   }
 
-  return false
+  await visibleOptions[0]!.locator.click()
+  return true
 }
 
 async function clickScreeningSubmitIfPresent(page: Page, timeout = 30_000): Promise<boolean> {
