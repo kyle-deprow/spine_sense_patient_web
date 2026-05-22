@@ -655,6 +655,23 @@ async function waitForScreeningNavIdle(page: Page, timeout = 30_000) {
   await expect(next).not.toContainText(/Saving/i, { timeout })
 }
 
+async function isFinalVisibleScreeningQuestion(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const text = document.body.innerText
+    const labelledMatch = /Question\s+(\d+)\s+of\s+(\d+)/i.exec(text)
+    if (labelledMatch?.[1] != null && labelledMatch[2] != null) {
+      return labelledMatch[1] === labelledMatch[2]
+    }
+
+    const compactMatch = /\b(\d+)\s*\/\s*(\d+)\b/.exec(text)
+    if (compactMatch?.[1] != null && compactMatch[2] != null) {
+      return compactMatch[1] === compactMatch[2]
+    }
+
+    return false
+  })
+}
+
 async function isScreeningSubmitButton(page: Page): Promise<boolean> {
   const next = page.getByTestId('screening-nav-next')
   if (!(await next.isVisible({ timeout: 500 }).catch(() => false))) return false
@@ -664,7 +681,7 @@ async function isScreeningSubmitButton(page: Page): Promise<boolean> {
     next.innerText().catch(() => ''),
   ])
 
-  return /submit answers/i.test(`${ariaLabel ?? ''} ${text}`)
+  return /submit answers/i.test(`${ariaLabel ?? ''} ${text}`) && await isFinalVisibleScreeningQuestion(page)
 }
 
 async function waitForScreeningAdvance(page: Page, previousQuestionId: string, timeout = 60_000) {
