@@ -256,6 +256,22 @@ async function waitForAssessmentStage(
   return waitForAnyVisibleTestId(page, testIds, timeout)
 }
 
+async function waitForRetryOutcome(
+  page: Page,
+  errorTestId: string,
+  nextTestIds: readonly string[],
+  timeout = 30_000,
+): Promise<string> {
+  const nextStage = await waitForAnyVisibleTestId(page, nextTestIds, timeout).catch(() => null)
+  if (nextStage != null) return nextStage
+
+  if (await page.getByTestId(errorTestId).isVisible({ timeout: 1000 }).catch(() => false)) {
+    return errorTestId
+  }
+
+  return waitForAnyVisibleTestId(page, nextTestIds, 30_000)
+}
+
 async function visibleDynamicQuestionTestId(
   page: Page,
   questionPrefix: string,
@@ -590,6 +606,7 @@ async function submitScreening(page: Page) {
   await expect(page.getByTestId('screening-nav-next')).toBeVisible({ timeout: 30_000 })
   const nextStageTestIds = [
     'adaptive-loading-state',
+    'adaptive-loading-error-state',
     'adaptive-screen',
     'adaptive-error-state',
     'refinement-loading-state',
@@ -843,7 +860,7 @@ async function completeAdaptiveIfPresent(page: Page) {
   for (let retryAttempt = 0; retryAttempt < 3; retryAttempt += 1) {
     if (initialStage === 'adaptive-loading-error-state') {
       await waitForEnabledAndClick(page, 'adaptive-loading-retry')
-      initialStage = await waitForAssessmentStage(page, [
+      initialStage = await waitForRetryOutcome(page, 'adaptive-loading-error-state', [
         'adaptive-loading-state',
         'adaptive-screen',
         'adaptive-error-state',
@@ -915,10 +932,9 @@ async function completeRefinementIfPresent(page: Page) {
   for (let retryAttempt = 0; retryAttempt < 3; retryAttempt += 1) {
     if (initialStage === 'refinement-error-state') {
       await waitForEnabledAndClick(page, 'refinement-retry')
-      initialStage = await waitForAssessmentStage(page, [
+      initialStage = await waitForRetryOutcome(page, 'refinement-error-state', [
         'refinement-loading-state',
         'refinement-screen',
-        'refinement-error-state',
         'review-screen',
       ])
     }
@@ -969,10 +985,9 @@ async function expectReviewScreenWithRefinementRecovery(page: Page) {
 
     if (await page.getByTestId('refinement-error-state').isVisible({ timeout: 1000 }).catch(() => false)) {
       await waitForEnabledAndClick(page, 'refinement-retry')
-      await waitForAssessmentStage(page, [
+      await waitForRetryOutcome(page, 'refinement-error-state', [
         'refinement-loading-state',
         'refinement-screen',
-        'refinement-error-state',
         'review-screen',
       ], 120_000)
       continue
