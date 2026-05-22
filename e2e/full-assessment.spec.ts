@@ -615,7 +615,7 @@ async function answerTextQuestion(page: Page, prefix: string, answer: TextAnswer
   return true
 }
 
-async function currentVisibleScreeningAnswer(page: Page): Promise<AssessmentAnswer> {
+async function currentVisibleScreeningQuestionId(page: Page): Promise<string> {
   const visibleQuestionIds = await page
     .locator('[data-testid^="question-"]:visible')
     .evaluateAll((elements) => {
@@ -634,13 +634,56 @@ async function currentVisibleScreeningAnswer(page: Page): Promise<AssessmentAnsw
     throw new Error('No current visible screening question container was found')
   }
 
-  const questionId = visibleQuestionIds[0]!
+  return visibleQuestionIds[0]!
+}
+
+async function currentVisibleScreeningAnswer(page: Page): Promise<AssessmentAnswer> {
+  const questionId = await currentVisibleScreeningQuestionId(page)
   const answer = SCREENING_ANSWERS_BY_ID.get(questionId)
   if (answer == null) {
     throw new Error(`No screening fixture answer is defined for current question ${questionId}`)
   }
 
   return answer
+}
+
+async function waitForScreeningNavIdle(page: Page, timeout = 30_000) {
+  const next = page.getByTestId('screening-nav-next')
+  await expect(next).toBeVisible({ timeout })
+  await expect(next).not.toHaveAttribute('aria-busy', 'true', { timeout })
+  await expect(next).not.toContainText(/Saving/i, { timeout })
+}
+
+async function isScreeningSubmitButton(page: Page): Promise<boolean> {
+  const next = page.getByTestId('screening-nav-next')
+  if (!(await next.isVisible({ timeout: 500 }).catch(() => false))) return false
+
+  const [ariaLabel, text] = await Promise.all([
+    next.getAttribute('aria-label').catch(() => null),
+    next.innerText().catch(() => ''),
+  ])
+
+  return /submit answers/i.test(`${ariaLabel ?? ''} ${text}`)
+}
+
+async function waitForScreeningAdvance(page: Page, previousQuestionId: string) {
+  const deadline = Date.now() + 60_000
+  while (Date.now() < deadline) {
+    if (await page.getByTestId('screening-section-transition-continue').isVisible({ timeout: 250 }).catch(() => false)) {
+      await maybeContinueSectionTransition(page)
+      continue
+    }
+
+    const currentQuestionId = await currentVisibleScreeningQuestionId(page).catch(() => null)
+    if (currentQuestionId != null && currentQuestionId !== previousQuestionId) {
+      await waitForScreeningNavIdle(page)
+      return
+    }
+
+    await page.waitForTimeout(250)
+  }
+
+  throw new Error(`Timed out waiting for screening question ${previousQuestionId} to advance`)
 }
 
 async function answerScreening(page: Page) {
@@ -652,15 +695,18 @@ async function answerScreening(page: Page) {
     await expect(
       page.getByTestId('screening-nav-next'),
       `Expected fixture answer ${answer?.id ?? 'unknown'} to enable screening navigation`,
-    ).toBeEnabled({ timeout: 1000 })
-    await waitForEnabledAndClick(page, 'screening-nav-next')
-    await maybeContinueSectionTransition(page)
-    await expect(page.getByTestId('emergency-screen')).toBeHidden({ timeout: 500 }).catch(() => undefined)
-    if (!(await page.getByTestId('screening-nav-next').isVisible({ timeout: 1000 }).catch(() => false))) {
-      await clickScreeningSubmitIfPresent(page)
+    ).toBeEnabled({ timeout: 30_000 })
+
+    if (await isScreeningSubmitButton(page)) {
       return
     }
+
+    await waitForEnabledAndClick(page, 'screening-nav-next')
+    await waitForScreeningAdvance(page, answer.id)
+    await expect(page.getByTestId('emergency-screen')).toBeHidden({ timeout: 500 }).catch(() => undefined)
   }
+
+  throw new Error('Timed out answering screening questions before reaching submit')
 }
 
 async function answerVisibleDynamicQuestions(
