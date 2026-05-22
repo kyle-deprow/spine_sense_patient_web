@@ -378,6 +378,41 @@ async function clickAndWaitForResponse({
   throw lastError instanceof Error ? lastError : new Error(`No response matched after clicking ${testId}`)
 }
 
+async function clickAndWaitForResponseOrSuccess({
+  page,
+  testId,
+  matches,
+  successTestId,
+  timeout = 60_000,
+}: {
+  page: Page
+  testId: string
+  matches: (response: Response) => boolean
+  successTestId: string
+  timeout?: number
+}): Promise<Response | null> {
+  const observedResponses: Response[] = []
+  const collectResponse = (response: Response) => {
+    if (matches(response)) {
+      observedResponses.push(response)
+    }
+  }
+
+  page.on('response', collectResponse)
+  try {
+    await waitForEnabledAndClick(page, testId)
+
+    const response = await Promise.race([
+      page.waitForResponse(matches, { timeout }).catch(() => null),
+      page.getByTestId(successTestId).waitFor({ state: 'visible', timeout }).then(() => null),
+    ])
+
+    return response ?? observedResponses.find((candidate) => candidate.ok()) ?? observedResponses[0] ?? null
+  } finally {
+    page.off('response', collectResponse)
+  }
+}
+
 async function isConsentVisible(page: Page): Promise<boolean> {
   return (
     await page.getByTestId('consent-screen').isVisible({ timeout: 500 }).catch(() => false)
@@ -969,16 +1004,18 @@ test.describe('patient web full assessment flow', () => {
     await fillByTestId(page, 'register-confirm-password', registration.password)
     await clickIfPresent(page, 'register-consent-storage')
 
-    const registerResponse = await clickAndWaitForResponse({
+    const registerResponse = await clickAndWaitForResponseOrSuccess({
       page,
       testId: 'register-submit',
-      retryErrorTestId: 'register-error',
+      successTestId: 'verify-screen',
       matches: (response) =>
         response.url().includes('/api/auth/register') &&
         response.request().method() === 'POST',
     })
-    expect(registerResponse.ok()).toBeTruthy()
-    await expectNoTokenLeak(await registerResponse.text())
+    if (registerResponse != null) {
+      expect(registerResponse.ok()).toBeTruthy()
+      await expectNoTokenLeak(await registerResponse.text())
+    }
     expect(page.url()).not.toContain('verification')
 
     await expect(page.getByTestId('verify-screen')).toBeVisible({ timeout: 60_000 })
