@@ -27,6 +27,8 @@ type TextAnswer = {
 const SCREENING_ANSWERS_BY_ID = new Map(
   fullAssessmentScenario.screening.map((answer) => [answer.id, answer]),
 )
+const FINAL_SCREENING_QUESTION_ID =
+  fullAssessmentScenario.screening[fullAssessmentScenario.screening.length - 1]?.id
 
 function uniqueSyntheticEmail(): string {
   const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
@@ -504,6 +506,7 @@ async function clickPreferredVisibleOption(page: Page): Promise<boolean> {
 async function clickScreeningSubmitIfPresent(page: Page, timeout = 30_000): Promise<boolean> {
   const footerSubmit = page.getByTestId('screening-nav-next')
   if (await footerSubmit.isVisible({ timeout: 1000 }).catch(() => false)) {
+    if (!(await isScreeningSubmitButton(page))) return false
     await expect(footerSubmit).toBeEnabled({ timeout })
     await footerSubmit.click()
     await page.waitForTimeout(500)
@@ -655,23 +658,6 @@ async function waitForScreeningNavIdle(page: Page, timeout = 30_000) {
   await expect(next).not.toContainText(/Saving/i, { timeout })
 }
 
-async function isFinalVisibleScreeningQuestion(page: Page): Promise<boolean> {
-  return page.evaluate(() => {
-    const text = document.body.innerText
-    const labelledMatch = /Question\s+(\d+)\s+of\s+(\d+)/i.exec(text)
-    if (labelledMatch?.[1] != null && labelledMatch[2] != null) {
-      return labelledMatch[1] === labelledMatch[2]
-    }
-
-    const compactMatch = /\b(\d+)\s*\/\s*(\d+)\b/.exec(text)
-    if (compactMatch?.[1] != null && compactMatch[2] != null) {
-      return compactMatch[1] === compactMatch[2]
-    }
-
-    return false
-  })
-}
-
 async function isScreeningSubmitButton(page: Page): Promise<boolean> {
   const next = page.getByTestId('screening-nav-next')
   if (!(await next.isVisible({ timeout: 500 }).catch(() => false))) return false
@@ -681,7 +667,10 @@ async function isScreeningSubmitButton(page: Page): Promise<boolean> {
     next.innerText().catch(() => ''),
   ])
 
-  return /submit answers/i.test(`${ariaLabel ?? ''} ${text}`) && await isFinalVisibleScreeningQuestion(page)
+  if (!/submit answers/i.test(`${ariaLabel ?? ''} ${text}`)) return false
+
+  const currentQuestionId = await currentVisibleScreeningQuestionId(page).catch(() => null)
+  return currentQuestionId === FINAL_SCREENING_QUESTION_ID
 }
 
 async function waitForScreeningAdvance(page: Page, previousQuestionId: string, timeout = 60_000) {
