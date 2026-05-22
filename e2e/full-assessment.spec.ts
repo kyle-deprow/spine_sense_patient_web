@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
+import { expect, test, type APIRequestContext, type Locator, type Page, type Response } from '@playwright/test'
 
 import { fullAssessmentScenario } from './fixtures/fullAssessmentScenario'
 
@@ -320,6 +320,56 @@ async function waitForEnabledAndClick(page: Page, testId: string, timeout = 30_0
   await expect(locator).toBeEnabled({ timeout })
   await locator.scrollIntoViewIfNeeded()
   await locator.click()
+}
+
+async function clickAndWaitForResponse({
+  page,
+  testId,
+  matches,
+  retryErrorTestId,
+  timeout = 60_000,
+  attempts = retryErrorTestId == null ? 1 : 3,
+}: {
+  page: Page
+  testId: string
+  matches: (response: Response) => boolean
+  retryErrorTestId?: string
+  timeout?: number
+  attempts?: number
+}): Promise<Response> {
+  if (attempts > 1 && retryErrorTestId == null) {
+    throw new Error(`Retries for ${testId} require a retryErrorTestId`)
+  }
+
+  let lastError: unknown
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const responsePromise = page.waitForResponse(matches, { timeout })
+    await waitForEnabledAndClick(page, testId)
+
+    try {
+      return await responsePromise
+    } catch (error) {
+      lastError = error
+      if (attempt >= attempts) {
+        break
+      }
+
+      if (retryErrorTestId != null) {
+        const retryableErrorVisible = await page
+          .getByTestId(retryErrorTestId)
+          .isVisible({ timeout: 1000 })
+          .catch(() => false)
+        if (!retryableErrorVisible) {
+          break
+        }
+      }
+
+      await page.waitForTimeout(1500)
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(`No response matched after clicking ${testId}`)
 }
 
 async function isConsentVisible(page: Page): Promise<boolean> {
@@ -851,13 +901,14 @@ test.describe('patient web full assessment flow', () => {
     await fillByTestId(page, 'register-confirm-password', registration.password)
     await clickIfPresent(page, 'register-consent-storage')
 
-    const registerResponsePromise = page.waitForResponse(
-      (response) =>
+    const registerResponse = await clickAndWaitForResponse({
+      page,
+      testId: 'register-submit',
+      retryErrorTestId: 'register-error',
+      matches: (response) =>
         response.url().includes('/api/auth/register') &&
         response.request().method() === 'POST',
-    )
-    await waitForEnabledAndClick(page, 'register-submit')
-    const registerResponse = await registerResponsePromise
+    })
     expect(registerResponse.ok()).toBeTruthy()
     await expectNoTokenLeak(await registerResponse.text())
     expect(page.url()).not.toContain('verification')
@@ -865,14 +916,14 @@ test.describe('patient web full assessment flow', () => {
     await expect(page.getByTestId('verify-screen')).toBeVisible({ timeout: 60_000 })
     await expectNoBrowserStorage(page)
 
-    const verifyResponsePromise = page.waitForResponse(
-      (response) =>
+    await fillByTestId(page, 'verify-otp-digit-0', registration.verificationCode)
+    const verifyResponse = await clickAndWaitForResponse({
+      page,
+      testId: 'verify-submit',
+      matches: (response) =>
         response.url().includes('/api/auth/verify/registration/confirm') &&
         response.request().method() === 'POST',
-    )
-    await fillByTestId(page, 'verify-otp-digit-0', registration.verificationCode)
-    await waitForEnabledAndClick(page, 'verify-submit')
-    const verifyResponse = await verifyResponsePromise
+    })
     expect(verifyResponse.ok()).toBeTruthy()
     await expectNoTokenLeak(await verifyResponse.text())
     expect(page.url()).not.toContain('verification')
