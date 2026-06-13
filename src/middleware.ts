@@ -35,6 +35,25 @@ export function buildCspHeader(nonce: string, options: CspOptions = {}): string 
 }
 
 export function buildCspHeaderForPath(nonce: string, _pathname: string): string {
+  // In development, React Native Web requires inline style attributes and
+  // Expo dynamically injects <style> tags for icon fonts / layout animations.
+  // The strict production CSP blocks both, so we relax it for local dev.
+  //
+  // IMPORTANT: Browsers ignore 'unsafe-inline' when a nonce is also present
+  // in the same directive. To allow React Native Web's dynamic style injection
+  // we must omit the nonce from style-src / style-src-elem in development.
+  if (process.env.NODE_ENV === 'development') {
+    return buildCspHeader(nonce, { requireTrustedTypes: false })
+      .replace("style-src-attr 'none'", "style-src-attr 'unsafe-inline'")
+      .replace(
+        `style-src 'self' 'nonce-${nonce}'`,
+        `style-src 'self' 'unsafe-inline'`,
+      )
+      .replace(
+        `style-src-elem 'self' 'nonce-${nonce}'`,
+        `style-src-elem 'self' 'unsafe-inline'`,
+      )
+  }
   return buildCspHeader(nonce, { requireTrustedTypes: !isPatientAppShellPath(_pathname) })
 }
 

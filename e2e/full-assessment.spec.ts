@@ -652,7 +652,6 @@ test.describe('patient web full assessment flow', () => {
     await fillByTestId(page, 'register-first-name', registration.firstName)
     await fillByTestId(page, 'register-last-name', registration.lastName)
     await fillByTestId(page, 'register-email', email)
-    await fillByTestId(page, 'register-date-of-birth', registration.dateOfBirth)
     await fillByTestId(page, 'register-password', registration.password)
     await fillByTestId(page, 'register-confirm-password', registration.password)
     await clickIfPresent(page, 'register-consent-storage')

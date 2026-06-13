@@ -11,13 +11,17 @@ import type { BackendLoginResponse, BackendTokenPair } from '@/types/auth'
 
 type JsonRecord = Record<string, unknown>
 
-function normalizeAuthError(backendStatus: number): { status: number; body: { error: string } } {
+function normalizeAuthError(backendStatus: number, isRegister = false): { status: number; body: { error: string } } {
   if (backendStatus === 429) {
     // Rate limit from the backend — safe to surface
     return { status: 429, body: { error: 'too_many_requests' } }
   }
   if (backendStatus === 422 || backendStatus === 400) {
     // Validation error (e.g. malformed request body) — safe to surface as 400
+    return { status: 400, body: { error: 'invalid_request' } }
+  }
+  if (isRegister && backendStatus === 401) {
+    // Registration duplicate email/credential error from the backend — surface as 400
     return { status: 400, body: { error: 'invalid_request' } }
   }
   if (backendStatus === 503 || backendStatus === 502) {
@@ -60,7 +64,8 @@ export async function forwardCredentialAuth(
   const data = await readJsonBody<BackendLoginResponse>(backendResponse)
 
   if (!backendResponse.ok) {
-    const normalized = normalizeAuthError(backendResponse.status)
+    const isRegister = backendPath.includes('register')
+    const normalized = normalizeAuthError(backendResponse.status, isRegister)
     return jsonNoStore(normalized.body, { status: normalized.status })
   }
 

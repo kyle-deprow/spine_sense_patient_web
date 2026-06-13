@@ -18,6 +18,8 @@ const ALLOWED_AUTH_PATHS = new Set([
   'password-reset/confirm',
   'verify-email',
   'resend-verification',
+  'verify/send',
+  'verify/confirm',
   'verify/registration/send',
   'verify/registration/confirm',
   'mfa/setup',

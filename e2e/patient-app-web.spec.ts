@@ -391,10 +391,8 @@ test.describe("patient app web deployment", () => {
     await page.getByTestId("register-last-name").fill("Patient");
     await page.getByTestId("register-email").fill(email);
     await page.getByTestId("register-phone").fill("5551234567");
-    await page.getByTestId("register-date-of-birth").fill("1990-01-15");
     await page.getByTestId("register-password").fill(SIGNUP_PASSWORD);
     await page.getByTestId("register-confirm-password").fill(SIGNUP_PASSWORD);
-    await page.getByTestId("register-consent-storage").click();
     await expect(page.getByTestId("register-submit")).toBeEnabled();
     await page.getByTestId("register-submit").click();
 

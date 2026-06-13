@@ -21,6 +21,7 @@ export async function GET(request: NextRequest) {
   try {
     return await sessionFromCookie(request)
   } catch (err) {
+    console.error('[session route error]', err)
     if (err instanceof BackendUnavailableError) {
       return jsonNoStore({ error: 'service_unavailable' }, { status: 503 })
     }
