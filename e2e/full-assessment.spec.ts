@@ -64,7 +64,7 @@ function installPhiSafeDiagnostics(page: Page) {
     const url = new URL(response.url())
     const requestId = response.headers()['x-request-id'] ?? response.headers()['request-id']
     const suffix = requestId != null ? ` request_id=${sanitizeDiagnostic(requestId)}` : ''
-    console.log(`[response:${response.status()}] ${url.pathname}${suffix}`)
+    console.log(`[response:${response.status()}] ${sanitizeDiagnostic(url.pathname)}${suffix}`)
   })
 }
 
@@ -345,15 +345,20 @@ async function maybeContinueSectionTransition(page: Page) {
   await clickIfPresent(page, 'screening-section-transition-continue')
 }
 
-async function waitForEnabledAndClick(page: Page, testId: string, timeout = 30_000) {
+async function waitForEnabledAndClick(
+  page: Page,
+  testId: string,
+  timeout = 30_000,
+  attempts = 4,
+) {
   let lastError: unknown
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     const locator = page.getByTestId(testId)
     await expect(locator).toBeVisible({ timeout })
     await expect(locator).toBeEnabled({ timeout })
     try {
       await locator.scrollIntoViewIfNeeded()
-      await locator.click()
+      await locator.click({ timeout: 10_000 })
       return
     } catch (error) {
       lastError = error
@@ -774,7 +779,7 @@ async function clickScreeningNextAndWaitForAdvance(page: Page, previousQuestionI
   const next = page.getByTestId('screening-nav-next')
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    await waitForEnabledAndClick(page, 'screening-nav-next')
+    await waitForEnabledAndClick(page, 'screening-nav-next', 30_000, 1)
 
     try {
       await waitForScreeningAdvance(page, previousQuestionId, attempt === 2 ? 60_000 : 20_000)
@@ -845,7 +850,7 @@ async function answerVisibleDynamicQuestions(
   return answered
 }
 
-async function completeAdaptiveIfPresent(page: Page) {
+async function completeAdaptiveIfPresent(page: Page): Promise<string | null> {
   const adaptiveScreen = page.getByTestId('adaptive-screen')
   let initialStage = await waitForAssessmentStage(page, [
     'adaptive-loading-state',
@@ -886,11 +891,17 @@ async function completeAdaptiveIfPresent(page: Page) {
 
     break
   }
-  if (initialStage !== 'adaptive-screen') return
+  if (initialStage !== 'adaptive-screen') return initialStage
 
   await expect(page.getByTestId('adaptive-list')).toBeVisible({ timeout: 30_000 })
   for (let index = 0; index < 20; index += 1) {
-    if (!(await adaptiveScreen.isVisible({ timeout: 1000 }).catch(() => false))) return
+    if (!(await adaptiveScreen.isVisible({ timeout: 1000 }).catch(() => false))) {
+      return waitForAnyVisibleTestId(
+        page,
+        ['refinement-loading-state', 'refinement-screen', 'refinement-error-state', 'review-screen'],
+        60_000,
+      ).catch(() => 'left-adaptive-screen')
+    }
     await answerVisibleDynamicQuestions(
       page,
       'adaptive-question',
@@ -915,20 +926,20 @@ async function completeAdaptiveIfPresent(page: Page) {
         'review-screen',
       ],
     )
-    if (nextStage !== 'adaptive-screen') return
+    if (nextStage !== 'adaptive-screen') return nextStage
   }
 
   throw new Error('Adaptive questionnaire did not exit after 20 questions')
 }
 
-async function completeRefinementIfPresent(page: Page) {
+async function completeRefinementIfPresent(page: Page, knownStage?: string | null) {
   const refinementScreen = page.getByTestId('refinement-screen')
-  let initialStage = await waitForAssessmentStage(page, [
+  let initialStage = knownStage ?? await waitForAssessmentStage(page, [
     'refinement-loading-state',
     'refinement-screen',
     'refinement-error-state',
     'review-screen',
-  ])
+  ], 60_000)
   for (let retryAttempt = 0; retryAttempt < 3; retryAttempt += 1) {
     if (initialStage === 'refinement-error-state') {
       await waitForEnabledAndClick(page, 'refinement-retry')
@@ -1024,6 +1035,20 @@ async function completeProfileIfPresent(page: Page) {
   await fillByTestId(page, 'profile-occupation', onboarding.occupation)
   await clickByTestId(page, `profile-activity-${onboarding.activityLevel}`)
   await waitForEnabledAndClick(page, 'profile-continue-btn')
+}
+
+async function continueWelcomeIntroIfPresent(page: Page): Promise<boolean> {
+  const stage = await waitForAnyVisibleTestId(
+    page,
+    ['welcome-intro-screen', 'onboarding-layout'],
+    60_000,
+  )
+  if (stage !== 'welcome-intro-screen') {
+    return false
+  }
+
+  await waitForEnabledAndClick(page, 'welcome-intro-begin')
+  return true
 }
 
 async function expectTreatmentHistoryAfterStorySave(page: Page) {
@@ -1144,6 +1169,7 @@ test.describe('patient web full assessment flow', () => {
     await expectConsentScreenAfterVerification(page)
     await acceptConsentIfPresent(page)
 
+    await continueWelcomeIntroIfPresent(page)
     await expect(page.getByTestId('onboarding-layout')).toBeVisible({ timeout: 60_000 })
     await completeProfileIfPresent(page)
     await expect(page.getByTestId('intake-step-chief-complaint')).toBeVisible({ timeout: 60_000 })
@@ -1173,9 +1199,9 @@ test.describe('patient web full assessment flow', () => {
     await answerScreening(page)
     await submitScreening(page)
 
-    await completeAdaptiveIfPresent(page)
+    const postAdaptiveStage = await completeAdaptiveIfPresent(page)
 
-    await completeRefinementIfPresent(page)
+    await completeRefinementIfPresent(page, postAdaptiveStage)
 
     await expectReviewScreenWithRefinementRecovery(page)
     await expect(page.getByTestId('review-title')).toBeVisible()
@@ -1183,7 +1209,10 @@ test.describe('patient web full assessment flow', () => {
     await expect(page.getByTestId('review-story')).toBeVisible()
     await expect(page.getByTestId('review-screening')).toBeVisible()
     await expect(page.getByTestId('review-adaptive')).toBeVisible()
-    await page.getByTestId('review-refinement').scrollIntoViewIfNeeded().catch(() => undefined)
+    const reviewRefinement = page.getByTestId('review-refinement')
+    if (await reviewRefinement.isVisible({ timeout: 500 }).catch(() => false)) {
+      await reviewRefinement.scrollIntoViewIfNeeded()
+    }
     await waitForEnabledAndClick(page, 'review-submit')
 
     await expect(page.getByTestId('assessment-processing')).toBeVisible({
@@ -1192,10 +1221,14 @@ test.describe('patient web full assessment flow', () => {
     await expect(page.getByTestId('results-screen')).toBeVisible({
       timeout: 480_000,
     })
-    await expect(page.getByText('Your Results')).toBeVisible()
+    await expect(page.getByText('Assessment Results')).toBeVisible()
     await expect(page.getByTestId('results-disclaimer')).toBeVisible()
     await expect(page.getByTestId('results-diagnosis')).toBeVisible()
+    await expect(page.getByTestId('results-panel-symptoms')).toBeVisible()
+    await expect(page.getByTestId('results-symptoms')).toBeVisible()
+    await waitForEnabledAndClick(page, 'results-tab-outlook', 30_000)
     await expect(page.getByTestId('results-evidence')).toBeVisible()
+    await waitForEnabledAndClick(page, 'results-tab-visit', 30_000)
     await expect(page.getByTestId('results-share')).toBeVisible()
     await waitForEnabledAndClick(page, 'results-done', 30_000)
 

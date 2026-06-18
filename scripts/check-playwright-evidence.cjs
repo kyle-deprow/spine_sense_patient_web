@@ -58,30 +58,39 @@ function gatePassed(value) {
 //   PATIENT_WEB_PLAYWRIGHT_EVIDENCE=<path> pnpm test:e2e:verify
 // or pass the path as a CLI argument.
 //
-// Until an evidence file is present, this check issues a warning and exits
-// cleanly so that `release:validate` is not unconditionally broken for
-// developers who have not yet run the full PHI-capable staging suite.
+// Release validation must fail closed when evidence is missing. Developers who
+// intentionally want to run the rest of local validation without staging
+// evidence can set PATIENT_WEB_ALLOW_MISSING_PLAYWRIGHT_EVIDENCE=1.
+
+function allowMissingEvidence() {
+  return process.env.PATIENT_WEB_ALLOW_MISSING_PLAYWRIGHT_EVIDENCE === '1';
+}
+
+function missingEvidence(message) {
+  if (allowMissingEvidence()) {
+    console.warn(`Warning: ${message}`);
+    console.warn('Skipping gate check because PATIENT_WEB_ALLOW_MISSING_PLAYWRIGHT_EVIDENCE=1.');
+    return;
+  }
+
+  console.error(message);
+  console.error(
+    'Set PATIENT_WEB_PLAYWRIGHT_EVIDENCE or pass a JSON evidence path to verify PHI-capable release gates.',
+  );
+  console.error('See e2e/playwright-evidence.example.json for the required format.');
+  process.exit(1);
+}
 
 function main() {
   const evidencePath = process.env.PATIENT_WEB_PLAYWRIGHT_EVIDENCE || process.argv[2];
   if (!evidencePath) {
-    console.warn(
-      'Warning: No Playwright security evidence path provided.',
-    );
-    console.warn(
-      'Set PATIENT_WEB_PLAYWRIGHT_EVIDENCE or pass a JSON evidence path to verify PHI-capable release gates.',
-    );
-    console.warn(
-      'See e2e/playwright-evidence.example.json for the required format.',
-    );
-    console.warn('Skipping gate check — this MUST pass before a production release.');
+    missingEvidence('No Playwright security evidence path provided.');
     return;
   }
 
   const resolvedPath = path.resolve(process.cwd(), evidencePath);
   if (!fs.existsSync(resolvedPath)) {
-    console.warn(`Warning: Playwright evidence file not found: ${resolvedPath}`);
-    console.warn('Skipping gate check — this MUST pass before a production release.');
+    missingEvidence(`Playwright evidence file not found: ${resolvedPath}`);
     return;
   }
 

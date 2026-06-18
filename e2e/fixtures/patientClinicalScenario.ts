@@ -163,7 +163,7 @@ export const patientClinicalScenario = {
       "Synthetic 35-year-old with 6 weeks of right-sided low back and leg pain consistent with radiculopathy.",
   },
   resultsAssertions: {
-    diagnosisLabel: "Right L5 radiculopathy",
+    diagnosisLabel: "Likely lumbar disc-related nerve irritation",
     spinalLevel: "L4-L5",
     symptomNames: ["Lower back pain", "Right leg pain"],
     symptomClinicalLabels: ["Lumbar axial pain", "Right L5 radicular pain"],

@@ -12,7 +12,6 @@ const PATIENT_PASSWORD = patientClinicalScenario.patient.password;
 const BACKEND_RESET_URL = process.env.PATIENT_WEB_BACKEND_RESET_URL;
 const EXPECT_SECURE_COOKIES =
   process.env.PATIENT_WEB_EXPECT_SECURE_COOKIES === "true";
-const ASSESSMENT_STORY = patientClinicalScenario.assessmentStory;
 const SIGNUP_PASSWORD =
   process.env.PATIENT_E2E_SIGNUP_PASSWORD ?? "E2eSignup123!!";
 
@@ -67,7 +66,9 @@ function installPhiSafeDiagnostics(page: Page) {
   page.on("response", (response) => {
     if (response.status() < 400) return;
     const url = new URL(response.url());
-    console.log(`[response:${response.status()}] ${url.pathname}`);
+    console.log(
+      `[response:${response.status()}] ${sanitizeBrowserDiagnostic(url.pathname)}`,
+    );
   });
 }
 
@@ -219,6 +220,8 @@ async function expectSeededClinicalResults(page: Page) {
     ).toBeVisible();
   }
 
+  await page.getByTestId("results-tab-care").click();
+
   const treatment = page.getByTestId("results-treatment");
   for (const treatmentLabel of treatmentLabels) {
     await expect(
@@ -332,32 +335,6 @@ async function logoutViaBff(page: Page) {
   expect(hasCookie(cookies, "spine_patient_csrf")).toBe(false);
 }
 
-async function answerFirstScreeningQuestion(page: Page) {
-  const control = page
-    .locator(
-      [
-        '[data-testid^="question-"][data-testid*="-zone-"]',
-        '[data-testid^="question-"][data-testid*="-option-"]',
-        '[data-testid^="question-"][data-testid*="-region-"]',
-        '[data-testid^="question-"][data-testid*="-stop-"]',
-        '[data-testid^="question-"][data-testid$="-acknowledge-btn"]',
-      ].join(", "),
-    )
-    .or(page.getByRole("checkbox"))
-    .first();
-
-  if (await control.isVisible().catch(() => false)) {
-    await control.click();
-    return;
-  }
-
-  const input = page
-    .locator('[data-testid^="question-"][data-testid$="-input"]')
-    .first();
-  await expect(input).toBeVisible({ timeout: 30_000 });
-  await input.fill("Synthetic E2E questionnaire answer.");
-}
-
 test.describe("patient app web deployment", () => {
   test.beforeEach(async ({ request }) => {
     await resetBackend(request);
@@ -445,37 +422,16 @@ test.describe("patient app web deployment", () => {
     await logoutViaBff(page);
   });
 
-  test("matches the Maestro login and assessment questionnaire entry flow with the synthetic story", async ({
+  test("routes a seeded completed assessment to results without exposing tokens", async ({
     page,
   }) => {
     await loginAsSeededPatient(page);
     await expectNoBrowserStorage(page);
 
     await page.goto("/assessment");
-
-    await expect(page.getByTestId("story-screen")).toBeVisible({
-      timeout: 60_000,
-    });
-    await page.getByTestId("story-capture-text-tab").click();
-    await page.getByTestId("story-capture-text-input").fill(ASSESSMENT_STORY);
-    await page.getByTestId("story-capture-continue-btn").click();
-
-    await expect(page.getByTestId("documents-screen")).toBeVisible({
-      timeout: 60_000,
-    });
-    await page.getByTestId("documents-skip-btn").click();
-
-    await expect(page.getByTestId("screening-screen")).toBeVisible({
-      timeout: 60_000,
-    });
-    await expect(
-      page.locator('[data-testid^="question-"]').first(),
-    ).toBeVisible();
-
-    await answerFirstScreeningQuestion(page);
-
-    await expect(page.getByTestId("screening-nav-next")).toBeVisible();
-    await expect(page.getByTestId("screening-nav-next")).toBeEnabled();
+    await expectSeededClinicalDashboard(page);
+    await page.getByTestId("clinical-summary-card").click();
+    await expectSeededClinicalResults(page);
     await expectNoBrowserStorage(page);
     await logoutViaBff(page);
   });
