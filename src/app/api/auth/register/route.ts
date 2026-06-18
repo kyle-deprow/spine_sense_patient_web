@@ -9,6 +9,52 @@ import { rateLimit, getClientIp } from '@/lib/server/rate-limit'
 import type { RegisterResponse } from '@/types/auth'
 
 const WINDOW_MS = 60 * 60 * 1000 // 60 minutes
+type JsonRecord = Record<string, unknown>
+
+function isRecord(value: unknown): value is JsonRecord {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function firstString(body: JsonRecord, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = body[key]
+    if (typeof value === 'string') return value
+  }
+  return undefined
+}
+
+function optionalString(body: JsonRecord, ...keys: string[]): string | null | undefined {
+  const value = firstString(body, ...keys)
+  if (value === undefined) return undefined
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? value : null
+}
+
+function normalizeRegistrationBody(body: unknown): JsonRecord {
+  if (!isRecord(body)) return {}
+
+  const normalized: JsonRecord = {}
+
+  const email = firstString(body, 'email')
+  if (email !== undefined) normalized.email = email
+
+  const password = firstString(body, 'password')
+  if (password !== undefined) normalized.password = password
+
+  const firstName = firstString(body, 'first_name', 'firstName')
+  if (firstName !== undefined) normalized.first_name = firstName
+
+  const lastName = firstString(body, 'last_name', 'lastName')
+  if (lastName !== undefined) normalized.last_name = lastName
+
+  const dateOfBirth = firstString(body, 'date_of_birth', 'dateOfBirth')
+  if (dateOfBirth !== undefined) normalized.date_of_birth = dateOfBirth
+
+  const phone = optionalString(body, 'phone', 'phone_number', 'phoneNumber')
+  if (phone !== undefined && phone !== null) normalized.phone = phone
+
+  return normalized
+}
 
 export async function POST(request: NextRequest) {
   const failure = validateAuthMutation(request)
@@ -27,10 +73,11 @@ export async function POST(request: NextRequest) {
   if (body == null) {
     return jsonNoStore({ error: 'invalid_json' }, { status: 400 })
   }
+  const normalizedBody = normalizeRegistrationBody(body)
 
   let response: Response
   try {
-    response = await forwardCredentialAuth('/api/v1/auth/register/patient', body)
+    response = await forwardCredentialAuth('/api/v1/auth/register/patient', normalizedBody)
   } catch (err) {
     if (err instanceof BackendUnavailableError) {
       return jsonNoStore({ error: 'service_unavailable' }, { status: 503 })
