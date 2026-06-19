@@ -58,21 +58,15 @@ function gatePassed(value) {
 //   PATIENT_WEB_PLAYWRIGHT_EVIDENCE=<path> pnpm test:e2e:verify
 // or pass the path as a CLI argument.
 //
-// Release validation must fail closed when evidence is missing. Developers who
-// intentionally want to run the rest of local validation without staging
-// evidence can set PATIENT_WEB_ALLOW_MISSING_PLAYWRIGHT_EVIDENCE=1.
+// Release validation must fail closed when evidence is missing. Local validation
+// that is not intended to verify release evidence should run `pnpm validate:local`
+// instead of this verifier.
 
-function allowMissingEvidence() {
-  return process.env.PATIENT_WEB_ALLOW_MISSING_PLAYWRIGHT_EVIDENCE === '1';
+function evidencePathFromArgs(args) {
+  return args.find((arg) => arg !== '--release');
 }
 
 function missingEvidence(message) {
-  if (allowMissingEvidence()) {
-    console.warn(`Warning: ${message}`);
-    console.warn('Skipping gate check because PATIENT_WEB_ALLOW_MISSING_PLAYWRIGHT_EVIDENCE=1.');
-    return;
-  }
-
   console.error(message);
   console.error(
     'Set PATIENT_WEB_PLAYWRIGHT_EVIDENCE or pass a JSON evidence path to verify PHI-capable release gates.',
@@ -82,7 +76,8 @@ function missingEvidence(message) {
 }
 
 function main() {
-  const evidencePath = process.env.PATIENT_WEB_PLAYWRIGHT_EVIDENCE || process.argv[2];
+  const args = process.argv.slice(2);
+  const evidencePath = process.env.PATIENT_WEB_PLAYWRIGHT_EVIDENCE || evidencePathFromArgs(args);
   if (!evidencePath) {
     missingEvidence('No Playwright security evidence path provided.');
     return;

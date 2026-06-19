@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "next build",
-    "build:patient-app": "SPINESENSE_WEB_OUTPUT=single SPINESENSE_SKIP_REANIMATED_BABEL_PLUGIN=1 EXPO_PUBLIC_ENVIRONMENT=${PATIENT_APP_ENVIRONMENT:-production} EXPO_PUBLIC_API_BASE_URL=/api/proxy/api/v1 pnpm --dir ../spine_sense_app build:web -- --output-dir ../spine_sense_patient_web/patient-app-export --max-workers 1 --no-minify",
+    "build:patient-app": "node scripts/build-patient-app-export.cjs",
     "copy:patient-app-export": "node scripts/copy-patient-app-export.cjs",
     "start": "node .next/standalone/server.js",
     "lint": "eslint src/",
@@ -18,7 +18,7 @@
     "smoke:bundle": "node scripts/check-browser-bundle.cjs",
     "validate:local": "pnpm lint && pnpm type-check && pnpm test && pnpm build:patient-app && pnpm build && pnpm smoke:bundle",
     "test:e2e:verify": "node scripts/check-playwright-evidence.cjs",
-    "release:validate": "pnpm validate:local && pnpm test:e2e:verify",
+    "release:validate": "pnpm validate:local && node scripts/check-playwright-evidence.cjs --release",
     "format": "prettier --write \"src/**/*.{ts,tsx,json,css,md}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,json,css,md}\""
   },

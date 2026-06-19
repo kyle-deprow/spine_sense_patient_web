@@ -21,9 +21,9 @@ WORKDIR /workspace/spine_sense_patient_web
 ENV NEXT_TELEMETRY_DISABLED=1
 ARG PATIENT_APP_ENVIRONMENT=production
 ARG PATIENT_APP_API_BASE_URL=/api/proxy/api/v1
-RUN EXPO_PUBLIC_ENVIRONMENT="$PATIENT_APP_ENVIRONMENT" \
-    EXPO_PUBLIC_API_BASE_URL="$PATIENT_APP_API_BASE_URL" \
-    pnpm --dir ../spine_sense_app build:web -- --output-dir ../spine_sense_patient_web/patient-app-export
+RUN PATIENT_APP_ENVIRONMENT="$PATIENT_APP_ENVIRONMENT" \
+    PATIENT_APP_API_BASE_URL="$PATIENT_APP_API_BASE_URL" \
+    pnpm build:patient-app
 RUN mkdir -p public
 RUN pnpm build
 

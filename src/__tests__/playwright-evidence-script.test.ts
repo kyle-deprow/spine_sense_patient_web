@@ -15,8 +15,9 @@ function runVerifier(
     cwd: repoRoot,
     env: {
       ...process.env,
-      PATIENT_WEB_ALLOW_MISSING_PLAYWRIGHT_EVIDENCE: undefined,
+      CI: undefined,
       PATIENT_WEB_PLAYWRIGHT_EVIDENCE: undefined,
+      PATIENT_WEB_RELEASE_VALIDATION: undefined,
       ...env,
     },
     encoding: 'utf8',
@@ -29,15 +30,6 @@ describe('Playwright evidence verifier', () => {
 
     expect(result.status).toBe(1)
     expect(result.stderr).toContain('No Playwright security evidence path provided.')
-  })
-
-  it('allows explicit local opt-out for missing evidence', () => {
-    const result = runVerifier([], {
-      PATIENT_WEB_ALLOW_MISSING_PLAYWRIGHT_EVIDENCE: '1',
-    })
-
-    expect(result.status).toBe(0)
-    expect(result.stderr).toContain('PATIENT_WEB_ALLOW_MISSING_PLAYWRIGHT_EVIDENCE=1')
   })
 
   it('verifies the complete example evidence file', () => {
