@@ -39,4 +39,59 @@ describe('patient app export route', () => {
     expect(response.headers.get('Cache-Control')).toBe('no-store')
     expect((await response.arrayBuffer()).byteLength).toBe(4)
   })
+
+  it('injects nonce-compatible web compatibility CSS into exported HTML', async () => {
+    await makeExportFile(
+      'index.html',
+      '<!doctype html><html><head><title>SpineSense</title></head><body><script>window.__app = true</script></body></html>',
+    )
+
+    const response = await GET(
+      new NextRequest('http://localhost/', {
+        headers: { 'x-nonce': 'test-nonce' },
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('Content-Type')).toBe('text/html; charset=utf-8')
+    expect(response.headers.get('Cache-Control')).toBe('no-store')
+
+    const html = await response.text()
+    expect(html).toContain('<style nonce="test-nonce" data-patient-web-compat>')
+    expect(html).toContain("font-family: 'Ionicons'")
+    expect(html).toContain('[data-testid="sticky-tab-wrapper"]')
+    expect(html).toContain('<script nonce="test-nonce">window.__app = true</script>')
+  })
+
+  it('does not inject compatibility CSS into malformed HTML without a head', async () => {
+    await makeExportFile('index.html', '<main>Patient app</main>')
+
+    const response = await GET(
+      new NextRequest('http://localhost/', {
+        headers: { 'x-nonce': 'test-nonce' },
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.text()).toBe('<main>Patient app</main>')
+  })
+
+  it('does not duplicate an existing web compatibility CSS block', async () => {
+    await makeExportFile(
+      'index.html',
+      '<!doctype html><html><head><style data-patient-web-compat>html { font-family: sans-serif; }</style></head><body></body></html>',
+    )
+
+    const response = await GET(
+      new NextRequest('http://localhost/', {
+        headers: { 'x-nonce': 'test-nonce' },
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    const html = await response.text()
+    expect(html.match(/data-patient-web-compat/g)).toHaveLength(1)
+    expect(html).not.toContain("font-family: 'Ionicons'")
+    expect(html).toContain('<style nonce="test-nonce" data-patient-web-compat>')
+  })
 })

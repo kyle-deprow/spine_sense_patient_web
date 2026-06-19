@@ -34,6 +34,20 @@ function makeAuthRequest(pathname: string, body: unknown = {}): NextRequest {
   })
 }
 
+function makeAuthenticatedAuthRequest(pathname: string, body: unknown = {}): NextRequest {
+  const csrf = createCsrfToken(CSRF_SECRET, 'auth-route-test-nonce')
+  return new NextRequest(`http://localhost${pathname}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: `spine_patient_csrf=${csrf}; spine_patient_sess=existing-access-token`,
+      [CSRF_HEADER]: csrf,
+      Origin: ORIGIN,
+    },
+    body: JSON.stringify(body),
+  })
+}
+
 function makeContext(pathSegments: string[]): { params: Promise<{ path: string[] }> } {
   return { params: Promise.resolve({ path: pathSegments }) }
 }
@@ -64,6 +78,40 @@ describe('auth catch-all route handler', () => {
     )
   })
 
+  it('allows generic verification send through the auth catch-all', async () => {
+    mockedBackendFetch.mockResolvedValue(Response.json({ success: true }, { status: 202 }))
+
+    const request = makeAuthRequest('/api/auth/verify/send', {
+      email: 'patient@example.test',
+    })
+    const response = await POST(request, makeContext(['verify', 'send']))
+
+    expect(response.status).toBe(202)
+    await expect(response.json()).resolves.toEqual({ success: true })
+    expect(mockedBackendFetch).toHaveBeenCalledWith(
+      '/api/v1/auth/verify/send',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.any(Headers),
+      }),
+    )
+  })
+
+  it('forwards the existing session bearer token for generic verification send', async () => {
+    mockedBackendFetch.mockResolvedValue(Response.json({ success: true }, { status: 202 }))
+
+    const request = makeAuthenticatedAuthRequest('/api/auth/verify/send', {
+      channel: 'email',
+    })
+    const response = await POST(request, makeContext(['verify', 'send']))
+
+    expect(response.status).toBe(202)
+    const [, init] = mockedBackendFetch.mock.calls[0] ?? []
+    const headers = init?.headers
+    expect(headers).toBeInstanceOf(Headers)
+    expect((headers as Headers).get('Authorization')).toBe('Bearer existing-access-token')
+  })
+
   it('strips registration confirm token pairs and sets BFF auth boundary cookies', async () => {
     mockedBackendFetch.mockResolvedValue(
       Response.json({
@@ -91,6 +139,49 @@ describe('auth catch-all route handler', () => {
     expect(setCookie).toContain('HttpOnly')
     expect(setCookie).toContain('SameSite=lax')
     expect(setCookie).toContain('SameSite=strict')
+  })
+
+  it('strips generic verification token pairs without setting BFF auth cookies', async () => {
+    mockedBackendFetch.mockResolvedValue(
+      Response.json({
+        success: true,
+        access_token: 'backend-access-token',
+        refresh_token: 'backend-refresh-token',
+        user_id: 'user-123',
+      }),
+    )
+
+    const request = makeAuthRequest('/api/auth/verify/confirm', {
+      email: 'patient@example.test',
+      code: '123456',
+    })
+    const response = await POST(request, makeContext(['verify', 'confirm']))
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({ success: true })
+
+    const setCookie = response.headers.getSetCookie().join('\n')
+    expect(setCookie).not.toContain('spine_patient_sess=')
+    expect(setCookie).not.toContain('spine_patient_refresh=')
+    expect(setCookie).not.toContain('spine_patient_csrf=')
+    expect(setCookie).not.toContain('spine_patient_sess_iat=')
+  })
+
+  it('requires CSRF for generic verification send', async () => {
+    const request = new NextRequest('http://localhost/api/auth/verify/send', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Origin: ORIGIN,
+      },
+      body: JSON.stringify({ email: 'patient@example.test' }),
+    })
+
+    const response = await POST(request, makeContext(['verify', 'send']))
+
+    expect(response.status).toBe(403)
+    await expect(response.json()).resolves.toEqual({ error: 'csrf_missing' })
+    expect(mockedBackendFetch).not.toHaveBeenCalled()
   })
 
   it('returns 404 for auth paths not explicitly allowed', async () => {

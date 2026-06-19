@@ -18,12 +18,16 @@ const ALLOWED_AUTH_PATHS = new Set([
   'password-reset/confirm',
   'verify-email',
   'resend-verification',
+  'verify/send',
+  'verify/confirm',
   'verify/registration/send',
   'verify/registration/confirm',
   'mfa/setup',
   'mfa/disable',
   'mfa/methods',
 ])
+
+const TOKEN_COOKIE_AUTH_PATHS = new Set(['verify/registration/confirm'])
 
 function sanitizeAuthPath(authPath: string): string | null {
   if (authPath.includes('\0')) return null
@@ -82,7 +86,7 @@ async function handler(request: NextRequest, context: AuthProxyContext) {
   const data = await readJsonBody<JsonRecord>(backendResponse)
 
   const response = jsonNoStore(safeAuthBody(data), { status: backendResponse.status })
-  if (backendResponse.ok && hasTokenPair(data)) {
+  if (backendResponse.ok && TOKEN_COOKIE_AUTH_PATHS.has(authPath) && hasTokenPair(data)) {
     setAuthCookies(response, toTokenPair(data))
     issueSessionIssuedAt(response)
     issueCsrfCookie(response)

@@ -116,6 +116,100 @@ async function servePatientApp(request: NextRequest, method: 'GET' | 'HEAD') {
   })
 }
 
+const SYSTEM_FONT_STACK =
+  '-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
+
+const WEB_COMPATIBILITY_STYLES = `<style data-patient-web-compat>
+@font-face {
+  font-family: 'Ionicons';
+  src: url('/assets/node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/Ionicons.b4eb097d35f44ed943676fd56f6bdc51.ttf') format('truetype');
+  font-display: block;
+}
+@font-face {
+  font-family: 'MaterialCommunityIcons';
+  src: url('/assets/node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/MaterialCommunityIcons.6e435534bd35da5fef04168860a9b8fa.ttf') format('truetype');
+  font-display: block;
+}
+@font-face {
+  font-family: 'MaterialIcons';
+  src: url('/assets/node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/MaterialIcons.4e85bc9ebe07e0340c9c4fc2f6c38908.ttf') format('truetype');
+  font-display: block;
+}
+@font-face { font-family: 'Satoshi-Regular'; src: local('unused'); font-weight: 400; }
+@font-face { font-family: 'Satoshi-Medium'; src: local('unused'); font-weight: 500; }
+@font-face { font-family: 'Satoshi-Bold'; src: local('unused'); font-weight: 700; }
+@font-face { font-family: 'ClashDisplay-Semibold'; src: local('unused'); font-weight: 600; }
+
+[style*="font-family"][style*="Satoshi-Regular"],
+[class*="r-ctd730"] {
+  font-family: ${SYSTEM_FONT_STACK} !important;
+  font-weight: 400;
+}
+[style*="font-family"][style*="Satoshi-Medium"],
+[class*="r-18jse50"] {
+  font-family: ${SYSTEM_FONT_STACK} !important;
+  font-weight: 500;
+}
+[style*="font-family"][style*="Satoshi-Bold"] {
+  font-family: ${SYSTEM_FONT_STACK} !important;
+  font-weight: 700;
+}
+[style*="font-family"][style*="ClashDisplay"],
+[class*="r-1ai7t6e"] {
+  font-family: ${SYSTEM_FONT_STACK} !important;
+  font-weight: 600;
+}
+
+html,
+body {
+  font-family: ${SYSTEM_FONT_STACK};
+}
+
+input,
+textarea {
+  box-sizing: border-box !important;
+  max-width: 100% !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+input:focus,
+textarea:focus,
+select:focus,
+[contenteditable]:focus {
+  border-bottom: 2px solid #E8985E !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+[role="button"]:focus,
+[role="button"]:focus-visible,
+button:focus,
+a:focus,
+[tabindex]:focus {
+  outline: none !important;
+}
+
+[data-testid="sticky-tab-wrapper"],
+[data-testid="tab-container"],
+[data-testid="sticky-tab-wrapper"] > *,
+[data-testid="tab-container"] > * {
+  border-color: transparent !important;
+  border-style: none !important;
+  outline: none !important;
+}
+</style>`
+
+function injectWebCompatibilityStyles(html: string): string {
+  if (!html.includes('</head>')) {
+    return html
+  }
+  if (html.includes('data-patient-web-compat')) {
+    return html
+  }
+  return html.replace('</head>', `${WEB_COMPATIBILITY_STYLES}</head>`)
+}
+
 async function readResponseBody(
   filePath: string,
   contentType: string,
@@ -126,11 +220,11 @@ async function readResponseBody(
     return body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer
   }
 
+  const html = injectWebCompatibilityStyles(body.toString('utf8'))
   const nonce = request.headers.get('x-nonce')
-  if (!nonce) return body.toString('utf8')
+  if (!nonce) return html
 
-  return body
-    .toString('utf8')
+  return html
     .replaceAll(/<script(?![^>]*\bnonce=)/g, `<script nonce="${nonce}"`)
     .replaceAll(/<style(?![^>]*\bnonce=)/g, `<style nonce="${nonce}"`)
 }
