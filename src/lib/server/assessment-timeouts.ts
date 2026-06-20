@@ -5,7 +5,7 @@ export function assessmentBackendTimeoutOptions(targetPath: string): { timeoutMs
 }
 
 export function isLongAssessmentBackendCall(targetPath: string): boolean {
-  return /^\/api\/v1\/patients\/me\/assessments\/[^/]+\/(?:adaptive\/prepare|refinement\/run|analysis\/run)\/?$/.test(
+  return /^\/api\/v1\/patients\/me\/assessments\/[^/]+\/(?:adaptive\/prepare|adaptive\/prefetch|refinement\/run|analysis\/run)\/?$/.test(
     targetPath,
   )
 }

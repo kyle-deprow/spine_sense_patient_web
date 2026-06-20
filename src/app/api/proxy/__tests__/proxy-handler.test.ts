@@ -207,9 +207,12 @@ describe('proxy route handler', () => {
     expect(new Headers(requestInit?.headers).has('content-type')).toBe(false)
   })
 
-  it('classifies only adaptive, refinement, and analysis run assessment calls as long-running', () => {
+  it('classifies adaptive (prepare/prefetch), refinement, and analysis run assessment calls as long-running', () => {
     expect(
       isLongAssessmentBackendCall('/api/v1/patients/me/assessments/assessment-123/adaptive/prepare'),
+    ).toBe(true)
+    expect(
+      isLongAssessmentBackendCall('/api/v1/patients/me/assessments/assessment-123/adaptive/prefetch'),
     ).toBe(true)
     expect(
       isLongAssessmentBackendCall('/api/v1/patients/me/assessments/assessment-123/refinement/run'),

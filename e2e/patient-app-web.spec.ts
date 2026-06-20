@@ -137,9 +137,7 @@ async function expectSeededClinicalDashboard(page: Page) {
   const {
     clinicalSummaryHeadline,
     clinicalSummarySubheadline,
-    activeProblemCondition,
-    activeProblemLevels,
-    activeProblemSummary,
+    activeProblemSymptoms,
   } = patientClinicalScenario.dashboardAssertions;
 
   const clinicalSummary = page.getByTestId("clinical-summary-card");
@@ -161,20 +159,11 @@ async function expectSeededClinicalDashboard(page: Page) {
     activeProblems,
     `Missing seeded active problems card for ${patientClinicalScenario.seedKey}`,
   ).toBeVisible();
-  await expect(
-    activeProblems.getByTestId("symptom-summary-text"),
-    `Missing seeded active problem summary: ${activeProblemSummary}`,
-  ).toContainText(activeProblemSummary);
-  await expect(
-    activeProblems.getByTestId("top-condition"),
-    `Missing seeded active problem condition: ${activeProblemCondition}`,
-  ).toContainText(activeProblemCondition);
-
-  for (const level of activeProblemLevels) {
+  for (const symptom of activeProblemSymptoms) {
     await expect(
-      activeProblems.getByTestId("top-condition-levels"),
-      `Missing seeded active problem spinal level: ${level}`,
-    ).toContainText(level);
+      activeProblems.getByText(symptom),
+      `Missing seeded active problem symptom: ${symptom}`,
+    ).toBeVisible();
   }
 }
 

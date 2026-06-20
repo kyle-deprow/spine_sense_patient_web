@@ -10,3 +10,15 @@ blob-report/
 .env
 .env.local
 .env.*.local
+
+# Local one-off debug/inspection scripts and captured server output
+check_console.js
+check_results.js
+dump_svg.js
+inspect_overlap.js
+inspect_svg.js
+screenshot_spine.js
+server.stderr.log
+server.stdout.log
+spine_card_screenshot.png
+svg_output.txt

@@ -65,10 +65,9 @@ export type PatientWebClinicalScenarioFixture = {
   readonly dashboardAssertions: {
     readonly clinicalSummaryHeadline: string;
     readonly clinicalSummarySubheadline: string;
-    readonly activeProblemCondition: string;
-    readonly activeProblemClinicalLabel: string;
-    readonly activeProblemLevels: readonly string[];
-    readonly activeProblemSummary: string;
+    // The Active problems card now renders the ranked symptom list (the diagnosis
+    // title/levels/summary moved to the Clinical Summary card and results page).
+    readonly activeProblemSymptoms: readonly string[];
   };
   readonly resultsAssertions: {
     readonly diagnosisLabel: string;
@@ -156,11 +155,7 @@ export const patientClinicalScenario = {
     clinicalSummaryHeadline: "Likely lumbar disc-related nerve irritation",
     clinicalSummarySubheadline:
       "Pattern fits L5 nerve root involvement on the right",
-    activeProblemCondition: "Pinched nerve in your lower back (right side)",
-    activeProblemClinicalLabel: "Right L5 radiculopathy",
-    activeProblemLevels: ["L4-L5"],
-    activeProblemSummary:
-      "Synthetic 35-year-old with 6 weeks of right-sided low back and leg pain consistent with radiculopathy.",
+    activeProblemSymptoms: ["Lower back pain", "Right leg pain"],
   },
   resultsAssertions: {
     diagnosisLabel: "Right L5 radiculopathy",
