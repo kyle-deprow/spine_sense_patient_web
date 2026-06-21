@@ -65,16 +65,12 @@ export type PatientWebClinicalScenarioFixture = {
   readonly dashboardAssertions: {
     readonly clinicalSummaryHeadline: string;
     readonly clinicalSummarySubheadline: string;
-    readonly activeProblemCondition: string;
-    readonly activeProblemClinicalLabel: string;
-    readonly activeProblemLevels: readonly string[];
-    readonly activeProblemSummary: string;
+    readonly activeProblemSymptoms: readonly string[];
   };
   readonly resultsAssertions: {
     readonly diagnosisLabel: string;
+    readonly clinicalLabel: string;
     readonly spinalLevel: string;
-    readonly symptomNames: readonly string[];
-    readonly symptomClinicalLabels: readonly string[];
     readonly treatmentLabels: readonly string[];
     readonly activityLabels: readonly string[];
   };
@@ -156,20 +152,17 @@ export const patientClinicalScenario = {
     clinicalSummaryHeadline: "Likely lumbar disc-related nerve irritation",
     clinicalSummarySubheadline:
       "Pattern fits L5 nerve root involvement on the right",
-    activeProblemCondition: "Pinched nerve in your lower back (right side)",
-    activeProblemClinicalLabel: "Right L5 radiculopathy",
-    activeProblemLevels: ["L4-L5"],
-    activeProblemSummary:
-      "Synthetic 35-year-old with 6 weeks of right-sided low back and leg pain consistent with radiculopathy.",
+    activeProblemSymptoms: ["Lower back pain", "Right leg pain"],
   },
   resultsAssertions: {
-    diagnosisLabel: "Likely lumbar disc-related nerve irritation",
+    diagnosisLabel: "Pinched nerve in your lower back (right side)",
+    clinicalLabel: "Right L5 radiculopathy",
     spinalLevel: "L4-L5",
-    symptomNames: ["Lower back pain", "Right leg pain"],
-    symptomClinicalLabels: ["Lumbar axial pain", "Right L5 radicular pain"],
     treatmentLabels: [
-      "Activity modification + over-the-counter pain control",
-      "Physical therapy",
+      "Physical therapy and activity modification",
+      "Core stabilization",
+      "Activity pacing",
+      "Consider targeted pain procedures",
     ],
     activityLabels: [
       "Short walks",

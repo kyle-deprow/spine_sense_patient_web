@@ -147,9 +147,7 @@ async function expectSeededClinicalDashboard(page: Page) {
   const {
     clinicalSummaryHeadline,
     clinicalSummarySubheadline,
-    activeProblemCondition,
-    activeProblemLevels,
-    activeProblemSummary,
+    activeProblemSymptoms,
   } = patientClinicalScenario.dashboardAssertions;
 
   const clinicalSummary = page.getByTestId("clinical-summary-card");
@@ -171,28 +169,19 @@ async function expectSeededClinicalDashboard(page: Page) {
     activeProblems,
     `Missing seeded active problems card for ${patientClinicalScenario.seedKey}`,
   ).toBeVisible();
-  await expect(
-    activeProblems.getByTestId("symptom-summary-text"),
-    `Missing seeded active problem summary: ${activeProblemSummary}`,
-  ).toContainText(activeProblemSummary);
-  await expect(
-    activeProblems.getByTestId("top-condition"),
-    `Missing seeded active problem condition: ${activeProblemCondition}`,
-  ).toContainText(activeProblemCondition);
-
-  for (const level of activeProblemLevels) {
+  for (const symptom of activeProblemSymptoms) {
     await expect(
-      activeProblems.getByTestId("top-condition-levels"),
-      `Missing seeded active problem spinal level: ${level}`,
-    ).toContainText(level);
+      activeProblems.getByText(symptom),
+      `Missing seeded active problem symptom: ${symptom}`,
+    ).toBeVisible();
   }
 }
 
 async function expectSeededClinicalResults(page: Page) {
   const {
     diagnosisLabel,
+    clinicalLabel,
     spinalLevel,
-    symptomNames,
     treatmentLabels,
     activityLabels,
   } = patientClinicalScenario.resultsAssertions;
@@ -208,19 +197,18 @@ async function expectSeededClinicalResults(page: Page) {
     `Missing seeded results diagnosis label: ${diagnosisLabel}`,
   ).toBeVisible();
   await expect(
+    diagnosis.getByText(clinicalLabel),
+    `Missing seeded results clinical label: ${clinicalLabel}`,
+  ).toBeVisible();
+  await expect(
     diagnosis.getByText(spinalLevel),
     `Missing seeded results spinal level: ${spinalLevel}`,
   ).toBeVisible();
 
-  const symptoms = page.getByTestId("results-symptoms");
-  for (const symptomName of symptomNames) {
-    await expect(
-      symptoms.getByText(symptomName),
-      `Missing seeded results symptom: ${symptomName}`,
-    ).toBeVisible();
-  }
-
-  await page.getByTestId("results-tab-care").click();
+  await expect(page.getByTestId("results-disclaimer")).toBeVisible();
+  await expect(page.getByTestId("results-share")).toHaveAttribute("aria-disabled", "true");
+  await page.getByTestId("sticky-tab-wrapper").scrollIntoViewIfNeeded();
+  await expect(page.getByText("Treatment Strategy")).toBeVisible();
 
   const treatment = page.getByTestId("results-treatment");
   for (const treatmentLabel of treatmentLabels) {
@@ -230,7 +218,7 @@ async function expectSeededClinicalResults(page: Page) {
     ).toBeVisible();
   }
 
-  const activity = page.getByTestId("results-activity");
+  const activity = page.getByTestId("results-self-care");
   for (const activityLabel of activityLabels) {
     await expect(
       activity.getByText(activityLabel),
