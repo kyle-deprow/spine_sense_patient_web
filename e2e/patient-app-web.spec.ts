@@ -75,12 +75,13 @@ function sanitizeBrowserDiagnostic(value: string): string {
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [token]")
     .replace(/\b(cookie|set-cookie)\b\s*[:=]\s*[^\n\r]+/gi, "$1=[redacted]")
     .replace(/\b(authorization|x-csrf-token|csrf-token)\b\s*[:=]\s*[^;\n\r]+/gi, "$1=[redacted]")
+    .replace(/"(cookie|set-cookie)"\s*:\s*"[^"]*"/gi, '"$1":"[redacted]"')
+    .replace(/"(cookie|set-cookie)"\s*:\s*\[[^\]]*\]/gi, '"$1":["[redacted]"]')
+    .replace(/"(authorization|x-csrf-token|csrf-token)"\s*:\s*"[^"]*"/gi, '"$1":"[redacted]"')
     .replace(/\b(password|verification_code|verificationCode|mfa_code|mfaCode)\b\s*[:=]\s*[^,\s)]+/gi, "$1=[redacted]")
-    .replace(/"verification_token"\s*:\s*"[^"]+"/gi, '"verification_token":"[token]"')
-    .replace(/"verificationToken"\s*:\s*"[^"]+"/gi, '"verificationToken":"[token]"')
-    .replace(/"mfa_token"\s*:\s*"[^"]+"/gi, '"mfa_token":"[token]"')
-    .replace(/"access_token"\s*:\s*"[^"]+"/gi, '"access_token":"[token]"')
-    .replace(/"refresh_token"\s*:\s*"[^"]+"/gi, '"refresh_token":"[token]"')
+    .replace(/"[^"]*token[^"]*"\s*:\s*"[^"]+"/gi, (match) =>
+      match.replace(/:\s*"[^"]+"/, ':"[token]"'),
+    )
     .replace(/"password"\s*:\s*"[^"]+"/gi, '"password":"[redacted]"')
     .replace(/"csrfToken"\s*:\s*"[^"]+"/gi, '"csrfToken":"[redacted]"')
     .replace(/"csrf_token"\s*:\s*"[^"]+"/gi, '"csrf_token":"[redacted]"')
