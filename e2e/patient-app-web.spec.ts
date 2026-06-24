@@ -10,6 +10,9 @@ import { patientClinicalScenario } from "./fixtures/patientClinicalScenario";
 const PATIENT_EMAIL = patientClinicalScenario.patient.email;
 const PATIENT_PASSWORD = patientClinicalScenario.patient.password;
 const BACKEND_RESET_URL = process.env.PATIENT_WEB_BACKEND_RESET_URL;
+const BACKEND_RESET_TOKEN = process.env.PATIENT_WEB_BACKEND_RESET_TOKEN;
+const GATEWAY_RESET_URL = process.env.PATIENT_WEB_GATEWAY_RESET_URL;
+const GATEWAY_RESET_TOKEN = process.env.PATIENT_WEB_GATEWAY_RESET_TOKEN;
 const EXPECT_SECURE_COOKIES =
   process.env.PATIENT_WEB_EXPECT_SECURE_COOKIES === "true";
 const SIGNUP_PASSWORD =
@@ -30,7 +33,25 @@ async function resetBackend(request: APIRequestContext) {
     );
   }
 
-  const response = await request.post(BACKEND_RESET_URL);
+  if (GATEWAY_RESET_URL) {
+    const gatewayResponse = await request.post(
+      GATEWAY_RESET_URL,
+      GATEWAY_RESET_TOKEN
+        ? { headers: { authorization: `Bearer ${GATEWAY_RESET_TOKEN}` } }
+        : {},
+    );
+    expect(
+      gatewayResponse.ok(),
+      `PATIENT_WEB_GATEWAY_RESET_URL must clear gateway E2E state status=${gatewayResponse.status()}`,
+    ).toBeTruthy();
+  }
+
+  const response = await request.post(
+    BACKEND_RESET_URL,
+    BACKEND_RESET_TOKEN
+      ? { headers: { authorization: `Bearer ${BACKEND_RESET_TOKEN}` } }
+      : {},
+  );
   const responseText = await response.text();
   expect(
     response.ok(),

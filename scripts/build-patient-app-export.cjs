@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 
 const { spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const outputDir =
   process.env.PATIENT_WEB_PATIENT_APP_EXPORT_DIR ??
-  '../spine_sense_patient_web/patient-app-export';
+  path.resolve(__dirname, '..', 'patient-app-export');
 const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+
+fs.rmSync(outputDir, { recursive: true, force: true });
+fs.mkdirSync(outputDir, { recursive: true });
 
 const env = {
   ...process.env,
@@ -40,4 +45,13 @@ if (result.error) {
   process.exit(1);
 }
 
-process.exit(result.status ?? 1);
+if ((result.status ?? 1) !== 0) {
+  process.exit(result.status ?? 1);
+}
+
+if (!fs.existsSync(path.join(outputDir, 'index.html'))) {
+  console.error(`Patient app export did not produce index.html at ${outputDir}`);
+  process.exit(1);
+}
+
+process.exit(0);

@@ -1,8 +1,20 @@
-import { expect, test, type APIRequestContext, type Locator, type Page, type Response } from '@playwright/test'
+import {
+  expect,
+  test,
+  type APIRequestContext,
+  type APIResponse,
+  type Locator,
+  type Page,
+  type Response as PlaywrightResponse,
+} from '@playwright/test'
 
 import { fullAssessmentScenario } from './fixtures/fullAssessmentScenario'
 
 const BACKEND_RESET_URL = process.env.PATIENT_WEB_BACKEND_RESET_URL
+const BACKEND_RESET_TOKEN = process.env.PATIENT_WEB_BACKEND_RESET_TOKEN
+const BACKEND_REGISTRATION_CODE_URL = process.env.PATIENT_WEB_BACKEND_REGISTRATION_CODE_URL
+const GATEWAY_RESET_URL = process.env.PATIENT_WEB_GATEWAY_RESET_URL
+const GATEWAY_RESET_TOKEN = process.env.PATIENT_WEB_GATEWAY_RESET_TOKEN
 const EXPECT_SECURE_COOKIES = process.env.PATIENT_WEB_EXPECT_SECURE_COOKIES === 'true'
 const FULL_FLOW_TIMEOUT_MS = 15 * 60 * 1000
 
@@ -25,10 +37,24 @@ type TextAnswer = {
 }
 
 const SCREENING_ANSWERS_BY_ID = new Map(
-  fullAssessmentScenario.screening.map((answer) => [answer.id, answer]),
+  [
+    ...fullAssessmentScenario.screening,
+    ...fullAssessmentScenario.adaptive,
+    ...fullAssessmentScenario.refinement,
+  ].map((answer) => [answer.id, answer]),
+)
+const SCREENING_TEXT_ANSWERS_BY_ID = new Map(
+  [
+    ...fullAssessmentScenario.adaptiveText,
+    ...fullAssessmentScenario.refinementText,
+  ].map((answer) => [answer.id, answer]),
 )
 const FINAL_SCREENING_QUESTION_ID =
   fullAssessmentScenario.screening[fullAssessmentScenario.screening.length - 1]?.id
+
+function logMilestone(message: string): void {
+  console.log(`[milestone] ${message}`)
+}
 
 function uniqueSyntheticEmail(): string {
   const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
@@ -60,12 +86,41 @@ function installPhiSafeDiagnostics(page: Page) {
     console.log(`[pageerror] ${sanitizeDiagnostic(error.message)}`)
   })
   page.on('response', (response) => {
-    if (response.status() < 400) return
     const url = new URL(response.url())
+    const isAssessmentApi = url.pathname.includes('/api/proxy/api/v1/patients/me/assessments/')
+    if (
+      response.status() < 400 &&
+      !isAssessmentApi &&
+      !url.pathname.endsWith('/api/proxy/api/v1/patients/me/intake/route')
+    ) {
+      return
+    }
     const requestId = response.headers()['x-request-id'] ?? response.headers()['request-id']
     const suffix = requestId != null ? ` request_id=${sanitizeDiagnostic(requestId)}` : ''
     console.log(`[response:${response.status()}] ${sanitizeDiagnostic(url.pathname)}${suffix}`)
+    if (
+      url.pathname.endsWith('/api/proxy/api/v1/patients/me/intake/route') ||
+      (response.status() === 422 && url.pathname.endsWith('/screening/answers'))
+    ) {
+      void response
+        .text()
+        .then((body) => console.log(`[response-body:${response.status()}] ${sanitizeDiagnostic(body)}`))
+        .catch(() => undefined)
+    }
   })
+}
+
+async function postTestSupport(
+  request: APIRequestContext,
+  url: string,
+  token: string | undefined,
+  label: string,
+): Promise<APIResponse> {
+  const options: Parameters<APIRequestContext['post']>[1] = { timeout: 90_000 }
+  if (token) options.headers = { authorization: `Bearer ${token}` }
+  const response = await request.post(url, options)
+  expect(response.status(), `${label} failed status=${response.status()}`).toBe(200)
+  return response
 }
 
 async function resetBackend(request: APIRequestContext) {
@@ -73,11 +128,42 @@ async function resetBackend(request: APIRequestContext) {
     throw new Error('PATIENT_WEB_BACKEND_RESET_URL is required for full assessment E2E')
   }
 
-  const response = await request.post(BACKEND_RESET_URL)
+  if (GATEWAY_RESET_URL) {
+    await postTestSupport(request, GATEWAY_RESET_URL, GATEWAY_RESET_TOKEN, 'patient web gateway reset')
+  }
+
+  await postTestSupport(request, BACKEND_RESET_URL, BACKEND_RESET_TOKEN, 'backend reset')
+}
+
+async function getRegistrationVerificationCode(
+  request: APIRequestContext,
+  email: string,
+  fallbackCode: string,
+): Promise<string> {
+  if (!BACKEND_REGISTRATION_CODE_URL) {
+    if (EXPECT_SECURE_COOKIES || BACKEND_RESET_TOKEN) {
+      throw new Error('PATIENT_WEB_BACKEND_REGISTRATION_CODE_URL is required for deployed full assessment E2E')
+    }
+    return fallbackCode
+  }
+
+  const response = await request.post(BACKEND_REGISTRATION_CODE_URL, {
+    headers: {
+      'content-type': 'application/json',
+      ...(BACKEND_RESET_TOKEN ? { authorization: `Bearer ${BACKEND_RESET_TOKEN}` } : {}),
+    },
+    data: { email },
+    timeout: 30_000,
+  })
   expect(
-    response.ok(),
-    `backend reset failed status=${response.status()}`,
-  ).toBeTruthy()
+    response.status(),
+    `registration verification code lookup failed status=${response.status()}`,
+  ).toBe(200)
+  const payload = (await response.json()) as { code?: unknown }
+  if (typeof payload.code !== 'string') {
+    throw new Error('registration verification code lookup returned no code')
+  }
+  return payload.code
 }
 
 async function expectNoTokenLeak(responseText: string) {
@@ -143,9 +229,21 @@ async function warmCsrfSession(page: Page) {
 }
 
 async function gotoWelcome(page: Page) {
+  const isWelcomeVisible = async () =>
+    (await page.getByTestId('welcome-screen').isVisible({ timeout: 1000 }).catch(() => false)) ||
+    (await page
+      .getByRole('button', { name: /start my assessment/i })
+      .isVisible({ timeout: 1000 })
+      .catch(() => false)) ||
+    (await page
+      .getByText(/Understand Your Spine/i)
+      .first()
+      .isVisible({ timeout: 1000 })
+      .catch(() => false))
+
   for (let attempt = 0; attempt < 6; attempt += 1) {
     await page.goto('/', { waitUntil: 'commit', timeout: 45_000 }).catch(() => undefined)
-    if (await page.getByTestId('welcome-screen').isVisible({ timeout: 15_000 }).catch(() => false)) {
+    if (await isWelcomeVisible()) {
       return
     }
     await page.waitForTimeout(1500)
@@ -153,14 +251,37 @@ async function gotoWelcome(page: Page) {
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     await page.goto('/welcome', { waitUntil: 'commit', timeout: 45_000 }).catch(() => undefined)
-    if (await page.getByTestId('welcome-screen').isVisible({ timeout: 15_000 }).catch(() => false)) {
+    if (await isWelcomeVisible()) {
       return
     }
     await page.waitForTimeout(1500)
   }
 
   await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => undefined)
-  await expect(page.getByTestId('welcome-screen')).toBeVisible({ timeout: 60_000 })
+  const visible = await expect
+    .poll(isWelcomeVisible, {
+      timeout: 60_000,
+      message: 'Expected the welcome screen or Start My Assessment CTA to be visible',
+    })
+    .toBe(true)
+    .then(() => true)
+    .catch(() => false)
+  if (!visible) {
+    const diagnostic = await page
+      .evaluate(() => ({
+        href: location.href,
+        text: document.body.innerText.slice(0, 500),
+      }))
+      .catch((error) => ({ href: page.url(), text: `diagnostic unavailable: ${error.message}` }))
+    throw new Error(`Expected welcome screen. href=${diagnostic.href} text=${sanitizeDiagnostic(diagnostic.text)}`)
+  }
+}
+
+async function clickWelcomeGetStarted(page: Page) {
+  if (await clickIfPresent(page, 'welcome-get-started', 2000)) {
+    return
+  }
+  await page.getByRole('button', { name: /start my assessment/i }).click()
 }
 
 async function expectAuthenticatedCookieSession(page: Page) {
@@ -207,7 +328,7 @@ async function expectConsentScreenAfterVerification(page: Page) {
 
 async function byTestId(page: Page, testId: string): Promise<Locator> {
   const locator = page.getByTestId(testId)
-  await locator.scrollIntoViewIfNeeded()
+  await expect(locator).toBeVisible({ timeout: 30_000 })
   return locator
 }
 
@@ -238,7 +359,7 @@ async function waitForAnyVisibleTestId(
   const deadline = Date.now() + timeout
   while (Date.now() < deadline) {
     for (const testId of testIds) {
-      if (await page.getByTestId(testId).isVisible({ timeout: 500 }).catch(() => false)) {
+      if (await isVisibleByTestIdOrSemantic(page, testId, 500)) {
         return testId
       }
     }
@@ -270,6 +391,50 @@ async function waitForRetryOutcome(
   }
 
   return waitForAnyVisibleTestId(page, nextTestIds, 30_000)
+}
+
+function semanticLocatorForTestId(page: Page, testId: string): Locator | null {
+  switch (testId) {
+    case 'adaptive-screen':
+    case 'adaptive-list':
+      return page.getByText(/^Adaptive\s*·\s*Q\d+\s+of\s+\d+$/i).first()
+    case 'refinement-screen':
+    case 'refinement-list':
+      return page.getByText(/^Refinement\s*·\s*Q\d+\s+of\s+\d+$/i).first()
+    case 'review-screen':
+      return page.getByText('Review Your Assessment').first()
+    case 'assessment-processing':
+      return page
+        .getByText(/Your assessment is being generated by our clinical AI engine|Determining clinical pathway/i)
+        .first()
+    case 'results-screen':
+      return page.getByText('Assessment Results').first()
+    case 'tab-home':
+      return page.getByRole('tab', { name: /Home/i }).last()
+    case 'adaptive-submit':
+    case 'refinement-submit':
+      return page.getByRole('button', { name: /^(Continue to next question|Submit answers)$/i }).first()
+    default:
+      return null
+  }
+}
+
+async function isVisibleByTestIdOrSemantic(page: Page, testId: string, timeout = 500): Promise<boolean> {
+  if (await page.getByTestId(testId).isVisible({ timeout }).catch(() => false)) return true
+  const semantic = semanticLocatorForTestId(page, testId)
+  return semantic != null && (await semantic.isVisible({ timeout }).catch(() => false))
+}
+
+async function actionableLocatorForTestId(page: Page, testId: string): Promise<Locator> {
+  const semantic = semanticLocatorForTestId(page, testId)
+  if (semantic != null && (await semantic.isVisible({ timeout: 500 }).catch(() => false))) {
+    return semantic
+  }
+
+  const visibleLocator = page.locator(`[data-testid="${testId}"]:visible`).first()
+  if (await visibleLocator.isVisible({ timeout: 500 }).catch(() => false)) return visibleLocator
+
+  return page.getByTestId(testId).first()
 }
 
 async function visibleDynamicQuestionTestId(
@@ -307,12 +472,12 @@ async function waitForDynamicQuestionAdvance(
   const deadline = Date.now() + timeout
   while (Date.now() < deadline) {
     for (const testId of nextStageTestIds) {
-      if (await page.getByTestId(testId).isVisible({ timeout: 250 }).catch(() => false)) {
+      if (await isVisibleByTestIdOrSemantic(page, testId, 250)) {
         return testId
       }
     }
 
-    if (!(await page.getByTestId(currentScreenTestId).isVisible({ timeout: 250 }).catch(() => false))) {
+    if (!(await isVisibleByTestIdOrSemantic(page, currentScreenTestId, 250))) {
       return 'left-current-screen'
     }
 
@@ -325,7 +490,7 @@ async function waitForDynamicQuestionAdvance(
       return currentScreenTestId
     }
 
-    const submit = page.getByTestId(submitTestId)
+    const submit = await actionableLocatorForTestId(page, submitTestId)
     if (await submit.isVisible({ timeout: 250 }).catch(() => false)) {
       if (
         previousQuestionTestId == null &&
@@ -353,7 +518,7 @@ async function waitForEnabledAndClick(
 ) {
   let lastError: unknown
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const locator = page.getByTestId(testId)
+    const locator = await actionableLocatorForTestId(page, testId)
     await expect(locator).toBeVisible({ timeout })
     await expect(locator).toBeEnabled({ timeout })
     try {
@@ -384,11 +549,11 @@ async function clickAndWaitForResponse({
 }: {
   page: Page
   testId: string
-  matches: (response: Response) => boolean
+  matches: (response: PlaywrightResponse) => boolean
   retryErrorTestId?: string
   timeout?: number
   attempts?: number
-}): Promise<Response> {
+}): Promise<PlaywrightResponse> {
   if (attempts > 1 && retryErrorTestId == null) {
     throw new Error(`Retries for ${testId} require a retryErrorTestId`)
   }
@@ -433,12 +598,12 @@ async function clickAndWaitForResponseOrSuccess({
 }: {
   page: Page
   testId: string
-  matches: (response: Response) => boolean
+  matches: (response: PlaywrightResponse) => boolean
   successTestId: string
   timeout?: number
-}): Promise<Response | null> {
-  const observedResponses: Response[] = []
-  const collectResponse = (response: Response) => {
+}): Promise<PlaywrightResponse | null> {
+  const observedResponses: PlaywrightResponse[] = []
+  const collectResponse = (response: PlaywrightResponse) => {
     if (matches(response)) {
       observedResponses.push(response)
     }
@@ -607,9 +772,7 @@ async function clickScreeningSubmitIfPresent(page: Page, timeout = 30_000): Prom
   return false
 }
 
-async function submitScreening(page: Page) {
-  await expect(page.getByTestId('screening-nav-next')).toBeVisible({ timeout: 30_000 })
-  const nextStageTestIds = [
+const POST_SCREENING_STAGE_TEST_IDS = [
     'adaptive-loading-state',
     'adaptive-loading-error-state',
     'adaptive-screen',
@@ -618,15 +781,24 @@ async function submitScreening(page: Page) {
     'refinement-screen',
     'refinement-error-state',
     'review-screen',
-  ]
+    'assessment-processing',
+    'results-screen',
+    'home-screen',
+  ] as const
+
+async function submitScreening(page: Page) {
+  const existingStage = await waitForAnyVisibleTestId(page, POST_SCREENING_STAGE_TEST_IDS, 1000).catch(() => null)
+  if (existingStage != null) return
+
+  await expect(page.getByTestId('screening-nav-next')).toBeVisible({ timeout: 30_000 })
 
   for (let attempt = 0; attempt < 5; attempt += 1) {
     expect(await clickScreeningSubmitIfPresent(page)).toBe(true)
-    const nextStage = await waitForAnyVisibleTestId(page, nextStageTestIds, 20_000).catch(() => null)
+    const nextStage = await waitForAnyVisibleTestId(page, POST_SCREENING_STAGE_TEST_IDS, 20_000).catch(() => null)
     if (nextStage != null) return
   }
 
-  await waitForAnyVisibleTestId(page, nextStageTestIds, 120_000)
+  await waitForAnyVisibleTestId(page, POST_SCREENING_STAGE_TEST_IDS, 120_000)
 }
 
 async function fillVisibleDynamicTextbox(page: Page): Promise<boolean> {
@@ -654,6 +826,24 @@ function answerCandidateTestIds(prefix: string, id: string, value: string | numb
   ]
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function answerLabelCandidates(value: string | number): string[] {
+  const normalized = String(value)
+  const spaced = normalized.replaceAll('_', ' ')
+  const explicit: Record<string, string[]> = {
+    none: ['None of these', 'None'],
+    same_all_day: ['Same all day'],
+    not_sure: ['Not sure'],
+    no_change: ['No change'],
+    lt_10_min: ['Under 10 min', 'Less than 10 min'],
+    under_10_min: ['Under 10 min', 'Less than 10 min'],
+  }
+  return [...(explicit[normalized] ?? []), spaced, normalized]
+}
+
 async function answerOneValue(page: Page, prefix: string, id: string, value: string | number) {
   const normalized = String(value)
   const locator = await findVisibleCandidate(page, answerCandidateTestIds(prefix, id, value))
@@ -672,17 +862,39 @@ async function answerOneValue(page: Page, prefix: string, id: string, value: str
     }
   }
 
+  for (const label of answerLabelCandidates(value)) {
+    const exactOptionLabel = new RegExp(`^Option \\d+ of \\d+:\\s*${escapeRegExp(label)}$`, 'i')
+    const exactLabel = new RegExp(`^${escapeRegExp(label)}$`, 'i')
+    for (const role of ['radio', 'checkbox'] as const) {
+      for (const name of [exactOptionLabel, exactLabel]) {
+        const control = page.getByRole(role, { name }).first()
+        if (await control.isVisible({ timeout: 500 }).catch(() => false)) {
+          await control.click()
+          return
+        }
+      }
+    }
+  }
+
   const input = page.getByTestId(`${prefix}-${id}-input`)
   if (await input.isVisible({ timeout: 1000 }).catch(() => false)) {
     await input.fill(normalized)
     return
   }
 
+  if (normalized === 'acknowledged') {
+    const acknowledge = page.getByRole('button', { name: /i understand|acknowledge/i }).first()
+    if (await acknowledge.isVisible({ timeout: 1000 }).catch(() => false)) {
+      await acknowledge.click()
+      return
+    }
+  }
+
   throw new Error(`No visible control found for ${prefix}-${id}=${normalized}`)
 }
 
 async function isEnabled(page: Page, testId: string): Promise<boolean> {
-  const locator = page.getByTestId(testId)
+  const locator = await actionableLocatorForTestId(page, testId)
   if (!(await locator.isVisible({ timeout: 500 }).catch(() => false))) return false
   return locator.isEnabled({ timeout: 500 }).catch(() => false)
 }
@@ -758,6 +970,16 @@ async function isScreeningSubmitButton(page: Page): Promise<boolean> {
 async function waitForScreeningAdvance(page: Page, previousQuestionId: string, timeout = 60_000) {
   const deadline = Date.now() + timeout
   while (Date.now() < deadline) {
+    const postScreeningStage = await waitForAnyVisibleTestId(page, POST_SCREENING_STAGE_TEST_IDS, 250).catch(() => null)
+    if (postScreeningStage != null) {
+      return
+    }
+
+    const screeningNavGone = !(await page.getByTestId('screening-nav-next').isVisible({ timeout: 250 }).catch(() => false))
+    if (screeningNavGone) {
+      return
+    }
+
     if (await page.getByTestId('screening-section-transition-continue').isVisible({ timeout: 250 }).catch(() => false)) {
       await maybeContinueSectionTransition(page)
       continue
@@ -801,19 +1023,34 @@ async function clickScreeningNextAndWaitForAdvance(page: Page, previousQuestionI
 async function answerScreening(page: Page) {
   await expect(page.getByTestId('screening-nav-next')).toBeVisible({ timeout: 60_000 })
   for (let questionIndex = 0; questionIndex < 80; questionIndex += 1) {
-    const answer = await currentVisibleScreeningAnswer(page)
-    await answerQuestion(page, 'question', answer)
+    const postScreeningStage = await waitForAnyVisibleTestId(page, POST_SCREENING_STAGE_TEST_IDS, 250).catch(() => null)
+    if (postScreeningStage != null) return
+
+    const screeningNavGone = !(await page.getByTestId('screening-nav-next').isVisible({ timeout: 250 }).catch(() => false))
+    if (screeningNavGone) return
+
+    const questionId = await currentVisibleScreeningQuestionId(page)
+    const textAnswer = SCREENING_TEXT_ANSWERS_BY_ID.get(questionId)
+    if (textAnswer != null && (await answerTextQuestion(page, 'question', textAnswer))) {
+      // Text answer entered.
+    } else {
+      const answer = SCREENING_ANSWERS_BY_ID.get(questionId)
+      if (answer == null) {
+        throw new Error(`No screening fixture answer is defined for current question ${questionId}`)
+      }
+      await answerQuestion(page, 'question', answer)
+    }
 
     await expect(
       page.getByTestId('screening-nav-next'),
-      `Expected fixture answer ${answer?.id ?? 'unknown'} to enable screening navigation`,
+      `Expected fixture answer ${questionId} to enable screening navigation`,
     ).toBeEnabled({ timeout: 30_000 })
 
     if (await isScreeningSubmitButton(page)) {
       return
     }
 
-    await clickScreeningNextAndWaitForAdvance(page, answer.id)
+    await clickScreeningNextAndWaitForAdvance(page, questionId)
     await expect(page.getByTestId('emergency-screen')).toBeHidden({ timeout: 500 }).catch(() => undefined)
   }
 
@@ -1041,13 +1278,23 @@ async function continueWelcomeIntroIfPresent(page: Page): Promise<boolean> {
   const stage = await waitForAnyVisibleTestId(
     page,
     ['welcome-intro-screen', 'onboarding-layout'],
-    60_000,
-  )
+    10_000,
+  ).catch(async () => {
+    const welcomeCta = page.getByRole('button', { name: /let's begin/i })
+    if (await welcomeCta.isVisible({ timeout: 1_000 }).catch(() => false)) {
+      return 'welcome-intro-screen'
+    }
+    throw new Error(
+      "Neither onboarding test IDs nor the visible welcome intro CTA became visible",
+    )
+  })
   if (stage !== 'welcome-intro-screen') {
     return false
   }
 
-  await waitForEnabledAndClick(page, 'welcome-intro-begin')
+  if (!(await clickIfPresent(page, 'welcome-intro-begin'))) {
+    await page.getByRole('button', { name: /let's begin/i }).click()
+  }
   return true
 }
 
@@ -1055,8 +1302,35 @@ async function expectTreatmentHistoryAfterStorySave(page: Page) {
   await expect(page.getByTestId('medical-history-conditions-none')).toBeVisible({ timeout: 60_000 })
 }
 
+async function expectChiefComplaintAfterProfileSave(page: Page) {
+  await expect
+    .poll(
+      async () =>
+        (await page.getByTestId('step-chief-complaint-select').isVisible({ timeout: 1000 }).catch(() => false)) ||
+        (await page.getByTestId('chief-complaint-text-option').isVisible({ timeout: 1000 }).catch(() => false)) ||
+        (await page.getByText(/Tell us what's/i).isVisible({ timeout: 1000 }).catch(() => false)),
+      {
+        timeout: 60_000,
+        message: 'Expected chief complaint step after profile save',
+      },
+    )
+    .toBe(true)
+}
+
 async function expectImagingRecordsAfterHistorySave(page: Page) {
-  await expect(page.getByTestId('records-continue-btn')).toBeVisible({ timeout: 60_000 })
+  await expect
+    .poll(
+      async () =>
+        (await page.getByTestId('records-continue-btn').isVisible({ timeout: 1000 }).catch(() => false)) ||
+        (await page.getByTestId('step-imaging-records').isVisible({ timeout: 1000 }).catch(() => false)) ||
+        (await page.getByRole('button', { name: /complete intake/i }).isVisible({ timeout: 1000 }).catch(() => false)) ||
+        (await page.getByText(/Bring in your records/i).isVisible({ timeout: 1000 }).catch(() => false)),
+      {
+        timeout: 60_000,
+        message: 'Expected imaging records step after treatment history save',
+      },
+    )
+    .toBe(true)
 }
 
 async function clickRecordsContinue(page: Page) {
@@ -1066,9 +1340,28 @@ async function clickRecordsContinue(page: Page) {
   }
 
   const skip = page.getByRole('button', { name: /skip for now/i })
-  await expect(skip).toBeVisible({ timeout: 30_000 })
-  await expect(skip).toBeEnabled({ timeout: 30_000 })
-  await skip.click({ timeout: 10_000 })
+  if (await skip.isVisible({ timeout: 1000 }).catch(() => false)) {
+    await expect(skip).toBeEnabled({ timeout: 30_000 })
+    await skip.click({ timeout: 10_000 })
+    return
+  }
+
+  const complete = page.getByRole('button', { name: /complete intake/i })
+  await expect(complete).toBeVisible({ timeout: 30_000 })
+  await expect(complete).toBeEnabled({ timeout: 30_000 })
+  await complete.click({ timeout: 10_000 })
+}
+
+async function clickChiefComplaintSave(page: Page) {
+  if (await page.getByTestId('text-save-btn').isVisible({ timeout: 1000 }).catch(() => false)) {
+    await waitForEnabledAndClick(page, 'text-save-btn')
+    return
+  }
+
+  const save = page.getByRole('button', { name: /save and continue/i })
+  await expect(save).toBeVisible({ timeout: 30_000 })
+  await expect(save).toBeEnabled({ timeout: 30_000 })
+  await save.click({ timeout: 10_000 })
 }
 
 async function waitForAssessmentEntry(page: Page): Promise<string> {
@@ -1117,17 +1410,22 @@ test.describe('patient web full assessment flow', () => {
 
   test('registers a new patient and completes assessment to home @full-assessment', async ({
     page,
+    request,
   }) => {
     test.setTimeout(FULL_FLOW_TIMEOUT_MS)
 
-    const email = uniqueSyntheticEmail()
+    let email = uniqueSyntheticEmail()
     const { registration, onboarding } = fullAssessmentScenario
 
+    logMilestone('reset complete; warming csrf')
     await warmCsrfSession(page)
+    logMilestone('csrf warm; opening welcome')
     await gotoWelcome(page)
-    await clickByTestId(page, 'welcome-get-started')
+    logMilestone('welcome visible; opening registration')
+    await clickWelcomeGetStarted(page)
 
     await expect(page.getByTestId('register-screen')).toBeVisible({ timeout: 30_000 })
+    logMilestone('registration screen visible; submitting registration')
     await fillByTestId(page, 'register-first-name', registration.firstName)
     await fillByTestId(page, 'register-last-name', registration.lastName)
     await fillByTestId(page, 'register-email', email)
@@ -1136,24 +1434,41 @@ test.describe('patient web full assessment flow', () => {
     await fillByTestId(page, 'register-confirm-password', registration.password)
     await clickIfPresent(page, 'register-consent-storage')
 
-    const registerResponse = await clickAndWaitForResponseOrSuccess({
-      page,
-      testId: 'register-submit',
-      successTestId: 'verify-screen',
-      matches: (response) =>
-        response.url().includes('/api/auth/register') &&
-        response.request().method() === 'POST',
-    })
-    if (registerResponse != null) {
-      expect(registerResponse.ok()).toBeTruthy()
-      await expectNoTokenLeak(await registerResponse.text())
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const registerResponse = await clickAndWaitForResponseOrSuccess({
+        page,
+        testId: 'register-submit',
+        successTestId: 'verify-screen',
+        matches: (response) =>
+          response.url().includes('/api/auth/register') &&
+          response.request().method() === 'POST',
+      })
+      if (registerResponse != null) {
+        expect(registerResponse.ok()).toBeTruthy()
+        await expectNoTokenLeak(await registerResponse.text())
+      }
+      expect(page.url()).not.toContain('verification')
+
+      if (await page.getByTestId('verify-screen').isVisible({ timeout: 10_000 }).catch(() => false)) {
+        break
+      }
+      if (attempt === 2) {
+        await expect(page.getByTestId('verify-screen')).toBeVisible({ timeout: 60_000 })
+        break
+      }
+
+      logMilestone('registration submitted without verification transition; retrying with fresh email')
+      email = uniqueSyntheticEmail()
+      await fillByTestId(page, 'register-email', email)
     }
-    expect(page.url()).not.toContain('verification')
 
     await expect(page.getByTestId('verify-screen')).toBeVisible({ timeout: 60_000 })
+    logMilestone('verification screen visible; checking browser storage')
     await expectNoBrowserStorage(page)
 
-    await fillByTestId(page, 'verify-otp-digit-0', registration.verificationCode)
+    const verificationCode = await getRegistrationVerificationCode(request, email, registration.verificationCode)
+    await fillByTestId(page, 'verify-otp-digit-0', verificationCode)
+    logMilestone('verification code entered; submitting verification')
     const verifyResponse = await clickAndWaitForResponse({
       page,
       testId: 'verify-submit',
@@ -1164,19 +1479,24 @@ test.describe('patient web full assessment flow', () => {
     expect(verifyResponse.ok()).toBeTruthy()
     await expectNoTokenLeak(await verifyResponse.text())
     expect(page.url()).not.toContain('verification')
+    logMilestone('verification accepted; checking authenticated cookie session')
     await expectAuthenticatedCookieSession(page)
 
+    logMilestone('authenticated cookies verified; waiting for consent')
     await expectConsentScreenAfterVerification(page)
+    logMilestone('consent screen visible; accepting consent')
     await acceptConsentIfPresent(page)
 
+    logMilestone('consent accepted; continuing welcome intro')
     await continueWelcomeIntroIfPresent(page)
     await expect(page.getByTestId('onboarding-layout')).toBeVisible({ timeout: 60_000 })
+    logMilestone('onboarding layout visible; filling onboarding')
     await completeProfileIfPresent(page)
-    await expect(page.getByTestId('intake-step-chief-complaint')).toBeVisible({ timeout: 60_000 })
+    await expectChiefComplaintAfterProfileSave(page)
     await clickByTestId(page, 'chief-complaint-text-option')
     await expect(page.getByTestId('step-chief-complaint-text')).toBeVisible()
     await fillByTestId(page, 'narrative-input', onboarding.chiefComplaint)
-    await waitForEnabledAndClick(page, 'text-save-btn')
+    await clickChiefComplaintSave(page)
     await expectTreatmentHistoryAfterStorySave(page)
     await clickByTestId(page, 'medical-history-conditions-none')
     await waitForEnabledAndClick(page, 'medical-history-continue-btn')

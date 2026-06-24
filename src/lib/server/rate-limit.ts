@@ -52,6 +52,10 @@ export function rateLimit(key: string, opts: { limit: number; windowMs: number }
   return true
 }
 
+export function clearRateLimitStore(): void {
+  store.clear()
+}
+
 export function shouldBypassRateLimit(
   nodeEnv = process.env.NODE_ENV,
   bypassFlag = process.env.PATIENT_WEB_E2E_BYPASS_RATE_LIMITS,

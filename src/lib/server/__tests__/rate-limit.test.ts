@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { rateLimit, shouldBypassRateLimit } from '@/lib/server/rate-limit'
+import { clearRateLimitStore, rateLimit, shouldBypassRateLimit } from '@/lib/server/rate-limit'
 
 describe('rate limiting', () => {
   afterEach(() => {
+    clearRateLimitStore()
     vi.unstubAllEnvs()
   })
 
@@ -26,5 +27,14 @@ describe('rate limiting', () => {
     expect(() => shouldBypassRateLimit('production', 'true')).toThrow(
       'PATIENT_WEB_E2E_BYPASS_RATE_LIMITS must not be set in production',
     )
+  })
+
+  it('can clear the in-memory state for gated E2E resets', () => {
+    expect(rateLimit('reset-rate-limit-test', { limit: 1, windowMs: 60_000 })).toBe(true)
+    expect(rateLimit('reset-rate-limit-test', { limit: 1, windowMs: 60_000 })).toBe(false)
+
+    clearRateLimitStore()
+
+    expect(rateLimit('reset-rate-limit-test', { limit: 1, windowMs: 60_000 })).toBe(true)
   })
 })

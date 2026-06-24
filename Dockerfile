@@ -24,6 +24,7 @@ ARG PATIENT_APP_API_BASE_URL=/api/proxy/api/v1
 RUN PATIENT_APP_ENVIRONMENT="$PATIENT_APP_ENVIRONMENT" \
     PATIENT_APP_API_BASE_URL="$PATIENT_APP_API_BASE_URL" \
     pnpm build:patient-app
+RUN test -f patient-app-export/index.html
 RUN mkdir -p public
 RUN pnpm build
 
