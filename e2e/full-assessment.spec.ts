@@ -64,17 +64,38 @@ function uniqueSyntheticEmail(): string {
 function sanitizeDiagnostic(value: string): string {
   return value
     .replace(/https?:\/\/[^/\s)]+/g, '[origin]')
+    .replace(/\?[^)\]\s"']+/g, '?[query]')
     .replace(
       /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi,
       '[uuid]',
     )
     .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, '[email]')
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [token]')
+    .replace(/\b(cookie|set-cookie)\b\s*[:=]\s*[^\n\r]+/gi, '$1=[redacted]')
+    .replace(/\b(authorization|x-csrf-token|csrf-token)\b\s*[:=]\s*[^;\n\r]+/gi, '$1=[redacted]')
+    .replace(/\b(password|verification_code|verificationCode|mfa_code|mfaCode)\b\s*[:=]\s*[^,\s)]+/gi, '$1=[redacted]')
     .replace(/"verification_token"\s*:\s*"[^"]+"/gi, '"verification_token":"[token]"')
     .replace(/"verificationToken"\s*:\s*"[^"]+"/gi, '"verificationToken":"[token]"')
     .replace(/"mfa_token"\s*:\s*"[^"]+"/gi, '"mfa_token":"[token]"')
     .replace(/"access_token"\s*:\s*"[^"]+"/gi, '"access_token":"[token]"')
     .replace(/"refresh_token"\s*:\s*"[^"]+"/gi, '"refresh_token":"[token]"')
+    .replace(/"password"\s*:\s*"[^"]+"/gi, '"password":"[redacted]"')
+    .replace(/"csrfToken"\s*:\s*"[^"]+"/gi, '"csrfToken":"[redacted]"')
+    .replace(/"csrf_token"\s*:\s*"[^"]+"/gi, '"csrf_token":"[redacted]"')
     .slice(0, 800)
+}
+
+function sanitizeDiagnosticStack(error: Error): string | null {
+  if (!error.stack) return null
+  const frames = error.stack
+    .split('\n')
+    .slice(1)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('at '))
+    .slice(0, 6)
+    .map(sanitizeDiagnostic)
+  if (frames.length === 0) return null
+  return [sanitizeDiagnostic(error.name || 'Error'), ...frames].join('\n')
 }
 
 function installPhiSafeDiagnostics(page: Page) {
@@ -84,6 +105,10 @@ function installPhiSafeDiagnostics(page: Page) {
   })
   page.on('pageerror', (error) => {
     console.log(`[pageerror] ${sanitizeDiagnostic(error.message)}`)
+    const stack = sanitizeDiagnosticStack(error)
+    if (stack) {
+      console.log(`[pageerror-stack] ${stack}`)
+    }
   })
   page.on('response', (response) => {
     const url = new URL(response.url())

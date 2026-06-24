@@ -4,11 +4,14 @@ const BACKEND_ROOT_PATHS_WITH_TRAILING_SLASH = new Set([
   '/api/v1/patients/me',
   '/api/v1/patients/me/assessments',
   '/api/v1/patients/me/symptoms',
+  '/api/v1/patients/me/tracked-symptoms',
 ])
 
 export interface AllowedProxyRoute {
   prefix: string
   methods: readonly string[]
+  match?: 'exact' | 'prefix'
+  pathPattern?: RegExp
 }
 
 export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
@@ -17,12 +20,20 @@ export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
   { prefix: '/api/v1/patients/me/dashboard', methods: ['GET'] },
   { prefix: '/api/v1/patients/me/symptom-trends', methods: ['GET'] },
   { prefix: '/api/v1/patients/me/symptoms', methods: ['GET', 'POST', 'PATCH', 'DELETE'] },
+  { prefix: '/api/v1/patients/me/tracked-symptoms', methods: ['GET'], match: 'exact' },
+  { prefix: '/api/v1/patients/me/tracked-symptoms/checkin', methods: ['POST'], match: 'exact' },
+  {
+    prefix: '/api/v1/patients/me/tracked-symptoms',
+    methods: ['POST'],
+    pathPattern:
+      /^\/api\/v1\/patients\/me\/tracked-symptoms\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/logs$/i,
+  },
   { prefix: '/api/v1/patients/me/checkins', methods: ['GET', 'POST', 'PATCH', 'DELETE'] },
   { prefix: '/api/v1/patients/me/treatments', methods: ['GET'] },
   { prefix: '/api/v1/patients/me/documents', methods: ['GET', 'POST', 'DELETE'] },
   { prefix: '/api/v1/patients/me/intake', methods: ['GET', 'POST', 'PUT'] },
   { prefix: '/api/v1/patients/me/providers', methods: ['GET'] },
-  { prefix: '/api/v1/patients/me', methods: ['GET', 'PATCH'] },
+  { prefix: '/api/v1/patients/me', methods: ['GET', 'PATCH'], match: 'exact' },
   { prefix: '/api/v1/invite-codes', methods: ['GET', 'POST'] },
   { prefix: '/api/v1/safety', methods: ['GET', 'POST'] },
 ]
@@ -61,7 +72,7 @@ export function validateProxyTarget(
     return { ok: false, status: 400, code: 'proxy_path_invalid' }
   }
 
-  const route = ALLOWED_PROXY_ROUTES.find((candidate) => matchesPrefix(targetPath, candidate.prefix))
+  const route = ALLOWED_PROXY_ROUTES.find((candidate) => matchesRoute(targetPath, candidate))
   if (!route) {
     return { ok: false, status: 404, code: 'proxy_path_not_allowed' }
   }
@@ -73,8 +84,12 @@ export function validateProxyTarget(
   return { ok: true, targetPath }
 }
 
-function matchesPrefix(targetPath: string, prefix: string): boolean {
-  return targetPath === prefix || targetPath.startsWith(`${prefix}/`)
+function matchesRoute(targetPath: string, route: AllowedProxyRoute): boolean {
+  if (route.pathPattern) return route.pathPattern.test(targetPath)
+  if (targetPath === route.prefix) return true
+  if (route.match === 'exact' && targetPath === `${route.prefix}/`) return true
+  if (route.match === 'exact') return false
+  return targetPath.startsWith(`${route.prefix}/`)
 }
 
 function hasEncodedTraversal(pathname: string): boolean {

@@ -22,6 +22,65 @@ describe('proxy allowlist', () => {
     ).toEqual({ ok: true, targetPath: '/api/v1/patients/me/symptom-trends' })
   })
 
+  it('allows tracked symptom routes explicitly', () => {
+    const trackerId = '10000000-0000-4000-8000-000000000001'
+
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'tracked-symptoms'],
+        'GET',
+        '/api/proxy/api/v1/patients/me/tracked-symptoms',
+      ),
+    ).toEqual({ ok: true, targetPath: '/api/v1/patients/me/tracked-symptoms/' })
+
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'tracked-symptoms', 'checkin'],
+        'POST',
+        '/api/proxy/api/v1/patients/me/tracked-symptoms/checkin',
+      ),
+    ).toEqual({ ok: true, targetPath: '/api/v1/patients/me/tracked-symptoms/checkin' })
+
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'tracked-symptoms', trackerId, 'logs'],
+        'POST',
+        `/api/proxy/api/v1/patients/me/tracked-symptoms/${trackerId}/logs`,
+      ),
+    ).toEqual({
+      ok: true,
+      targetPath: `/api/v1/patients/me/tracked-symptoms/${trackerId}/logs`,
+    })
+  })
+
+  it('blocks unknown tracked symptom children at the BFF boundary', () => {
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'tracked-symptoms', 'unknown-child'],
+        'GET',
+        '/api/proxy/api/v1/patients/me/tracked-symptoms/unknown-child',
+      ),
+    ).toEqual({ ok: false, status: 404, code: 'proxy_path_not_allowed' })
+
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'tracked-symptoms', 'not-a-uuid', 'logs'],
+        'POST',
+        '/api/proxy/api/v1/patients/me/tracked-symptoms/not-a-uuid/logs',
+      ),
+    ).toEqual({ ok: false, status: 404, code: 'proxy_path_not_allowed' })
+  })
+
+  it('does not allow arbitrary patient child routes through the patient profile route', () => {
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'unknown-child'],
+        'GET',
+        '/api/proxy/api/v1/patients/me/unknown-child',
+      ),
+    ).toEqual({ ok: false, status: 404, code: 'proxy_path_not_allowed' })
+  })
+
   it('normalizes exact backend root routes to avoid auth-losing redirects', () => {
     expect(
       validateProxyTarget(

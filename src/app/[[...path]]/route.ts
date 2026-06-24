@@ -210,6 +210,15 @@ function injectWebCompatibilityStyles(html: string): string {
   return html.replace('</head>', `${WEB_COMPATIBILITY_STYLES}</head>`)
 }
 
+function injectStyleNonceBootstrap(html: string, nonce: string): string {
+  if (!html.includes('</head>') || html.includes('data-patient-web-style-nonce')) {
+    return html
+  }
+
+  const script = `<script data-patient-web-style-nonce nonce="${nonce}">(function(){var n=${JSON.stringify(nonce)};var d=document;var c=d.createElement.bind(d);d.createElement=function(t,o){var e=c(t,o);if(typeof t==="string"&&t.toLowerCase()==="style"&&e&&e.setAttribute&&!e.getAttribute("nonce")){e.setAttribute("nonce",n);}return e;};})();</script>`
+  return html.replace('</head>', `${script}</head>`)
+}
+
 async function readResponseBody(
   filePath: string,
   contentType: string,
@@ -224,7 +233,7 @@ async function readResponseBody(
   const nonce = request.headers.get('x-nonce')
   if (!nonce) return html
 
-  return html
+  return injectStyleNonceBootstrap(html, nonce)
     .replaceAll(/<script(?![^>]*\bnonce=)/g, `<script nonce="${nonce}"`)
     .replaceAll(/<style(?![^>]*\bnonce=)/g, `<style nonce="${nonce}"`)
 }

@@ -60,7 +60,26 @@ describe('patient app export route', () => {
     expect(html).toContain('<style nonce="test-nonce" data-patient-web-compat>')
     expect(html).toContain("font-family: 'Ionicons'")
     expect(html).toContain('[data-testid="sticky-tab-wrapper"]')
+    expect(html).toContain('<script data-patient-web-style-nonce nonce="test-nonce">')
+    expect(html).toContain('d.createElement=function')
     expect(html).toContain('<script nonce="test-nonce">window.__app = true</script>')
+  })
+
+  it('does not duplicate the runtime style nonce bootstrap', async () => {
+    await makeExportFile(
+      'index.html',
+      '<!doctype html><html><head><script data-patient-web-style-nonce nonce="test-nonce"></script></head><body></body></html>',
+    )
+
+    const response = await GET(
+      new NextRequest('http://localhost/', {
+        headers: { 'x-nonce': 'test-nonce' },
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    const html = await response.text()
+    expect(html.match(/data-patient-web-style-nonce/g)).toHaveLength(1)
   })
 
   it('does not inject compatibility CSS into malformed HTML without a head', async () => {
