@@ -12,6 +12,16 @@ describe('proxy allowlist', () => {
     ).toEqual({ ok: true, targetPath: '/api/v1/patients/me/assessments/' })
   })
 
+  it('blocks retired assessment phase routes at the BFF boundary', () => {
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'assessments', '10000000-0000-4000-8000-000000000001', 'refinement', 'run'],
+        'POST',
+        '/api/proxy/api/v1/patients/me/assessments/10000000-0000-4000-8000-000000000001/refinement/run',
+      ),
+    ).toEqual({ ok: false, status: 404, code: 'proxy_path_not_allowed' })
+  })
+
   it('allows patient symptom trend reads used by the home dashboard', () => {
     expect(
       validateProxyTarget(

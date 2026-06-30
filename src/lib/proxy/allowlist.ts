@@ -14,8 +14,43 @@ export interface AllowedProxyRoute {
   pathPattern?: RegExp
 }
 
+const UUID_RE = '[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
+const ASSESSMENT_RE = `^\\/api\\/v1\\/patients\\/me\\/assessments\\/${UUID_RE}`
+const ASSESSMENT_EXACT_RE = new RegExp(`${ASSESSMENT_RE}$`, 'i')
+const ASSESSMENT_DOCUMENT_RE = new RegExp(`${ASSESSMENT_RE}\\/documents\\/${UUID_RE}$`, 'i')
+const ASSESSMENT_DOCUMENT_CONFIRM_RE = new RegExp(`${ASSESSMENT_RE}\\/documents\\/${UUID_RE}\\/confirm$`, 'i')
+
 export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
-  { prefix: '/api/v1/patients/me/assessments', methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] },
+  { prefix: '/api/v1/patients/me/assessments', methods: ['GET', 'POST'], match: 'exact' },
+  { prefix: '/api/v1/patients/me/assessments', methods: ['GET', 'DELETE'], pathPattern: ASSESSMENT_EXACT_RE },
+  {
+    prefix: '/api/v1/patients/me/assessments',
+    methods: ['POST'],
+    pathPattern: new RegExp(
+      `${ASSESSMENT_RE}\\/(?:story|story\\/voice-upload-url|story\\/transcribe|screening\\/complete|prefill|adaptive\\/prepare|adaptive\\/complete|analysis\\/run|documents|documents\\/upload-url|documents\\/text)$`,
+      'i',
+    ),
+  },
+  {
+    prefix: '/api/v1/patients/me/assessments',
+    methods: ['PATCH'],
+    pathPattern: new RegExp(`${ASSESSMENT_RE}\\/(?:screening\\/answers|adaptive\\/answers)$`, 'i'),
+  },
+  {
+    prefix: '/api/v1/patients/me/assessments',
+    methods: ['GET'],
+    pathPattern: new RegExp(`${ASSESSMENT_RE}\\/(?:screening\\/state|analysis|documents)$`, 'i'),
+  },
+  {
+    prefix: '/api/v1/patients/me/assessments',
+    methods: ['POST'],
+    pathPattern: ASSESSMENT_DOCUMENT_CONFIRM_RE,
+  },
+  {
+    prefix: '/api/v1/patients/me/assessments',
+    methods: ['DELETE'],
+    pathPattern: ASSESSMENT_DOCUMENT_RE,
+  },
   { prefix: '/api/v1/patients/me/consents', methods: ['GET', 'POST', 'PUT', 'PATCH'] },
   { prefix: '/api/v1/patients/me/dashboard', methods: ['GET'] },
   { prefix: '/api/v1/patients/me/symptom-trends', methods: ['GET'] },

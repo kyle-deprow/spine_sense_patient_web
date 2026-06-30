@@ -40,13 +40,11 @@ const SCREENING_ANSWERS_BY_ID = new Map(
   [
     ...fullAssessmentScenario.screening,
     ...fullAssessmentScenario.adaptive,
-    ...fullAssessmentScenario.refinement,
   ].map((answer) => [answer.id, answer]),
 )
 const SCREENING_TEXT_ANSWERS_BY_ID = new Map(
   [
     ...fullAssessmentScenario.adaptiveText,
-    ...fullAssessmentScenario.refinementText,
   ].map((answer) => [answer.id, answer]),
 )
 const FINAL_SCREENING_QUESTION_ID =
@@ -424,9 +422,6 @@ function semanticLocatorForTestId(page: Page, testId: string): Locator | null {
     case 'adaptive-screen':
     case 'adaptive-list':
       return page.getByText(/^Adaptive\s*·\s*Q\d+\s+of\s+\d+$/i).first()
-    case 'refinement-screen':
-    case 'refinement-list':
-      return page.getByText(/^Refinement\s*·\s*Q\d+\s+of\s+\d+$/i).first()
     case 'review-screen':
       return page.getByText('Review Your Assessment').first()
     case 'assessment-processing':
@@ -438,7 +433,6 @@ function semanticLocatorForTestId(page: Page, testId: string): Locator | null {
     case 'tab-home':
       return page.getByRole('tab', { name: /Home/i }).last()
     case 'adaptive-submit':
-    case 'refinement-submit':
       return page.getByRole('button', { name: /^(Continue to next question|Submit answers)$/i }).first()
     default:
       return null
@@ -803,9 +797,6 @@ const POST_SCREENING_STAGE_TEST_IDS = [
     'adaptive-loading-error-state',
     'adaptive-screen',
     'adaptive-error-state',
-    'refinement-loading-state',
-    'refinement-screen',
-    'refinement-error-state',
     'review-screen',
     'assessment-processing',
     'results-screen',
@@ -1085,7 +1076,7 @@ async function answerScreening(page: Page) {
 
 async function answerVisibleDynamicQuestions(
   page: Page,
-  prefix: 'adaptive-question' | 'refinement-question',
+  prefix: 'adaptive-question',
   options: readonly AssessmentAnswer[],
   textAnswers: readonly TextAnswer[],
   submitTestId: string,
@@ -1120,10 +1111,6 @@ async function completeAdaptiveIfPresent(page: Page): Promise<string | null> {
     'adaptive-loading-error-state',
     'adaptive-screen',
     'adaptive-error-state',
-    'refinement-loading-state',
-    'refinement-screen',
-    'refinement-error-state',
-    'review-screen',
   ])
   for (let retryAttempt = 0; retryAttempt < 3; retryAttempt += 1) {
     if (initialStage === 'adaptive-loading-error-state') {
@@ -1132,10 +1119,6 @@ async function completeAdaptiveIfPresent(page: Page): Promise<string | null> {
         'adaptive-loading-state',
         'adaptive-screen',
         'adaptive-error-state',
-        'refinement-loading-state',
-        'refinement-screen',
-        'refinement-error-state',
-        'review-screen',
       ])
     }
 
@@ -1144,10 +1127,6 @@ async function completeAdaptiveIfPresent(page: Page): Promise<string | null> {
         'adaptive-loading-error-state',
         'adaptive-screen',
         'adaptive-error-state',
-        'refinement-loading-state',
-        'refinement-screen',
-        'refinement-error-state',
-        'review-screen',
       ])
       continue
     }
@@ -1161,7 +1140,7 @@ async function completeAdaptiveIfPresent(page: Page): Promise<string | null> {
     if (!(await adaptiveScreen.isVisible({ timeout: 1000 }).catch(() => false))) {
       return waitForAnyVisibleTestId(
         page,
-        ['refinement-loading-state', 'refinement-screen', 'refinement-error-state', 'review-screen'],
+        ['review-screen'],
         60_000,
       ).catch(() => 'left-adaptive-screen')
     }
@@ -1183,9 +1162,6 @@ async function completeAdaptiveIfPresent(page: Page): Promise<string | null> {
       [
         'adaptive-loading-state',
         'adaptive-error-state',
-        'refinement-loading-state',
-        'refinement-screen',
-        'refinement-error-state',
         'review-screen',
       ],
     )
@@ -1193,93 +1169,6 @@ async function completeAdaptiveIfPresent(page: Page): Promise<string | null> {
   }
 
   throw new Error('Adaptive questionnaire did not exit after 20 questions')
-}
-
-async function completeRefinementIfPresent(page: Page, knownStage?: string | null) {
-  const refinementScreen = page.getByTestId('refinement-screen')
-  let initialStage = knownStage ?? await waitForAssessmentStage(page, [
-    'refinement-loading-state',
-    'refinement-screen',
-    'refinement-error-state',
-    'review-screen',
-  ], 60_000)
-  for (let retryAttempt = 0; retryAttempt < 3; retryAttempt += 1) {
-    if (initialStage === 'refinement-error-state') {
-      await waitForEnabledAndClick(page, 'refinement-retry')
-      initialStage = await waitForRetryOutcome(page, 'refinement-error-state', [
-        'refinement-loading-state',
-        'refinement-screen',
-        'review-screen',
-      ])
-    }
-
-    if (initialStage === 'refinement-loading-state') {
-      initialStage = await waitForAssessmentStage(page, [
-        'refinement-screen',
-        'refinement-error-state',
-        'review-screen',
-      ])
-      continue
-    }
-
-    break
-  }
-  if (initialStage !== 'refinement-screen') return
-
-  for (let index = 0; index < 20; index += 1) {
-    if (!(await refinementScreen.isVisible({ timeout: 1000 }).catch(() => false))) return
-    await answerVisibleDynamicQuestions(
-      page,
-      'refinement-question',
-      fullAssessmentScenario.refinement,
-      fullAssessmentScenario.refinementText,
-      'refinement-submit',
-    )
-    const currentQuestionTestId = await visibleDynamicQuestionTestId(page, 'refinement-question')
-    await waitForEnabledAndClick(page, 'refinement-submit')
-    const nextStage = await waitForDynamicQuestionAdvance(
-      page,
-      'refinement-screen',
-      'refinement-question',
-      currentQuestionTestId,
-      'refinement-submit',
-      ['refinement-error-state', 'review-screen'],
-    )
-    if (nextStage !== 'refinement-screen') return
-  }
-
-  throw new Error('Refinement questionnaire did not exit after 20 questions')
-}
-
-async function expectReviewScreenWithRefinementRecovery(page: Page) {
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    if (await page.getByTestId('review-screen').isVisible({ timeout: 1000 }).catch(() => false)) {
-      return
-    }
-
-    if (await page.getByTestId('refinement-error-state').isVisible({ timeout: 1000 }).catch(() => false)) {
-      await waitForEnabledAndClick(page, 'refinement-retry')
-      await waitForRetryOutcome(page, 'refinement-error-state', [
-        'refinement-loading-state',
-        'refinement-screen',
-        'review-screen',
-      ], 120_000)
-      continue
-    }
-
-    if (await page.getByTestId('refinement-loading-state').isVisible({ timeout: 1000 }).catch(() => false)) {
-      await waitForAssessmentStage(page, [
-        'refinement-screen',
-        'refinement-error-state',
-        'review-screen',
-      ], 120_000)
-      continue
-    }
-
-    break
-  }
-
-  await expect(page.getByTestId('review-screen')).toBeVisible({ timeout: 120_000 })
 }
 
 async function completeProfileIfPresent(page: Page) {
@@ -1546,19 +1435,15 @@ test.describe('patient web full assessment flow', () => {
     await submitScreening(page)
 
     const postAdaptiveStage = await completeAdaptiveIfPresent(page)
-
-    await completeRefinementIfPresent(page, postAdaptiveStage)
-
-    await expectReviewScreenWithRefinementRecovery(page)
+    if (postAdaptiveStage !== 'review-screen') {
+      throw new Error(`Expected review-screen after adaptive flow, got ${postAdaptiveStage}`)
+    }
+    await expect(page.getByTestId('review-screen')).toBeVisible({ timeout: 120_000 })
     await expect(page.getByTestId('review-title')).toBeVisible()
     await expect(page.getByText('Review Your Assessment')).toBeVisible()
     await expect(page.getByTestId('review-story')).toBeVisible()
     await expect(page.getByTestId('review-screening')).toBeVisible()
     await expect(page.getByTestId('review-adaptive')).toBeVisible()
-    const reviewRefinement = page.getByTestId('review-refinement')
-    if (await reviewRefinement.isVisible({ timeout: 500 }).catch(() => false)) {
-      await reviewRefinement.scrollIntoViewIfNeeded()
-    }
     await waitForEnabledAndClick(page, 'review-submit')
 
     await expect(page.getByTestId('assessment-processing')).toBeVisible({

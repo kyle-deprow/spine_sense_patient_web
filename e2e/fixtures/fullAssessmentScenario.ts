@@ -112,46 +112,6 @@ export const fullAssessmentScenario = {
         'The symptoms came on gradually without a single injury, and sitting or bending forward tends to flare the low-back pain.',
     },
   ] satisfies readonly TextAnswer[],
-  refinement: [
-    { id: 'L06_Q1', value: 'constant' },
-    { id: 'T00', value: ['no_imaging'] },
-    { id: 'T01', value: ['none'] },
-    { id: 'T06_Q1', value: 'no' },
-    { id: 'T06_Q2', value: 'yes' },
-    { id: 'L05_Q2', value: 7 },
-    { id: 'L06_Q2', value: 'same_all_day' },
-    { id: 'F03_Q1', value: 'no_disruption' },
-    { id: 'F03_Q2', value: 'a_little' },
-    { id: 'F03_Q3', value: 'no' },
-    { id: 'CQ_01', value: 'low_back_only' },
-    { id: 'CQ_02', value: 'not_sure' },
-    { id: 'CQ_03', value: 'no_change' },
-    { id: 'CQ_04', value: 'mri_done' },
-    { id: 'CQ_05', value: ['no'] },
-    { id: 'G01', value: ['relieve_pain', 'return_to_work'] },
-    { id: 'G02', value: 'only_if_conservative_fails' },
-    { id: 'G03', value: 'want_a_plan' },
-  ] satisfies readonly AssessmentAnswer[],
-  refinementText: [
-    {
-      id: 'ref_1',
-      text: 'The pain is mostly centered in my low back and does not clearly travel below the knee.',
-    },
-    {
-      id: 'ref_2',
-      text:
-        'I have not had fever, unexplained weight loss, bowel or bladder changes, or progressive weakness.',
-    },
-    {
-      id: 'ref_3',
-      text:
-        'Physical therapy helped a little temporarily, but symptoms still limit sitting, driving, and normal work tasks.',
-    },
-    {
-      id: 'G04',
-      text: 'No additional concerns beyond the synthetic E2E assessment scenario.',
-    },
-  ] satisfies readonly TextAnswer[],
 } as const
 
 export type FullAssessmentScenario = typeof fullAssessmentScenario

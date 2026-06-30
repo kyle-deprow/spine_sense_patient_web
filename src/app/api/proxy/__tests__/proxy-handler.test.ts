@@ -147,7 +147,7 @@ describe('proxy route handler', () => {
     const csrf = createCsrfToken(CSRF_SECRET, 'proxy-route-test-nonce')
 
     const request = makeProxyRequest(
-      '/api/proxy/api/v1/patients/me/assessments/assessment-123/adaptive/prepare',
+      '/api/proxy/api/v1/patients/me/assessments/10000000-0000-4000-8000-000000000001/adaptive/prepare',
       'POST',
       {
         spine_patient_sess: 'access-token',
@@ -161,15 +161,59 @@ describe('proxy route handler', () => {
     )
     const response = await POST(
       request,
-      makeContext(['api', 'v1', 'patients', 'me', 'assessments', 'assessment-123', 'adaptive', 'prepare']),
+      makeContext([
+        'api',
+        'v1',
+        'patients',
+        'me',
+        'assessments',
+        '10000000-0000-4000-8000-000000000001',
+        'adaptive',
+        'prepare',
+      ]),
     )
 
     expect(response.status).toBe(200)
     expect(mockedBackendFetch).toHaveBeenCalledWith(
-      '/api/v1/patients/me/assessments/assessment-123/adaptive/prepare',
+      '/api/v1/patients/me/assessments/10000000-0000-4000-8000-000000000001/adaptive/prepare',
       expect.any(Object),
       { timeoutMs: LONG_BACKEND_TIMEOUT_MS },
     )
+  })
+
+  it('rejects retired assessment phase routes before backend forwarding', async () => {
+    const csrf = createCsrfToken(CSRF_SECRET, 'proxy-route-test-nonce')
+    const request = makeProxyRequest(
+      '/api/proxy/api/v1/patients/me/assessments/10000000-0000-4000-8000-000000000001/refinement/run',
+      'POST',
+      {
+        spine_patient_sess: 'access-token',
+        spine_patient_csrf: csrf,
+      },
+      {
+        'Content-Type': 'application/json',
+        [CSRF_HEADER]: csrf,
+        Origin: ORIGIN,
+      },
+    )
+
+    const response = await POST(
+      request,
+      makeContext([
+        'api',
+        'v1',
+        'patients',
+        'me',
+        'assessments',
+        '10000000-0000-4000-8000-000000000001',
+        'refinement',
+        'run',
+      ]),
+    )
+
+    expect(response.status).toBe(404)
+    await expect(response.json()).resolves.toEqual({ error: 'proxy_path_not_allowed' })
+    expect(mockedBackendFetch).not.toHaveBeenCalled()
   })
 
   it('forwards bodyless intake completion POSTs without an empty JSON body', async () => {
@@ -207,13 +251,13 @@ describe('proxy route handler', () => {
     expect(new Headers(requestInit?.headers).has('content-type')).toBe(false)
   })
 
-  it('classifies only adaptive, refinement, and analysis run assessment calls as long-running', () => {
+  it('classifies only adaptive and analysis run assessment calls as long-running', () => {
     expect(
       isLongAssessmentBackendCall('/api/v1/patients/me/assessments/assessment-123/adaptive/prepare'),
     ).toBe(true)
     expect(
-      isLongAssessmentBackendCall('/api/v1/patients/me/assessments/assessment-123/refinement/run'),
-    ).toBe(true)
+      isLongAssessmentBackendCall('/api/v1/patients/me/assessments/assessment-123/prefill'),
+    ).toBe(false)
     expect(
       isLongAssessmentBackendCall('/api/v1/patients/me/assessments/assessment-123/analysis/run'),
     ).toBe(true)
