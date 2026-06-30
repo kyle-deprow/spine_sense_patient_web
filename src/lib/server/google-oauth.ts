@@ -1,0 +1,219 @@
+import 'server-only'
+
+import { createHash, randomBytes } from 'crypto'
+import type { NextRequest } from 'next/server'
+import { NextResponse } from 'next/server'
+
+import { issueSessionIssuedAt, setAuthCookies } from '@/lib/auth/cookies'
+import { auditLog } from '@/lib/server/audit'
+import { issueCsrfCookie } from '@/lib/server/auth'
+import { backendFetch, hasTokenPair, readJsonBody } from '@/lib/server/backend'
+import { getPatientWebConfig } from '@/lib/server/config'
+import type { BackendLoginResponse } from '@/types/auth'
+
+const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
+const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
+const CALLBACK_PATH = '/api/auth/google/callback'
+const COOKIE_MAX_AGE_SECONDS = 10 * 60
+
+const OAUTH_COOKIE_NAMES = {
+  state: 'spine_google_oauth_state',
+  verifier: 'spine_google_oauth_verifier',
+  mode: 'spine_google_oauth_mode',
+  returnTo: 'spine_google_oauth_return_to',
+} as const
+
+type GoogleAuthMode = 'login' | 'register'
+
+type GoogleTokenResponse = {
+  id_token?: unknown
+}
+
+function randomUrlToken(byteLength = 32): string {
+  return randomBytes(byteLength).toString('base64url')
+}
+
+function pkceChallenge(verifier: string): string {
+  return createHash('sha256').update(verifier).digest('base64url')
+}
+
+function oauthCookieOptions() {
+  return {
+    httpOnly: true,
+    secure: process.env.NODE_ENV !== 'development',
+    sameSite: 'lax' as const,
+    path: '/api/auth/google',
+    maxAge: COOKIE_MAX_AGE_SECONDS,
+  }
+}
+
+function clearOauthCookies(response: NextResponse): void {
+  for (const name of Object.values(OAUTH_COOKIE_NAMES)) {
+    response.cookies.set(name, '', {
+      ...oauthCookieOptions(),
+      maxAge: 0,
+    })
+  }
+}
+
+function requestOrigin(request: NextRequest): string {
+  const { publicUrl } = getPatientWebConfig()
+  if (publicUrl) return publicUrl.replace(/\/+$/, '')
+  return request.nextUrl.origin
+}
+
+function redirectUri(request: NextRequest): string {
+  return `${requestOrigin(request)}${CALLBACK_PATH}`
+}
+
+function parseMode(value: string | null): GoogleAuthMode {
+  return value === 'register' ? 'register' : 'login'
+}
+
+function safeReturnTo(value: string | null): string {
+  if (!value || !value.startsWith('/') || value.startsWith('//')) return '/'
+  if (value.includes('\\') || value.includes('\0')) return '/'
+  return value
+}
+
+function redirectWithinApp(request: NextRequest, path: string): NextResponse {
+  return NextResponse.redirect(new URL(path, requestOrigin(request)))
+}
+
+function googleConfig(): { clientId: string; clientSecret: string } {
+  const { googleClientId, googleClientSecret } = getPatientWebConfig()
+  if (!googleClientId || !googleClientSecret) {
+    throw new Error('Google OAuth is not configured for patient web')
+  }
+  return { clientId: googleClientId, clientSecret: googleClientSecret }
+}
+
+export function startGoogleOAuth(request: NextRequest): NextResponse {
+  const { clientId } = googleConfig()
+  const mode = parseMode(request.nextUrl.searchParams.get('mode'))
+  const returnTo = safeReturnTo(request.nextUrl.searchParams.get('returnTo'))
+  const state = randomUrlToken()
+  const verifier = randomUrlToken(48)
+
+  const authUrl = new URL(GOOGLE_AUTH_URL)
+  authUrl.searchParams.set('client_id', clientId)
+  authUrl.searchParams.set('redirect_uri', redirectUri(request))
+  authUrl.searchParams.set('response_type', 'code')
+  authUrl.searchParams.set('scope', 'openid email')
+  authUrl.searchParams.set('state', state)
+  authUrl.searchParams.set('nonce', randomUrlToken())
+  authUrl.searchParams.set('code_challenge', pkceChallenge(verifier))
+  authUrl.searchParams.set('code_challenge_method', 'S256')
+  authUrl.searchParams.set('prompt', 'select_account')
+
+  const response = NextResponse.redirect(authUrl)
+  response.cookies.set(OAUTH_COOKIE_NAMES.state, state, oauthCookieOptions())
+  response.cookies.set(OAUTH_COOKIE_NAMES.verifier, verifier, oauthCookieOptions())
+  response.cookies.set(OAUTH_COOKIE_NAMES.mode, mode, oauthCookieOptions())
+  response.cookies.set(OAUTH_COOKIE_NAMES.returnTo, returnTo, oauthCookieOptions())
+  auditLog({
+    ts: new Date().toISOString(),
+    event: 'auth.google.start',
+    method: 'GET',
+  })
+  return response
+}
+
+export async function completeGoogleOAuth(request: NextRequest): Promise<NextResponse> {
+  const expectedState = request.cookies.get(OAUTH_COOKIE_NAMES.state)?.value
+  const verifier = request.cookies.get(OAUTH_COOKIE_NAMES.verifier)?.value
+  const mode = parseMode(request.cookies.get(OAUTH_COOKIE_NAMES.mode)?.value ?? null)
+  const returnTo = safeReturnTo(request.cookies.get(OAUTH_COOKIE_NAMES.returnTo)?.value ?? null)
+  const state = request.nextUrl.searchParams.get('state')
+  const code = request.nextUrl.searchParams.get('code')
+
+  if (!expectedState || !verifier || !state || state !== expectedState || !code) {
+    return googleFailureRedirect(request, mode, 'state_mismatch')
+  }
+
+  try {
+    const token = await exchangeGoogleCode(request, code, verifier)
+    if (!token.id_token || typeof token.id_token !== 'string') {
+      return googleFailureRedirect(request, mode, 'missing_id_token')
+    }
+
+    const backendPath = mode === 'register' ? '/api/v1/auth/register/google' : '/api/v1/auth/login/google'
+    const backendResponse = await backendFetch(backendPath, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ id_token: token.id_token }),
+    })
+    const data = await readJsonBody<BackendLoginResponse>(backendResponse)
+
+    if (!backendResponse.ok || !hasTokenPair(data)) {
+      return googleFailureRedirect(request, mode, 'backend_auth_failed')
+    }
+
+    const response = redirectWithinApp(request, returnTo)
+    setAuthCookies(response, {
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token,
+    })
+    issueSessionIssuedAt(response)
+    issueCsrfCookie(response)
+    clearOauthCookies(response)
+    auditLog({
+      ts: new Date().toISOString(),
+      event: mode === 'register' ? 'auth.google.register.success' : 'auth.google.login.success',
+      method: 'GET',
+      status: backendResponse.status,
+    })
+    return response
+  } catch {
+    return googleFailureRedirect(request, mode, 'callback_failed')
+  }
+}
+
+async function exchangeGoogleCode(
+  request: NextRequest,
+  code: string,
+  verifier: string,
+): Promise<GoogleTokenResponse> {
+  const { clientId, clientSecret } = googleConfig()
+  const body = new URLSearchParams({
+    code,
+    client_id: clientId,
+    client_secret: clientSecret,
+    redirect_uri: redirectUri(request),
+    grant_type: 'authorization_code',
+    code_verifier: verifier,
+  })
+
+  const response = await fetch(GOOGLE_TOKEN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body,
+    cache: 'no-store',
+    signal: AbortSignal.timeout(15_000),
+  })
+
+  if (!response.ok) {
+    throw new Error('Google OAuth token exchange failed')
+  }
+
+  return await response.json() as GoogleTokenResponse
+}
+
+function googleFailureRedirect(
+  request: NextRequest,
+  mode: GoogleAuthMode,
+  reason: string,
+): NextResponse {
+  const target = mode === 'register'
+    ? '/register?socialAuthError=google'
+    : '/login?socialAuthError=google'
+  const response = redirectWithinApp(request, target)
+  clearOauthCookies(response)
+  auditLog({
+    ts: new Date().toISOString(),
+    event: mode === 'register' ? 'auth.google.register.failure' : 'auth.google.login.failure',
+    method: 'GET',
+    reason,
+  })
+  return response
+}

@@ -3,6 +3,10 @@ export interface PatientWebConfig {
   csrfSecret: string
   allowedOrigins: string[]
   storageOrigins: string[]
+  googleClientId: string
+  googleClientSecret: string
+  googleOauthBaaConfirmed: boolean
+  publicUrl: string | null
 }
 
 function splitList(value: string | undefined): string[] {
@@ -63,6 +67,17 @@ export function getPatientWebConfig(): PatientWebConfig {
   const backendInternalUrl = process.env.BACKEND_INTERNAL_URL ?? 'http://localhost:8000'
   validateBackendUrl(backendInternalUrl)
 
+  const googleClientId = process.env.GOOGLE_CLIENT_ID ?? ''
+  const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET ?? ''
+  const googleOauthBaaConfirmed = process.env.GOOGLE_OAUTH_BAA_CONFIRMED === 'true'
+  if (
+    process.env.NODE_ENV === 'production' &&
+    (googleClientId || googleClientSecret) &&
+    !googleOauthBaaConfirmed
+  ) {
+    throw new Error('Google OAuth production traffic requires GOOGLE_OAUTH_BAA_CONFIRMED=true')
+  }
+
   return {
     backendInternalUrl,
     csrfSecret,
@@ -71,5 +86,9 @@ export function getPatientWebConfig(): PatientWebConfig {
       process.env.NEXT_PUBLIC_STORAGE_DOMAINS ??
         'https://*.s3.amazonaws.com https://*.storage.googleapis.com',
     ),
+    googleClientId,
+    googleClientSecret,
+    googleOauthBaaConfirmed,
+    publicUrl: process.env.PATIENT_WEB_PUBLIC_URL ?? null,
   }
 }
