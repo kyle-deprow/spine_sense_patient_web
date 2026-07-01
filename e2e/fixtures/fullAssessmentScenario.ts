@@ -91,6 +91,7 @@ export const fullAssessmentScenario = {
   ] satisfies readonly AssessmentAnswer[],
   adaptive: [
     { id: 'L05_Q2', value: 7 },
+    { id: 'L06_Q2', value: 'same_all_day' },
     { id: 'lumbar_leg_distribution', value: 'none' },
     { id: 'lumbar_sitting_tolerance', value: 'under_10_min' },
     { id: 'lumbar_bending_effect', value: 'worsens' },
@@ -98,18 +99,29 @@ export const fullAssessmentScenario = {
     { id: 'previous_treatment', value: ['physical_therapy'] },
     { id: 'treatment_effectiveness', value: 'somewhat_helpful' },
     { id: 'functional_daily_activities', value: ['driving', 'work', 'exercise'] },
+    { id: 'F03_Q1', value: 'occasionally' },
+    { id: 'F03_Q2', value: 'moderate' },
+    { id: 'F03_Q3', value: 'no' },
+    { id: 'F04', value: ['sitting', 'driving', 'exercise_recreation'] },
     { id: 'lumbar_morning_stiffness', value: 'none' },
     { id: 'pain_pattern', value: 'constant' },
     { id: 'aggravating_factors', value: ['sitting', 'bending', 'lifting'] },
     { id: 'alleviating_factors', value: ['heat', 'position_change'] },
     { id: 'mental_health_impact', value: 'mild' },
     { id: 'work_impact', value: 'modified_duties' },
+    { id: 'G01', value: ['relieve_pain', 'return_to_work', 'understand_diagnosis'] },
+    { id: 'G02', value: 'only_if_conservative_fails' },
+    { id: 'G03', value: 'want_a_plan' },
   ] satisfies readonly AssessmentAnswer[],
   adaptiveText: [
     {
       id: 'lumbar_onset_context',
       text:
         'The symptoms came on gradually without a single injury, and sitting or bending forward tends to flare the low-back pain.',
+    },
+    {
+      id: 'G04',
+      text: 'I want to understand why sitting and bending keep flaring the low-back pain.',
     },
   ] satisfies readonly TextAnswer[],
 } as const
