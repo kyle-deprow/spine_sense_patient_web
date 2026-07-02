@@ -19,6 +19,10 @@ const ASSESSMENT_RE = `^\\/api\\/v1\\/patients\\/me\\/assessments\\/${UUID_RE}`
 const ASSESSMENT_EXACT_RE = new RegExp(`${ASSESSMENT_RE}$`, 'i')
 const ASSESSMENT_DOCUMENT_RE = new RegExp(`${ASSESSMENT_RE}\\/documents\\/${UUID_RE}$`, 'i')
 const ASSESSMENT_DOCUMENT_CONFIRM_RE = new RegExp(`${ASSESSMENT_RE}\\/documents\\/${UUID_RE}\\/confirm$`, 'i')
+const ASSESSMENT_REPORT_RE = new RegExp(`${ASSESSMENT_RE}\\/reports$`, 'i')
+const REPORT_RE = `^\\/api\\/v1\\/patients\\/me\\/reports\\/${UUID_RE}`
+const REPORT_EXACT_RE = new RegExp(`${REPORT_RE}$`, 'i')
+const REPORT_DOWNLOAD_URL_RE = new RegExp(`${REPORT_RE}\\/download-url$`, 'i')
 
 export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
   { prefix: '/api/v1/patients/me/assessments', methods: ['GET', 'POST'], match: 'exact' },
@@ -48,8 +52,19 @@ export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
   },
   {
     prefix: '/api/v1/patients/me/assessments',
+    methods: ['POST'],
+    pathPattern: ASSESSMENT_REPORT_RE,
+  },
+  {
+    prefix: '/api/v1/patients/me/assessments',
     methods: ['DELETE'],
     pathPattern: ASSESSMENT_DOCUMENT_RE,
+  },
+  { prefix: '/api/v1/patients/me/reports', methods: ['GET'], pathPattern: REPORT_EXACT_RE },
+  {
+    prefix: '/api/v1/patients/me/reports',
+    methods: ['POST'],
+    pathPattern: REPORT_DOWNLOAD_URL_RE,
   },
   { prefix: '/api/v1/patients/me/consents', methods: ['GET', 'POST', 'PUT', 'PATCH'] },
   { prefix: '/api/v1/patients/me/dashboard', methods: ['GET'] },

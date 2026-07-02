@@ -81,6 +81,62 @@ describe('proxy allowlist', () => {
     ).toEqual({ ok: false, status: 404, code: 'proxy_path_not_allowed' })
   })
 
+  it('allows assessment report routes explicitly', () => {
+    const assessmentId = '10000000-0000-4000-8000-000000000001'
+    const reportId = '10000000-0000-4000-8000-000000000002'
+
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'assessments', assessmentId, 'reports'],
+        'POST',
+        `/api/proxy/api/v1/patients/me/assessments/${assessmentId}/reports`,
+      ),
+    ).toEqual({
+      ok: true,
+      targetPath: `/api/v1/patients/me/assessments/${assessmentId}/reports`,
+    })
+
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'reports', reportId],
+        'GET',
+        `/api/proxy/api/v1/patients/me/reports/${reportId}`,
+      ),
+    ).toEqual({
+      ok: true,
+      targetPath: `/api/v1/patients/me/reports/${reportId}`,
+    })
+
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'reports', reportId, 'download-url'],
+        'POST',
+        `/api/proxy/api/v1/patients/me/reports/${reportId}/download-url`,
+      ),
+    ).toEqual({
+      ok: true,
+      targetPath: `/api/v1/patients/me/reports/${reportId}/download-url`,
+    })
+  })
+
+  it('blocks malformed assessment report routes at the BFF boundary', () => {
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'assessments', 'not-a-uuid', 'reports'],
+        'POST',
+        '/api/proxy/api/v1/patients/me/assessments/not-a-uuid/reports',
+      ),
+    ).toEqual({ ok: false, status: 404, code: 'proxy_path_not_allowed' })
+
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'reports', 'not-a-uuid'],
+        'GET',
+        '/api/proxy/api/v1/patients/me/reports/not-a-uuid',
+      ),
+    ).toEqual({ ok: false, status: 404, code: 'proxy_path_not_allowed' })
+  })
+
   it('does not allow arbitrary patient child routes through the patient profile route', () => {
     expect(
       validateProxyTarget(

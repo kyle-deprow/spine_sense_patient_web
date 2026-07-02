@@ -17,6 +17,8 @@ const GATEWAY_RESET_URL = process.env.PATIENT_WEB_GATEWAY_RESET_URL
 const GATEWAY_RESET_TOKEN = process.env.PATIENT_WEB_GATEWAY_RESET_TOKEN
 const EXPECT_SECURE_COOKIES = process.env.PATIENT_WEB_EXPECT_SECURE_COOKIES === 'true'
 const FULL_FLOW_TIMEOUT_MS = 15 * 60 * 1000
+const ASSESSMENT_REPORT_PROXY_PATH_RE =
+  /^\/api\/proxy\/api\/v1\/patients\/me\/assessments\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/reports$/i
 
 type BrowserCookie = {
   name: string
@@ -132,6 +134,14 @@ function installPhiSafeDiagnostics(page: Page) {
         .catch(() => undefined)
     }
   })
+}
+
+function isAssessmentReportGenerationResponse(response: PlaywrightResponse): boolean {
+  const url = new URL(response.url())
+  return (
+    response.request().method() === 'POST' &&
+    ASSESSMENT_REPORT_PROXY_PATH_RE.test(url.pathname)
+  )
 }
 
 async function postTestSupport(
@@ -1460,7 +1470,21 @@ test.describe('patient web full assessment flow', () => {
     await expect(page.getByTestId('results-treatment')).toBeVisible()
     await expect(page.getByTestId('results-self-care')).toBeVisible()
     await expect(page.getByTestId('results-share')).toBeVisible()
-    await expect(page.getByTestId('results-share')).toHaveAttribute('aria-disabled', 'true')
+    await expect(page.getByTestId('results-share')).toBeEnabled()
+    await expect(page.getByTestId('results-share')).toHaveAttribute(
+      'aria-label',
+      'Generate PDF report',
+    )
+    const reportResponse = await clickAndWaitForResponse({
+      page,
+      testId: 'results-share',
+      matches: isAssessmentReportGenerationResponse,
+      retryErrorTestId: 'results-report-error',
+      timeout: 120_000,
+      attempts: 2,
+    })
+    expect(reportResponse.status()).toBe(201)
+    await expect(page.getByTestId('results-report-error')).toBeHidden()
     await waitForEnabledAndClick(page, 'tab-home', 30_000)
 
     await expect(page.locator('[data-testid="home-screen"]:visible')).toBeVisible({ timeout: 60_000 })

@@ -181,6 +181,41 @@ describe('proxy route handler', () => {
     )
   })
 
+  it('forwards assessment report generation through the authenticated proxy', async () => {
+    mockedBackendFetch.mockResolvedValue(
+      Response.json({ id: 'report-1', downloadUrl: 'https://storage.example.test/report.pdf' }, { status: 201 }),
+    )
+    const csrf = createCsrfToken(CSRF_SECRET, 'proxy-route-test-nonce')
+    const assessmentId = '10000000-0000-4000-8000-000000000001'
+
+    const request = makeProxyRequest(
+      `/api/proxy/api/v1/patients/me/assessments/${assessmentId}/reports`,
+      'POST',
+      {
+        spine_patient_sess: 'access-token',
+        spine_patient_csrf: csrf,
+      },
+      {
+        'Content-Type': 'application/json',
+        [CSRF_HEADER]: csrf,
+        Origin: ORIGIN,
+      },
+    )
+    const response = await POST(
+      request,
+      makeContext(['api', 'v1', 'patients', 'me', 'assessments', assessmentId, 'reports']),
+    )
+
+    expect(response.status).toBe(201)
+    expect(mockedBackendFetch).toHaveBeenCalledWith(
+      `/api/v1/patients/me/assessments/${assessmentId}/reports`,
+      expect.objectContaining({
+        method: 'POST',
+      }),
+      {},
+    )
+  })
+
   it('rejects retired assessment phase routes before backend forwarding', async () => {
     const csrf = createCsrfToken(CSRF_SECRET, 'proxy-route-test-nonce')
     const request = makeProxyRequest(
