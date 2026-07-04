@@ -161,8 +161,16 @@ async function resetBackend(request: APIRequestContext) {
   if (!BACKEND_RESET_URL) {
     throw new Error('PATIENT_WEB_BACKEND_RESET_URL is required for full assessment E2E')
   }
+  if (!BACKEND_RESET_TOKEN) {
+    throw new Error('PATIENT_WEB_BACKEND_RESET_TOKEN is required for full assessment E2E')
+  }
 
   if (GATEWAY_RESET_URL) {
+    if (!GATEWAY_RESET_TOKEN) {
+      throw new Error(
+        'PATIENT_WEB_GATEWAY_RESET_TOKEN is required when PATIENT_WEB_GATEWAY_RESET_URL is set',
+      )
+    }
     await postTestSupport(request, GATEWAY_RESET_URL, GATEWAY_RESET_TOKEN, 'patient web gateway reset')
   }
 

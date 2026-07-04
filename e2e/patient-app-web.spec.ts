@@ -32,13 +32,21 @@ async function resetBackend(request: APIRequestContext) {
       "PATIENT_WEB_BACKEND_RESET_URL is required so patient web E2E starts from seeded state",
     );
   }
+  if (!BACKEND_RESET_TOKEN) {
+    throw new Error(
+      "PATIENT_WEB_BACKEND_RESET_TOKEN is required so patient web E2E starts from seeded state",
+    );
+  }
 
   if (GATEWAY_RESET_URL) {
+    if (!GATEWAY_RESET_TOKEN) {
+      throw new Error(
+        "PATIENT_WEB_GATEWAY_RESET_TOKEN is required when PATIENT_WEB_GATEWAY_RESET_URL is set",
+      );
+    }
     const gatewayResponse = await request.post(
       GATEWAY_RESET_URL,
-      GATEWAY_RESET_TOKEN
-        ? { headers: { authorization: `Bearer ${GATEWAY_RESET_TOKEN}` } }
-        : {},
+      { headers: { authorization: `Bearer ${GATEWAY_RESET_TOKEN}` } },
     );
     expect(
       gatewayResponse.ok(),
@@ -48,9 +56,7 @@ async function resetBackend(request: APIRequestContext) {
 
   const response = await request.post(
     BACKEND_RESET_URL,
-    BACKEND_RESET_TOKEN
-      ? { headers: { authorization: `Bearer ${BACKEND_RESET_TOKEN}` } }
-      : {},
+    { headers: { authorization: `Bearer ${BACKEND_RESET_TOKEN}` } },
   );
   const responseText = await response.text();
   expect(
