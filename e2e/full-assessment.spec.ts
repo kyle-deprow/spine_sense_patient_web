@@ -1473,11 +1473,17 @@ test.describe('patient web full assessment flow', () => {
     await expect(page.getByTestId('results-share')).toBeEnabled()
     await expect(page.getByTestId('results-share')).toHaveAttribute(
       'aria-label',
-      'Generate PDF report',
+      'Open PDF report options',
+    )
+    await page.getByTestId('results-share').click()
+    await expect(page.getByTestId('results-report-options')).toBeVisible()
+    await expect(page.getByTestId('results-report-options-generate')).toHaveAttribute(
+      'aria-label',
+      'Generate PDF',
     )
     const reportResponse = await clickAndWaitForResponse({
       page,
-      testId: 'results-share',
+      testId: 'results-report-options-generate',
       matches: isAssessmentReportGenerationResponse,
       retryErrorTestId: 'results-report-error',
       timeout: 120_000,

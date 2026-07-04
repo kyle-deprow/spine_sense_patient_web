@@ -261,8 +261,15 @@ async function expectSeededClinicalResults(page: Page) {
   await expect(page.getByTestId("results-share")).toBeEnabled();
   await expect(page.getByTestId("results-share")).toHaveAttribute(
     "aria-label",
-    "Generate PDF report",
+    "Open PDF report options",
   );
+  await page.getByTestId("results-share").click();
+  await expect(page.getByTestId("results-report-options")).toBeVisible();
+  await expect(page.getByTestId("results-report-options-generate")).toHaveAttribute(
+    "aria-label",
+    "Generate PDF",
+  );
+  await page.getByTestId("results-report-options-cancel").click();
   await page.getByTestId("sticky-tab-wrapper").scrollIntoViewIfNeeded();
   await expect(page.getByText("Treatment Strategy")).toBeVisible();
 
