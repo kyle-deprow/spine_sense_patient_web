@@ -23,6 +23,17 @@ function requireSecret(name: string, fallback?: string): string {
   throw new Error(`${name} is required outside development`)
 }
 
+function parseBooleanEnv(name: string): boolean {
+  const value = process.env[name]
+  if (value === undefined || value === '') return false
+
+  const normalized = value.toLowerCase()
+  if (normalized === 'true') return true
+  if (normalized === 'false') return false
+
+  throw new Error(`${name} must be true or false`)
+}
+
 function validateBackendUrl(url: string): void {
   let parsed: URL
   try {
@@ -69,7 +80,7 @@ export function getPatientWebConfig(): PatientWebConfig {
 
   const googleClientId = process.env.GOOGLE_CLIENT_ID ?? ''
   const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET ?? ''
-  const googleOauthBaaConfirmed = process.env.GOOGLE_OAUTH_BAA_CONFIRMED === 'true'
+  const googleOauthBaaConfirmed = parseBooleanEnv('GOOGLE_OAUTH_BAA_CONFIRMED')
   if (
     process.env.NODE_ENV === 'production' &&
     (googleClientId || googleClientSecret) &&
