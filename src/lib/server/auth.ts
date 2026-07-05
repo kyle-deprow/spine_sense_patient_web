@@ -10,15 +10,25 @@ import { auditLog, extractUserIdFromToken } from '@/lib/server/audit'
 import type { BackendLoginResponse, BackendTokenPair } from '@/types/auth'
 
 type JsonRecord = Record<string, unknown>
+type CredentialAuthErrorMode = 'credential' | 'registration'
 
-function normalizeAuthError(backendStatus: number): { status: number; body: { error: string } } {
+function normalizeAuthError(
+  backendStatus: number,
+  mode: CredentialAuthErrorMode = 'credential',
+): { status: number; body: { error: string } } {
   if (backendStatus === 429) {
     // Rate limit from the backend — safe to surface
     return { status: 429, body: { error: 'too_many_requests' } }
   }
+  if (mode === 'registration' && backendStatus === 409) {
+    return { status: 409, body: { error: 'conflict' } }
+  }
   if (backendStatus === 422 || backendStatus === 400) {
     // Validation error (e.g. malformed request body) — safe to surface as 400
     return { status: 400, body: { error: 'invalid_request' } }
+  }
+  if (mode === 'registration' && backendStatus >= 500) {
+    return { status: 502, body: { error: 'server_error' } }
   }
   if (backendStatus === 503 || backendStatus === 502) {
     // Backend unavailable — already handled upstream via BackendUnavailableError,
@@ -55,12 +65,13 @@ export async function forwardCredentialAuth(
   backendPath: string,
   requestBody: unknown,
   request?: NextRequest,
+  options: { errorMode?: CredentialAuthErrorMode } = {},
 ): Promise<NextResponse> {
   const backendResponse = await backendFetch(backendPath, authBackendRequest(requestBody))
   const data = await readJsonBody<BackendLoginResponse>(backendResponse)
 
   if (!backendResponse.ok) {
-    const normalized = normalizeAuthError(backendResponse.status)
+    const normalized = normalizeAuthError(backendResponse.status, options.errorMode)
     return jsonNoStore(normalized.body, { status: normalized.status })
   }
 

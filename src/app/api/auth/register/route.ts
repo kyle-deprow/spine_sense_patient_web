@@ -77,7 +77,12 @@ export async function POST(request: NextRequest) {
 
   let response: Response
   try {
-    response = await forwardCredentialAuth('/api/v1/auth/register/patient', normalizedBody)
+    response = await forwardCredentialAuth(
+      '/api/v1/auth/register/patient',
+      normalizedBody,
+      undefined,
+      { errorMode: 'registration' },
+    )
   } catch (err) {
     if (err instanceof BackendUnavailableError) {
       return jsonNoStore({ error: 'service_unavailable' }, { status: 503 })

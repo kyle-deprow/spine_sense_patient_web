@@ -149,4 +149,38 @@ describe('register route handler', () => {
     expect(response.status).toBe(503)
     await expect(response.json()).resolves.toEqual({ error: 'service_unavailable' })
   })
+
+  it('preserves duplicate registration as a conflict instead of a login failure', async () => {
+    mockedBackendFetch.mockResolvedValue(
+      Response.json({ detail: 'Email already registered' }, { status: 409 }),
+    )
+
+    const response = await POST(makeRegisterRequest({
+      email: 'patient@example.test',
+      password: 'Password123!!',
+      firstName: 'Synthetic',
+      lastName: 'Patient',
+      dateOfBirth: '1990-01-15',
+    }, '203.0.113.14'))
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({ error: 'conflict' })
+  })
+
+  it('maps backend registration server failures to a server error, not auth_failed', async () => {
+    mockedBackendFetch.mockResolvedValue(
+      Response.json({ detail: 'internal error' }, { status: 500 }),
+    )
+
+    const response = await POST(makeRegisterRequest({
+      email: 'patient@example.test',
+      password: 'Password123!!',
+      firstName: 'Synthetic',
+      lastName: 'Patient',
+      dateOfBirth: '1990-01-15',
+    }, '203.0.113.15'))
+
+    expect(response.status).toBe(502)
+    await expect(response.json()).resolves.toEqual({ error: 'server_error' })
+  })
 })
