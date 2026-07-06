@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -12,6 +12,7 @@ let exportDir: string | undefined
 async function makeExportFile(fileName: string, body: string | Uint8Array): Promise<string> {
   exportDir = await mkdtemp(path.join(tmpdir(), 'spine-patient-web-export-'))
   const filePath = path.join(exportDir, fileName)
+  await mkdir(path.dirname(filePath), { recursive: true })
   await writeFile(filePath, body)
   vi.stubEnv('PATIENT_APP_WEB_EXPORT_DIR', exportDir)
   return filePath
@@ -28,6 +29,10 @@ describe('patient app export route', () => {
 
   it.each([
     ['Satoshi-Regular.ttf', 'font/ttf'],
+    [
+      'assets/node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/Ionicons.b4eb097d35f44ed943676fd56f6bdc51.ttf',
+      'font/ttf',
+    ],
     ['Satoshi-Regular.otf', 'font/otf'],
   ])('serves %s with the expected font content type', async (fileName, contentType) => {
     await makeExportFile(fileName, new Uint8Array([0, 1, 2, 3]))
@@ -58,7 +63,8 @@ describe('patient app export route', () => {
 
     const html = await response.text()
     expect(html).toContain('<style nonce="test-nonce" data-patient-web-compat>')
-    expect(html).toContain("font-family: 'Ionicons'")
+    expect(html).not.toContain("font-family: 'Ionicons'")
+    expect(html).not.toContain('@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts')
     expect(html).toContain('[data-testid="sticky-tab-wrapper"]')
     expect(html).toContain('<script data-patient-web-style-nonce nonce="test-nonce">')
     expect(html).toContain('d.createElement=function')
@@ -110,7 +116,6 @@ describe('patient app export route', () => {
     expect(response.status).toBe(200)
     const html = await response.text()
     expect(html.match(/data-patient-web-compat/g)).toHaveLength(1)
-    expect(html).not.toContain("font-family: 'Ionicons'")
     expect(html).toContain('<style nonce="test-nonce" data-patient-web-compat>')
   })
 })

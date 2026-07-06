@@ -120,21 +120,6 @@ const SYSTEM_FONT_STACK =
   '-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
 
 const WEB_COMPATIBILITY_STYLES = `<style data-patient-web-compat>
-@font-face {
-  font-family: 'Ionicons';
-  src: url('/assets/node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/Ionicons.b4eb097d35f44ed943676fd56f6bdc51.ttf') format('truetype');
-  font-display: block;
-}
-@font-face {
-  font-family: 'MaterialCommunityIcons';
-  src: url('/assets/node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/MaterialCommunityIcons.6e435534bd35da5fef04168860a9b8fa.ttf') format('truetype');
-  font-display: block;
-}
-@font-face {
-  font-family: 'MaterialIcons';
-  src: url('/assets/node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/MaterialIcons.4e85bc9ebe07e0340c9c4fc2f6c38908.ttf') format('truetype');
-  font-display: block;
-}
 @font-face { font-family: 'Satoshi-Regular'; src: local('unused'); font-weight: 400; }
 @font-face { font-family: 'Satoshi-Medium'; src: local('unused'); font-weight: 500; }
 @font-face { font-family: 'Satoshi-Bold'; src: local('unused'); font-weight: 700; }
