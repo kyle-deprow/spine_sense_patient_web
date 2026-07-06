@@ -115,6 +115,81 @@ describe('Google OAuth BFF routes', () => {
     expect(setCookie).not.toContain('google-id-token')
   })
 
+  it('redirects existing Google registration emails to login with an actionable reason', async () => {
+    const startResponse = startGoogle(
+      new NextRequest('http://localhost/api/auth/google/start?mode=register&returnTo=/'),
+    )
+    const state = new URL(startResponse.headers.get('location') ?? '').searchParams.get('state')
+    const cookies = cookieHeaderFrom(startResponse)
+    googleFetch.mockResolvedValueOnce(Response.json({ id_token: 'google-id-token' }))
+    mockedBackendFetch.mockResolvedValueOnce(
+      Response.json({ detail: 'ACCOUNT_EXISTS_REQUIRES_LOGIN' }, { status: 409 }),
+    )
+
+    const callbackRequest = new NextRequest(
+      `http://localhost/api/auth/google/callback?code=auth-code&state=${state}`,
+      { headers: { Cookie: cookies } },
+    )
+    const response = await completeGoogle(callbackRequest)
+
+    expect(response.status).toBe(307)
+    expect(response.headers.get('location')).toBe(
+      'http://localhost/login?socialAuthError=account_exists',
+    )
+    expect(response.headers.getSetCookie().join('\n')).toContain('spine_google_oauth_state=;')
+  })
+
+  it('redirects already-linked Google registration attempts to login with an actionable reason', async () => {
+    const startResponse = startGoogle(
+      new NextRequest('http://localhost/api/auth/google/start?mode=register&returnTo=/'),
+    )
+    const state = new URL(startResponse.headers.get('location') ?? '').searchParams.get('state')
+    const cookies = cookieHeaderFrom(startResponse)
+    googleFetch.mockResolvedValueOnce(Response.json({ id_token: 'google-id-token' }))
+    mockedBackendFetch.mockResolvedValueOnce(
+      Response.json(
+        { detail: 'Social identity already linked to another account' },
+        { status: 409 },
+      ),
+    )
+
+    const callbackRequest = new NextRequest(
+      `http://localhost/api/auth/google/callback?code=auth-code&state=${state}`,
+      { headers: { Cookie: cookies } },
+    )
+    const response = await completeGoogle(callbackRequest)
+
+    expect(response.status).toBe(307)
+    expect(response.headers.get('location')).toBe(
+      'http://localhost/login?socialAuthError=already_linked',
+    )
+    expect(response.headers.getSetCookie().join('\n')).toContain('spine_google_oauth_state=;')
+  })
+
+  it('redirects unlinked Google login attempts to login with an actionable reason', async () => {
+    const startResponse = startGoogle(
+      new NextRequest('http://localhost/api/auth/google/start?mode=login&returnTo=/'),
+    )
+    const state = new URL(startResponse.headers.get('location') ?? '').searchParams.get('state')
+    const cookies = cookieHeaderFrom(startResponse)
+    googleFetch.mockResolvedValueOnce(Response.json({ id_token: 'google-id-token' }))
+    mockedBackendFetch.mockResolvedValueOnce(
+      Response.json({ detail: 'SOCIAL_ACCOUNT_NOT_LINKED' }, { status: 401 }),
+    )
+
+    const callbackRequest = new NextRequest(
+      `http://localhost/api/auth/google/callback?code=auth-code&state=${state}`,
+      { headers: { Cookie: cookies } },
+    )
+    const response = await completeGoogle(callbackRequest)
+
+    expect(response.status).toBe(307)
+    expect(response.headers.get('location')).toBe(
+      'http://localhost/login?socialAuthError=not_linked',
+    )
+    expect(response.headers.getSetCookie().join('\n')).toContain('spine_google_oauth_state=;')
+  })
+
   it('fails closed on state mismatch before calling Google or the backend', async () => {
     const startResponse = startGoogle(new NextRequest('http://localhost/api/auth/google/start?mode=login'))
     const cookies = cookieHeaderFrom(startResponse)
@@ -126,7 +201,7 @@ describe('Google OAuth BFF routes', () => {
     const response = await completeGoogle(callbackRequest)
 
     expect(response.status).toBe(307)
-    expect(response.headers.get('location')).toBe('http://localhost/login?socialAuthError=google')
+    expect(response.headers.get('location')).toBe('http://localhost/login?socialAuthError=state_mismatch')
     expect(googleFetch).not.toHaveBeenCalled()
     expect(mockedBackendFetch).not.toHaveBeenCalled()
     expect(response.headers.getSetCookie().join('\n')).toContain('spine_google_oauth_state=;')

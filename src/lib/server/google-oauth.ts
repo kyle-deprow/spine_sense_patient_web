@@ -29,6 +29,19 @@ type GoogleTokenResponse = {
   id_token?: unknown
 }
 
+type BackendErrorResponse = {
+  detail?: unknown
+}
+
+type GoogleFailureReason =
+  | 'account_exists'
+  | 'already_linked'
+  | 'callback_failed'
+  | 'google'
+  | 'missing_id_token'
+  | 'not_linked'
+  | 'state_mismatch'
+
 function randomUrlToken(byteLength = 32): string {
   return randomBytes(byteLength).toString('base64url')
 }
@@ -143,10 +156,10 @@ export async function completeGoogleOAuth(request: NextRequest): Promise<NextRes
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({ id_token: token.id_token }),
     })
-    const data = await readJsonBody<BackendLoginResponse>(backendResponse)
+    const data = await readJsonBody<BackendLoginResponse & BackendErrorResponse>(backendResponse)
 
     if (!backendResponse.ok || !hasTokenPair(data)) {
-      return googleFailureRedirect(request, mode, 'backend_auth_failed')
+      return googleFailureRedirect(request, mode, googleFailureReason(mode, backendResponse.status, data))
     }
 
     const response = redirectWithinApp(request, returnTo)
@@ -202,11 +215,14 @@ async function exchangeGoogleCode(
 function googleFailureRedirect(
   request: NextRequest,
   mode: GoogleAuthMode,
-  reason: string,
+  reason: GoogleFailureReason,
 ): NextResponse {
-  const target = mode === 'register'
-    ? '/register?socialAuthError=google'
-    : '/login?socialAuthError=google'
+  const targetPath = mode === 'register' && (reason === 'account_exists' || reason === 'already_linked')
+    ? '/login'
+    : mode === 'register'
+      ? '/register'
+      : '/login'
+  const target = `${targetPath}?socialAuthError=${encodeURIComponent(reason)}`
   const response = redirectWithinApp(request, target)
   clearOauthCookies(response)
   auditLog({
@@ -216,4 +232,26 @@ function googleFailureRedirect(
     reason,
   })
   return response
+}
+
+function googleFailureReason(
+  mode: GoogleAuthMode,
+  status: number,
+  data: BackendErrorResponse,
+): GoogleFailureReason {
+  const detail = typeof data.detail === 'string' ? data.detail : ''
+
+  if (mode === 'register' && status === 409 && detail === 'ACCOUNT_EXISTS_REQUIRES_LOGIN') {
+    return 'account_exists'
+  }
+
+  if (status === 409 && detail === 'Social identity already linked to another account') {
+    return 'already_linked'
+  }
+
+  if (mode === 'login' && status === 401 && detail === 'SOCIAL_ACCOUNT_NOT_LINKED') {
+    return 'not_linked'
+  }
+
+  return 'google'
 }
