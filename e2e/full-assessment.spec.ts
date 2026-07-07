@@ -1194,9 +1194,7 @@ async function completeProfileIfPresent(page: Page) {
     return
   }
 
-  const { registration, onboarding } = fullAssessmentScenario
-  await fillByTestId(page, 'profile-first-name', registration.firstName)
-  await fillByTestId(page, 'profile-last-name', registration.lastName)
+  const { onboarding } = fullAssessmentScenario
   await fillByTestId(page, 'profile-dob', onboarding.dateOfBirthDisplay)
   await clickByTestId(page, `profile-sex-${onboarding.sexAtBirth}`)
   await fillByTestId(page, 'profile-height-ft', onboarding.heightFeet)
