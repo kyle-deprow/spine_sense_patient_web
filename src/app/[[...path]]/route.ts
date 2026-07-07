@@ -2,6 +2,7 @@ import { readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
+import { issueCsrfCookie } from '@/lib/server/auth'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -111,9 +112,13 @@ async function servePatientApp(request: NextRequest, method: 'GET' | 'HEAD') {
 
   const body = method === 'HEAD' ? null : await readResponseBody(match.filePath, match.contentType, request)
 
-  return new NextResponse(body, {
+  const response = new NextResponse(body, {
     headers: noStoreHeaders(match.contentType),
   })
+  if (match.contentType.startsWith('text/html')) {
+    issueCsrfCookie(response)
+  }
+  return response
 }
 
 const SYSTEM_FONT_STACK =

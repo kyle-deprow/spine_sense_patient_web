@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 
 const { GET } = await import('@/app/[[...path]]/route')
@@ -19,6 +19,10 @@ async function makeExportFile(fileName: string, body: string | Uint8Array): Prom
 }
 
 describe('patient app export route', () => {
+  beforeEach(() => {
+    vi.stubEnv('PATIENT_WEB_CSRF_SECRET', 'test-patient-web-csrf-secret')
+  })
+
   afterEach(async () => {
     vi.unstubAllEnvs()
     if (exportDir !== undefined) {
@@ -69,6 +73,7 @@ describe('patient app export route', () => {
     expect(html).toContain('<script data-patient-web-style-nonce nonce="test-nonce">')
     expect(html).toContain('d.createElement=function')
     expect(html).toContain('<script nonce="test-nonce">window.__app = true</script>')
+    expect(response.headers.getSetCookie().join('; ')).toContain('spine_patient_csrf=')
   })
 
   it('does not duplicate the runtime style nonce bootstrap', async () => {
