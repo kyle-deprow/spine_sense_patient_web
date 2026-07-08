@@ -48,6 +48,32 @@ describe('proxy allowlist', () => {
     ).toEqual({ ok: true, targetPath: '/api/v1/patients/me/intake/progress/complete' })
   })
 
+  it('allows MyScribe visit-recording calls', () => {
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'miscribe', 'recordings'],
+        'POST',
+        '/api/proxy/api/v1/patients/me/miscribe/recordings',
+      ),
+    ).toEqual({ ok: true, targetPath: '/api/v1/patients/me/miscribe/recordings' })
+
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'miscribe', 'recordings', 'rec-1', 'process'],
+        'POST',
+        '/api/proxy/api/v1/patients/me/miscribe/recordings/rec-1/process',
+      ),
+    ).toEqual({ ok: true, targetPath: '/api/v1/patients/me/miscribe/recordings/rec-1/process' })
+
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'miscribe', 'recordings', 'rec-1'],
+        'DELETE',
+        '/api/proxy/api/v1/patients/me/miscribe/recordings/rec-1',
+      ),
+    ).toEqual({ ok: true, targetPath: '/api/v1/patients/me/miscribe/recordings/rec-1' })
+  })
+
   it('preserves explicit trailing slashes for FastAPI collection routes', () => {
     expect(
       validateProxyTarget(

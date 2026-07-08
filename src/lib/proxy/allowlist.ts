@@ -17,6 +17,9 @@ export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
   { prefix: '/api/v1/patients/me/treatments', methods: ['GET'] },
   { prefix: '/api/v1/patients/me/documents', methods: ['GET', 'POST', 'DELETE'] },
   { prefix: '/api/v1/patients/me/intake', methods: ['GET', 'POST', 'PUT'] },
+  // MyScribe visit recordings: start/stop/upload-url/process/share are POSTs,
+  // delete is DELETE; recordings/summaries are GETs.
+  { prefix: '/api/v1/patients/me/miscribe', methods: ['GET', 'POST', 'DELETE'] },
   { prefix: '/api/v1/patients/me/providers', methods: ['GET'] },
   { prefix: '/api/v1/patients/me', methods: ['GET', 'PATCH'] },
   { prefix: '/api/v1/invite-codes', methods: ['GET', 'POST'] },
