@@ -7,6 +7,12 @@
  * EXPO_PUBLIC_ENABLE_WEB_VOICE=true, so developers can exercise the browser
  * MediaRecorder path.
  *
+ * This flag is the single web-microphone gate: it covers BOTH the assessment
+ * voice-story capture AND MyScribe visit recording (the app checks the same
+ * var via features.enableWebVoiceRecording and blocks web capture when it is
+ * unset). Set it for both the Expo web export build and this BFF process, and
+ * rebuild (next build) — header changes need a build + restart.
+ *
  * The local patient web runs as a production-mode standalone build
  * (NODE_ENV=production), so we gate on the var's PRESENCE rather than NODE_ENV
  * — mirroring the repo's PATIENT_WEB_E2E_ALLOW_INSECURE_COOKIES toggle. NEVER
