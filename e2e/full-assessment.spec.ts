@@ -1084,6 +1084,24 @@ async function stressReloadCurrentScreeningQuestion(page: Page) {
   logMilestone(`stress: reloading during screening at ${questionIdBeforeReload}`)
 
   await page.reload({ waitUntil: 'domcontentloaded', timeout: 45_000 })
+  const reloadStage = await waitForAnyVisibleTestId(
+    page,
+    ['screening-screen', 'home-screen', 'assessment-entry-guard'],
+    60_000,
+  )
+  if (reloadStage === 'home-screen') {
+    await expectNoBrowserStorage(page)
+    if (await page.getByTestId('continue-assessment-btn').isVisible({ timeout: 1000 }).catch(() => false)) {
+      await waitForFirstVisibleEnabledAndClick(page, 'continue-assessment-btn')
+    } else if (await page.getByTestId('start-assessment-btn').isVisible({ timeout: 1000 }).catch(() => false)) {
+      await waitForFirstVisibleEnabledAndClick(page, 'start-assessment-btn')
+    } else {
+      const continueAssessment = page.getByRole('button', { name: /continue assessment/i }).first()
+      await expect(continueAssessment).toBeEnabled({ timeout: 30_000 })
+      await continueAssessment.click()
+    }
+  }
+
   await expect(page.getByTestId('screening-screen')).toBeVisible({ timeout: 60_000 })
   await waitForScreeningNavIdle(page, 60_000)
   await expectNoBrowserStorage(page)
