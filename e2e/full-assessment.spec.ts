@@ -16,9 +16,13 @@ const BACKEND_REGISTRATION_CODE_URL = process.env.PATIENT_WEB_BACKEND_REGISTRATI
 const GATEWAY_RESET_URL = process.env.PATIENT_WEB_GATEWAY_RESET_URL
 const GATEWAY_RESET_TOKEN = process.env.PATIENT_WEB_GATEWAY_RESET_TOKEN
 const EXPECT_SECURE_COOKIES = process.env.PATIENT_WEB_EXPECT_SECURE_COOKIES === 'true'
+const ENABLE_FULL_ASSESSMENT_STRESS =
+  process.env.PATIENT_WEB_FULL_ASSESSMENT_STRESS !== 'false'
 const FULL_FLOW_TIMEOUT_MS = 15 * 60 * 1000
 const ASSESSMENT_REPORT_PROXY_PATH_RE =
   /^\/api\/proxy\/api\/v1\/patients\/me\/assessments\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/reports$/i
+const STRESS_RELOAD_AFTER_SCREENING_QUESTION_ID = 'A03_Q2b'
+const STRESS_BACKTRACK_AFTER_SCREENING_QUESTION_ID = 'R03'
 
 type BrowserCookie = {
   name: string
@@ -36,6 +40,11 @@ type AssessmentAnswer = {
 type TextAnswer = {
   readonly id: string
   readonly text: string
+}
+
+type ScreeningStressState = {
+  reloadedDuringScreening: boolean
+  backtrackedDuringScreening: boolean
 }
 
 const SCREENING_ANSWERS_BY_ID = new Map(
@@ -1063,8 +1072,52 @@ async function clickScreeningNextAndWaitForAdvance(page: Page, previousQuestionI
   }
 }
 
+async function expectNoAssessmentBlockingState(page: Page) {
+  await expect(page.getByTestId('emergency-screen')).toBeHidden({ timeout: 500 })
+  await expect(page.getByTestId('adaptive-loading-error-state')).toBeHidden({ timeout: 500 })
+  await expect(page.getByTestId('adaptive-error-state')).toBeHidden({ timeout: 500 })
+  await expect(page.getByTestId('assessment-processing-failed')).toBeHidden({ timeout: 500 })
+}
+
+async function stressReloadCurrentScreeningQuestion(page: Page) {
+  const questionIdBeforeReload = await currentVisibleScreeningQuestionId(page)
+  logMilestone(`stress: reloading during screening at ${questionIdBeforeReload}`)
+
+  await page.reload({ waitUntil: 'domcontentloaded', timeout: 45_000 })
+  await expect(page.getByTestId('screening-screen')).toBeVisible({ timeout: 60_000 })
+  await waitForScreeningNavIdle(page, 60_000)
+  await expectNoBrowserStorage(page)
+
+  const questionIdAfterReload = await currentVisibleScreeningQuestionId(page)
+  expect(questionIdAfterReload).toBe(questionIdBeforeReload)
+  await expectNoAssessmentBlockingState(page)
+}
+
+async function stressBacktrackOneScreeningQuestion(
+  page: Page,
+  previousQuestionId: string,
+  expectedCurrentQuestionId: string,
+) {
+  logMilestone(`stress: backtracking from ${expectedCurrentQuestionId} to ${previousQuestionId}`)
+
+  await waitForEnabledAndClick(page, 'screening-nav-back')
+  await waitForScreeningAdvance(page, expectedCurrentQuestionId, 30_000)
+  await waitForScreeningNavIdle(page)
+  expect(await currentVisibleScreeningQuestionId(page)).toBe(previousQuestionId)
+
+  await clickScreeningNextAndWaitForAdvance(page, previousQuestionId)
+  await waitForScreeningNavIdle(page)
+  expect(await currentVisibleScreeningQuestionId(page)).toBe(expectedCurrentQuestionId)
+  await expectNoAssessmentBlockingState(page)
+}
+
 async function answerScreening(page: Page) {
   await expect(page.getByTestId('screening-nav-next')).toBeVisible({ timeout: 60_000 })
+  const stressState: ScreeningStressState = {
+    reloadedDuringScreening: false,
+    backtrackedDuringScreening: false,
+  }
+
   for (let questionIndex = 0; questionIndex < 80; questionIndex += 1) {
     const postScreeningStage = await waitForAnyVisibleTestId(page, POST_SCREENING_STAGE_TEST_IDS, 250).catch(() => null)
     if (postScreeningStage != null) return
@@ -1094,7 +1147,26 @@ async function answerScreening(page: Page) {
     }
 
     await clickScreeningNextAndWaitForAdvance(page, questionId)
-    await expect(page.getByTestId('emergency-screen')).toBeHidden({ timeout: 500 }).catch(() => undefined)
+    await expectNoAssessmentBlockingState(page)
+
+    if (
+      ENABLE_FULL_ASSESSMENT_STRESS &&
+      !stressState.reloadedDuringScreening &&
+      questionId === STRESS_RELOAD_AFTER_SCREENING_QUESTION_ID
+    ) {
+      await stressReloadCurrentScreeningQuestion(page)
+      stressState.reloadedDuringScreening = true
+    }
+
+    if (
+      ENABLE_FULL_ASSESSMENT_STRESS &&
+      !stressState.backtrackedDuringScreening &&
+      questionId === STRESS_BACKTRACK_AFTER_SCREENING_QUESTION_ID
+    ) {
+      const expectedCurrentQuestionId = await currentVisibleScreeningQuestionId(page)
+      await stressBacktrackOneScreeningQuestion(page, questionId, expectedCurrentQuestionId)
+      stressState.backtrackedDuringScreening = true
+    }
   }
 
   throw new Error('Timed out answering screening questions before reaching submit')
@@ -1195,6 +1267,25 @@ async function completeAdaptiveIfPresent(page: Page): Promise<string | null> {
   }
 
   throw new Error('Adaptive questionnaire did not exit after 20 questions')
+}
+
+async function waitForAnalysisReadyAndConfirm(page: Page) {
+  const analysisStage = await waitForAnyVisibleTestId(
+    page,
+    ['results-ready-confirm', 'assessment-processing-failed'],
+    480_000,
+  )
+  if (analysisStage === 'assessment-processing-failed') {
+    const failureReason = await page
+      .getByTestId('processing-failure-reason')
+      .textContent({ timeout: 1000 })
+      .catch(() => null)
+    throw new Error(
+      `Assessment analysis failed during full E2E${failureReason ? `: ${sanitizeDiagnostic(failureReason)}` : ''}`,
+    )
+  }
+
+  await waitForEnabledAndClick(page, 'results-ready-confirm', 30_000)
 }
 
 async function completeProfileIfPresent(page: Page) {
@@ -1471,7 +1562,7 @@ test.describe('patient web full assessment flow', () => {
     await expect(page.getByTestId('assessment-processing')).toBeVisible({
       timeout: 30_000,
     })
-    await waitForEnabledAndClick(page, 'results-ready-confirm', 480_000)
+    await waitForAnalysisReadyAndConfirm(page)
     await expect(page.getByTestId('results-screen')).toBeVisible({
       timeout: 480_000,
     })

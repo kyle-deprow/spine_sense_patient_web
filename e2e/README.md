@@ -7,6 +7,15 @@ Run it through the root Make targets:
 - `make patient-web-up`
 - `make patient-web-test`
 - `make patient-web-e2e`
+- `make patient-web-test-full-assessment`
+- `make patient-web-e2e-full-assessment`
+
+The opt-in full assessment suite runs with deterministic stress enabled by
+default. It reloads mid-screening, backtracks across an already-saved screening
+answer, checks that no emergency/error state appears on the non-interruptive
+happy path, and fails fast with the server failure reason if final analysis
+fails. Set `PATIENT_WEB_FULL_ASSESSMENT_STRESS=false` only when isolating a
+separate failure.
 
 The legacy evidence verifier remains available as `pnpm test:e2e:verify` for externally hosted PHI-capable environments that publish Playwright evidence JSON.
 
