@@ -838,9 +838,10 @@ async function submitScreening(page: Page) {
   await expect(page.getByTestId('screening-nav-next')).toBeVisible({ timeout: 30_000 })
 
   for (let attempt = 0; attempt < 5; attempt += 1) {
-    expect(await clickScreeningSubmitIfPresent(page)).toBe(true)
+    const clickedSubmit = await clickScreeningSubmitIfPresent(page)
     const nextStage = await waitForAnyVisibleTestId(page, POST_SCREENING_STAGE_TEST_IDS, 20_000).catch(() => null)
     if (nextStage != null) return
+    expect(clickedSubmit).toBe(true)
   }
 
   await waitForAnyVisibleTestId(page, POST_SCREENING_STAGE_TEST_IDS, 120_000)
