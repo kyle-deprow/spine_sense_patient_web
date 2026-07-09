@@ -438,7 +438,7 @@ async function waitForRetryOutcome(
   const nextStage = await waitForAnyVisibleTestId(page, nextTestIds, timeout).catch(() => null)
   if (nextStage != null) return nextStage
 
-  if (await page.getByTestId(errorTestId).isVisible({ timeout: 1000 }).catch(() => false)) {
+  if (await isVisibleByTestIdOrSemantic(page, errorTestId, 1000)) {
     return errorTestId
   }
 
@@ -447,6 +447,12 @@ async function waitForRetryOutcome(
 
 function semanticLocatorForTestId(page: Page, testId: string): Locator | null {
   switch (testId) {
+    case 'adaptive-loading-state':
+      return page.getByText(/Preparing follow-up questions|Generating follow-up questions/i).first()
+    case 'adaptive-loading-error-state':
+      return page.getByText(/Could not prepare follow-up questions/i).first()
+    case 'adaptive-loading-retry':
+      return page.getByRole('button', { name: /retry preparing follow-up questions/i }).first()
     case 'adaptive-screen':
     case 'adaptive-list':
       return page.getByText(/^Adaptive\s*·\s*Q\d+\s+of\s+\d+$/i).first()
