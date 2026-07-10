@@ -27,6 +27,8 @@ function cookieHeaderFrom(response: Response): string {
 }
 
 describe('Google OAuth BFF routes', () => {
+  const actorId = '10000000-0000-4000-8000-000000000001'
+
   beforeEach(() => {
     vi.stubEnv('PATIENT_WEB_CSRF_SECRET', 'test-patient-web-csrf-secret')
     vi.stubEnv('PATIENT_WEB_ALLOWED_ORIGINS', 'http://localhost')
@@ -75,9 +77,9 @@ describe('Google OAuth BFF routes', () => {
         access_token: 'backend-access-token',
         refresh_token: 'backend-refresh-token',
         token_type: 'bearer',
-        user_id: 'user-123',
       }),
     )
+    mockedBackendFetch.mockResolvedValueOnce(Response.json({ user_id: actorId }))
 
     const callbackRequest = new NextRequest(
       `http://localhost/api/auth/google/callback?code=auth-code&state=${state}`,
@@ -104,12 +106,22 @@ describe('Google OAuth BFF routes', () => {
         body: JSON.stringify({ id_token: 'google-id-token' }),
       }),
     )
+    expect(mockedBackendFetch).toHaveBeenCalledWith(
+      '/api/v1/auth/session',
+      expect.objectContaining({
+        method: 'GET',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer backend-access-token',
+        }),
+      }),
+    )
 
     const setCookie = response.headers.getSetCookie().join('\n')
     expect(setCookie).toContain('spine_patient_sess=backend-access-token')
     expect(setCookie).toContain('spine_patient_refresh=backend-refresh-token')
     expect(setCookie).toContain('spine_patient_csrf=')
     expect(setCookie).toContain('spine_patient_sess_iat=')
+    expect(setCookie).toContain('spine_patient_audit_actor=v2.test-current.')
     expect(setCookie).toContain('spine_google_oauth_state=;')
     expect(setCookie).toContain('HttpOnly')
     expect(setCookie).not.toContain('google-id-token')

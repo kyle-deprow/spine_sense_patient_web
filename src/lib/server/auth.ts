@@ -1,12 +1,24 @@
 import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
 
-import { COOKIE_NAMES, SESSION_MAX_AGE_SECONDS, clearAuthCookies, issueSessionIssuedAt, setAuthCookies, setCsrfCookie } from '@/lib/auth/cookies'
+import {
+  COOKIE_NAMES,
+  SESSION_MAX_AGE_SECONDS,
+  auditActorIdFromRequest,
+  clearAuthCookies,
+  issueAuthenticatedSessionCookies,
+  setCsrfCookie,
+} from '@/lib/auth/cookies'
 import { createCsrfToken } from '@/lib/auth/csrf'
 import { BackendUnavailableError, backendFetch, hasTokenPair, readJsonBody, stripTokens } from '@/lib/server/backend'
 import { getPatientWebConfig } from '@/lib/server/config'
 import { jsonNoStore, withNoStore } from '@/lib/server/responses'
-import { auditLog, extractUserIdFromToken } from '@/lib/server/audit'
+import {
+  auditLog,
+  backendAuthenticatedActorId,
+  createAuditContext,
+  type AuditContext,
+} from '@/lib/server/audit'
 import type { BackendLoginResponse, BackendTokenPair } from '@/types/auth'
 
 type JsonRecord = Record<string, unknown>
@@ -64,58 +76,86 @@ export function authBackendRequest(body: unknown): RequestInit {
 export async function forwardCredentialAuth(
   backendPath: string,
   requestBody: unknown,
-  request?: NextRequest,
-  options: { errorMode?: CredentialAuthErrorMode } = {},
+  _request?: NextRequest,
+  options: {
+    errorMode?: CredentialAuthErrorMode
+    auditContext?: AuditContext
+    onAuthenticatedActor?: (actorId: string) => void
+  } = {},
 ): Promise<NextResponse> {
   const backendResponse = await backendFetch(backendPath, authBackendRequest(requestBody))
   const data = await readJsonBody<BackendLoginResponse>(backendResponse)
 
   if (!backendResponse.ok) {
     const normalized = normalizeAuthError(backendResponse.status, options.errorMode)
-    return jsonNoStore(normalized.body, { status: normalized.status })
+    return clearAndNoStore(normalized.body, normalized.status)
   }
 
-  // Capture user_id and mfa_required before hasTokenPair narrows the type.
-  const userId = data?.user_id ?? undefined
+  // The backend authenticated this UUID; never derive actor attribution from JWT claims.
+  const actorId = await resolveBackendAuthenticatedActorId(data?.user_id, data)
+  if (actorId !== undefined) options.onAuthenticatedActor?.(actorId)
   const mfaRequired = data?.mfa_required
 
   // Derive audit event name from the backend path before stripTokens discards user_id.
-  const requestId = request?.headers.get('x-request-id') ?? undefined
+  const auditContext = options.auditContext ?? createAuditContext()
   const isMfaVerify = backendPath.includes('/mfa/verify')
   const successEvent = isMfaVerify ? 'auth.mfa.verify.success' : 'auth.login.success'
 
-  if (hasTokenPair(data)) {
-    // Full authentication succeeded — tokens are present.
+  const tokenPairIssued = hasTokenPair(data)
+  if (tokenPairIssued && actorId === undefined) {
+    return clearAndNoStore({ error: 'authenticated_actor_unavailable' }, 502)
+  }
+
+  const response = jsonNoStore(safeAuthResponse(data as JsonRecord), { status: backendResponse.status })
+  clearAuthCookies(response)
+
+  if (tokenPairIssued && actorId !== undefined) {
+    const issued = issueAuthenticatedSessionCookies(response, {
+      ...toTokenPair(data),
+      actorId,
+    })
+    issueCsrfCookie(response)
     auditLog({
       ts: new Date().toISOString(),
       event: successEvent,
       method: 'POST',
-      userId,
       status: backendResponse.status,
-      requestId,
+      ...auditContext,
+      actorId,
+      sessionCorrelation: issued.sessionCorrelation,
+    })
+    auditLog({
+      ts: new Date().toISOString(),
+      event: 'auth.token.issued',
+      method: 'POST',
+      status: backendResponse.status,
+      ...auditContext,
+      actorId,
+      sessionCorrelation: issued.sessionCorrelation,
+      reason: 'backend_token_pair',
     })
   } else if (mfaRequired) {
-    // First-factor succeeded but MFA step is still required.
     auditLog({
       ts: new Date().toISOString(),
       event: 'auth.mfa.interim',
       method: 'POST',
-      userId,
       status: backendResponse.status,
-      requestId,
+      ...auditContext,
+      ...(actorId === undefined ? {} : { actorId }),
     })
-  }
-
-  const response = jsonNoStore(safeAuthResponse(data as JsonRecord), { status: backendResponse.status })
-  if (hasTokenPair(data)) {
-    setAuthCookies(response, toTokenPair(data))
-    issueSessionIssuedAt(response)
-    issueCsrfCookie(response)
   }
   return response
 }
 
-export async function refreshWithCookie(request: NextRequest): Promise<NextResponse> {
+export interface IssuedSessionAudit {
+  actorId: string
+  sessionCorrelation: string
+}
+
+export async function refreshWithCookie(
+  request: NextRequest,
+  onTokenIssued?: (issued: IssuedSessionAudit) => void,
+): Promise<NextResponse> {
   const refreshToken = request.cookies.get(COOKIE_NAMES.refresh)?.value
   if (!refreshToken) {
     const response = jsonNoStore({ error: 'refresh_token_missing' }, { status: 401 })
@@ -124,18 +164,13 @@ export async function refreshWithCookie(request: NextRequest): Promise<NextRespo
   }
 
   const iatCookie = request.cookies.get(COOKIE_NAMES.sessionIssuedAt)?.value
-  const iat = iatCookie ? parseInt(iatCookie, 10) : null
+  const iat = iatCookie && /^[1-9][0-9]{9}$/.test(iatCookie) ? Number(iatCookie) : null
   const now = Math.floor(Date.now() / 1000)
 
-  if (iat !== null && !isNaN(iat) && now - iat > SESSION_MAX_AGE_SECONDS) {
+  if (iat === null || iat > now + 60 || now - iat > SESSION_MAX_AGE_SECONDS) {
     // Session has exceeded absolute lifetime — force re-login
     const response = jsonNoStore({ error: 'session_expired' }, { status: 401 })
     clearAuthCookies(response)
-    auditLog({
-      ts: new Date().toISOString(),
-      event: 'auth.session.absolute_timeout',
-      userId: extractUserIdFromToken(request.cookies.get(COOKIE_NAMES.access)?.value),
-    })
     return response
   }
 
@@ -151,9 +186,20 @@ export async function refreshWithCookie(request: NextRequest): Promise<NextRespo
     return response
   }
 
+  const actorId = await resolveBackendAuthenticatedActorId(data['user_id'], data)
+  if (actorId === undefined) {
+    return clearAndNoStore({ error: 'authenticated_actor_unavailable' }, 502)
+  }
+
   const response = jsonNoStore({ success: true })
-  setAuthCookies(response, toTokenPair(data))
+  clearAuthCookies(response)
+  const issued = issueAuthenticatedSessionCookies(response, {
+    ...toTokenPair(data),
+    actorId,
+    issuedAt: iat,
+  })
   issueCsrfCookie(response)
+  onTokenIssued?.({ actorId, sessionCorrelation: issued.sessionCorrelation })
   return response
 }
 
@@ -201,6 +247,7 @@ export async function sessionFromCookie(request: NextRequest): Promise<NextRespo
   const accessToken = request.cookies.get(COOKIE_NAMES.access)?.value
   if (!accessToken) {
     const response = jsonNoStore({ error: 'unauthorized' }, { status: 401 })
+    clearAuthCookies(response)
     issueCsrfCookie(response)
     return response
   }
@@ -220,6 +267,16 @@ export async function sessionFromCookie(request: NextRequest): Promise<NextRespo
       clearAuthCookies(response)
       issueCsrfCookie(response)
     }
+    return response
+  }
+
+
+  const backendActorId = backendAuthenticatedActorId(data?.['user_id'])
+  const sessionActorId = auditActorIdFromRequest(request)
+  if (backendActorId === undefined || sessionActorId !== backendActorId) {
+    const response = jsonNoStore({ error: 'unauthorized' }, { status: 401 })
+    clearAuthCookies(response)
+    issueCsrfCookie(response)
     return response
   }
 
@@ -243,4 +300,34 @@ export function clearAndNoStore(body: unknown, status = 200): NextResponse {
   const response = jsonNoStore(body, { status })
   clearAuthCookies(response)
   return withNoStore(response)
+}
+
+export function clearAccountTransitionState(response: NextResponse): NextResponse {
+  clearAuthCookies(response)
+  return response
+}
+
+export async function resolveBackendAuthenticatedActorId(
+  candidate: unknown,
+  tokenPair?: Partial<BackendTokenPair>,
+): Promise<string | undefined> {
+  const actorId = backendAuthenticatedActorId(candidate)
+  if (actorId !== undefined) return actorId
+  if (typeof tokenPair?.access_token !== 'string') return undefined
+
+  try {
+    const response = await backendFetch('/api/v1/auth/session', {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${tokenPair.access_token}`,
+      },
+    })
+    if (!response.ok) return undefined
+    const session = await readJsonBody<JsonRecord>(response)
+    return backendAuthenticatedActorId(session?.['user_id'])
+  } catch (error) {
+    if (error instanceof BackendUnavailableError) return undefined
+    throw error
+  }
 }

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 
+import { signAuditActorCookie } from '@/lib/auth/cookies'
 import { forwardCredentialAuth, logoutWithCookie, refreshWithCookie, sessionFromCookie } from '@/lib/server/auth'
 import { BackendUnavailableError, backendFetch } from '@/lib/server/backend'
 
@@ -13,6 +14,10 @@ vi.mock('@/lib/server/backend', async (importOriginal) => {
 })
 
 const mockedBackendFetch = vi.mocked(backendFetch)
+const SIGNING_KEY = {
+  id: 'test-current',
+  secret: 'patient-web-test-actor-signing-key-32-bytes',
+}
 
 function makeRequest(cookies: Record<string, string> = {}): NextRequest {
   const cookieHeader = Object.entries(cookies)
@@ -23,7 +28,19 @@ function makeRequest(cookies: Record<string, string> = {}): NextRequest {
   })
 }
 
+function boundSessionCookies(actorId: string, accessToken: string): Record<string, string> {
+  const issuedAt = Math.floor(Date.now() / 1000)
+  return {
+    spine_patient_sess: accessToken,
+    spine_patient_sess_iat: String(issuedAt),
+    spine_patient_audit_actor:
+      signAuditActorCookie(actorId, accessToken, issuedAt, SIGNING_KEY) ?? '',
+  }
+}
+
 describe('BFF auth boundary', () => {
+  const actorId = '10000000-0000-4000-8000-000000000001'
+
   beforeEach(() => {
     vi.stubEnv('PATIENT_WEB_CSRF_SECRET', 'test-patient-web-csrf-secret')
     mockedBackendFetch.mockReset()
@@ -34,7 +51,7 @@ describe('BFF auth boundary', () => {
       Response.json({
         access_token: 'backend-access-token',
         refresh_token: 'backend-refresh-token',
-        user_id: 'user-123',
+        user_id: actorId,
         token_expires_at: '2026-05-04T12:00:00Z',
       }),
     )
@@ -52,6 +69,7 @@ describe('BFF auth boundary', () => {
     const setCookie = response.headers.getSetCookie().join('\n')
     expect(setCookie).toContain('spine_patient_sess=backend-access-token')
     expect(setCookie).toContain('spine_patient_refresh=backend-refresh-token')
+    expect(setCookie).toContain('spine_patient_audit_actor=v2.test-current.')
     expect(setCookie).toContain('HttpOnly')
     expect(setCookie).toContain('SameSite=lax')
     expect(setCookie).toContain('SameSite=strict')
@@ -68,7 +86,7 @@ describe('BFF auth boundary', () => {
     expect(response.status).toBe(401)
     // Backend error body is normalized to prevent account enumeration
     await expect(response.json()).resolves.toEqual({ error: 'auth_failed' })
-    expect(response.headers.getSetCookie()).toEqual([])
+    expect(response.headers.getSetCookie().join('\n')).toContain('spine_patient_audit_actor=;')
     expect(response.headers.get('Cache-Control')).toBe('no-store')
   })
 
@@ -78,7 +96,10 @@ describe('BFF auth boundary', () => {
     it('propagates BackendUnavailableError so the route handler can return 503', async () => {
       mockedBackendFetch.mockRejectedValue(new BackendUnavailableError())
 
-      const request = makeRequest({ spine_patient_refresh: 'valid-refresh-token' })
+      const request = makeRequest({
+        spine_patient_refresh: 'valid-refresh-token',
+        spine_patient_sess_iat: String(Math.floor(Date.now() / 1000)),
+      })
       await expect(refreshWithCookie(request)).rejects.toThrow(BackendUnavailableError)
     })
 
@@ -87,13 +108,17 @@ describe('BFF auth boundary', () => {
         Response.json({ error: 'token_invalid' }, { status: 401 }),
       )
 
-      const request = makeRequest({ spine_patient_refresh: 'stale-refresh-token' })
+      const request = makeRequest({
+        spine_patient_refresh: 'stale-refresh-token',
+        spine_patient_sess_iat: String(Math.floor(Date.now() / 1000)),
+      })
       const response = await refreshWithCookie(request)
 
       expect(response.status).toBe(401)
       await expect(response.json()).resolves.toEqual({ error: 'refresh_failed' })
       const setCookie = response.headers.getSetCookie().join('\n')
       expect(setCookie).toContain('spine_patient_sess=;')
+      expect(setCookie).toContain('spine_patient_audit_actor=;')
     })
 
     it('returns 200 and sets auth cookies when backend returns a valid token pair', async () => {
@@ -101,10 +126,14 @@ describe('BFF auth boundary', () => {
         Response.json({
           access_token: 'new-access-token',
           refresh_token: 'new-refresh-token',
+          user_id: actorId,
         }),
       )
 
-      const request = makeRequest({ spine_patient_refresh: 'valid-refresh-token' })
+      const request = makeRequest({
+        spine_patient_refresh: 'valid-refresh-token',
+        spine_patient_sess_iat: String(Math.floor(Date.now() / 1000)),
+      })
       const response = await refreshWithCookie(request)
 
       expect(response.status).toBe(200)
@@ -113,6 +142,7 @@ describe('BFF auth boundary', () => {
       expect(setCookie).toContain('spine_patient_sess=new-access-token')
       expect(setCookie).toContain('spine_patient_refresh=new-refresh-token')
       expect(setCookie).toContain('HttpOnly')
+      expect(setCookie).toContain('spine_patient_audit_actor=v2.test-current.')
     })
 
     it('returns 401 session_expired and clears cookies when IAT indicates >12h elapsed', async () => {
@@ -127,6 +157,7 @@ describe('BFF auth boundary', () => {
       await expect(response.json()).resolves.toEqual({ error: 'session_expired' })
       const setCookie = response.headers.getSetCookie().join('\n')
       expect(setCookie).toContain('spine_patient_sess=;')
+      expect(setCookie).toContain('spine_patient_audit_actor=;')
     })
   })
 
@@ -144,6 +175,7 @@ describe('BFF auth boundary', () => {
       const setCookie = response.headers.getSetCookie().join('\n')
       expect(setCookie).toContain('spine_patient_sess=;')
       expect(setCookie).toContain('spine_patient_refresh=;')
+      expect(setCookie).toContain('spine_patient_audit_actor=;')
     })
 
     it('returns 502 logout_backend_failed and clears cookies when backend returns non-OK', async () => {
@@ -208,15 +240,15 @@ describe('BFF auth boundary', () => {
 
     it('returns 200 with session data when backend returns OK', async () => {
       mockedBackendFetch.mockResolvedValue(
-        Response.json({ user_id: 'user-456', email: 'patient@example.test' }),
+        Response.json({ user_id: actorId, email: 'patient@example.test' }),
       )
 
-      const request = makeRequest({ spine_patient_sess: 'valid-access-token' })
+      const request = makeRequest(boundSessionCookies(actorId, 'valid-access-token'))
       const response = await sessionFromCookie(request)
 
       expect(response.status).toBe(200)
       await expect(response.json()).resolves.toEqual({
-        user_id: 'user-456',
+        user_id: actorId,
         email: 'patient@example.test',
       })
       const setCookie = response.headers.getSetCookie().join('\n')

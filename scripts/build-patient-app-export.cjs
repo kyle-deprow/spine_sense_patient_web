@@ -22,6 +22,8 @@ const vectorIconFontsDir = path.join(
 const vectorIconFontAssetRe =
   /\/assets\/node_modules\/[^"'`)\s]+\/Fonts\/([A-Za-z0-9_]+)\.[a-f0-9]+\.ttf/g;
 
+validateWebVoicePolicy();
+
 fs.rmSync(outputDir, { recursive: true, force: true });
 fs.mkdirSync(outputDir, { recursive: true });
 
@@ -128,4 +130,16 @@ function resolveExportTarget(requestPath) {
     process.exit(1);
   }
   return target;
+}
+
+function validateWebVoicePolicy() {
+  if (process.env.EXPO_PUBLIC_ENABLE_WEB_VOICE !== 'true') return;
+
+  const allowedEnvironments = new Set(['development', 'test', 'e2e']);
+  if (!allowedEnvironments.has(process.env.PATIENT_APP_ENVIRONMENT ?? '')) {
+    console.error(
+      'EXPO_PUBLIC_ENABLE_WEB_VOICE=true requires PATIENT_APP_ENVIRONMENT to be development, test, or e2e',
+    );
+    process.exit(1);
+  }
 }

@@ -1,12 +1,11 @@
 import type { NextRequest } from 'next/server'
 
 import { validateAuthMutation } from '@/lib/auth/route-guards'
-import { forwardCredentialAuth, readRequestJson } from '@/lib/server/auth'
-import { auditLog } from '@/lib/server/audit'
+import { clearAccountTransitionState, forwardCredentialAuth, readRequestJson } from '@/lib/server/auth'
+import { auditLog, createAuditContext } from '@/lib/server/audit'
 import { BackendUnavailableError } from '@/lib/server/backend'
 import { jsonNoStore } from '@/lib/server/responses'
 import { rateLimit, getClientIp } from '@/lib/server/rate-limit'
-import type { RegisterResponse } from '@/types/auth'
 
 const WINDOW_MS = 60 * 60 * 1000 // 60 minutes
 type JsonRecord = Record<string, unknown>
@@ -57,48 +56,87 @@ function normalizeRegistrationBody(body: unknown): JsonRecord {
 }
 
 export async function POST(request: NextRequest) {
+  const auditContext = createAuditContext()
   const failure = validateAuthMutation(request)
-  if (failure) return failure
+  if (failure) {
+    auditLog({
+      ts: new Date().toISOString(),
+      event: 'auth.register.failure',
+      method: 'POST',
+      status: failure.status,
+      reason: 'request_policy_denied',
+      ...auditContext,
+    })
+    return clearAccountTransitionState(failure)
+  }
 
   const ip = getClientIp(request)
   if (!rateLimit(ip, { limit: 5, windowMs: WINDOW_MS })) {
-    return jsonNoStore({ error: 'too_many_requests' }, { status: 429, headers: { 'Retry-After': '3600' } })
+    auditLog({
+      ts: new Date().toISOString(),
+      event: 'auth.register.failure',
+      method: 'POST',
+      status: 429,
+      reason: 'rate_limited',
+      ...auditContext,
+    })
+    return clearAccountTransitionState(jsonNoStore({ error: 'too_many_requests' }, { status: 429, headers: { 'Retry-After': '3600' } }))
   }
 
-  const requestId = request.headers.get('x-request-id') ?? undefined
-
-  auditLog({ ts: new Date().toISOString(), event: 'auth.register.attempt', method: 'POST', requestId })
+  auditLog({ ts: new Date().toISOString(), event: 'auth.register.attempt', method: 'POST', ...auditContext })
 
   const body = await readRequestJson(request)
   if (body == null) {
-    return jsonNoStore({ error: 'invalid_json' }, { status: 400 })
+    auditLog({
+      ts: new Date().toISOString(),
+      event: 'auth.register.failure',
+      method: 'POST',
+      status: 400,
+      reason: 'invalid_json',
+      ...auditContext,
+    })
+    return clearAccountTransitionState(jsonNoStore({ error: 'invalid_json' }, { status: 400 }))
   }
   const normalizedBody = normalizeRegistrationBody(body)
 
   let response: Response
+  let authenticatedActorId: string | undefined
   try {
     response = await forwardCredentialAuth(
       '/api/v1/auth/register/patient',
       normalizedBody,
       undefined,
-      { errorMode: 'registration' },
+      {
+        errorMode: 'registration',
+        auditContext,
+        onAuthenticatedActor: (actorId) => {
+          authenticatedActorId = actorId
+        },
+      },
     )
   } catch (err) {
     if (err instanceof BackendUnavailableError) {
-      return jsonNoStore({ error: 'service_unavailable' }, { status: 503 })
+      auditLog({
+        ts: new Date().toISOString(),
+        event: 'auth.register.failure',
+        method: 'POST',
+        status: 503,
+        reason: 'backend_unavailable',
+        ...auditContext,
+      })
+      return clearAccountTransitionState(jsonNoStore({ error: 'service_unavailable' }, { status: 503 }))
     }
     throw err
   }
 
   if (response.ok) {
-    const data = await response.clone().json() as RegisterResponse
     auditLog({
       ts: new Date().toISOString(),
       event: 'auth.register.success',
       method: 'POST',
-      userId: data.user_id ?? data.id ?? undefined,
       status: response.status,
-      requestId,
+      ...auditContext,
+      ...(authenticatedActorId === undefined ? {} : { actorId: authenticatedActorId }),
     })
   } else {
     auditLog({
@@ -106,7 +144,7 @@ export async function POST(request: NextRequest) {
       event: 'auth.register.failure',
       method: 'POST',
       status: response.status,
-      requestId,
+      ...auditContext,
     })
   }
 

@@ -23,6 +23,15 @@ const ASSESSMENT_REPORT_RE = new RegExp(`${ASSESSMENT_RE}\\/reports$`, 'i')
 const REPORT_RE = `^\\/api\\/v1\\/patients\\/me\\/reports\\/${UUID_RE}`
 const REPORT_EXACT_RE = new RegExp(`${REPORT_RE}$`, 'i')
 const REPORT_DOWNLOAD_URL_RE = new RegExp(`${REPORT_RE}\\/download-url$`, 'i')
+const MISCRIBE_PREFIX = '/api/v1/patients/me/miscribe'
+const MISCRIBE_RECORDINGS_PREFIX = `${MISCRIBE_PREFIX}/recordings`
+const MISCRIBE_RECORDING_RE = `^\\/api\\/v1\\/patients\\/me\\/miscribe\\/recordings\\/${UUID_RE}`
+const MISCRIBE_RECORDING_EXACT_RE = new RegExp(`${MISCRIBE_RECORDING_RE}$`, 'i')
+const MISCRIBE_RECORDING_ACTION_RE = new RegExp(
+  `${MISCRIBE_RECORDING_RE}\\/(?:all-party-attestation|begin|abandon|upload-url|upload-complete|process)$`,
+  'i',
+)
+const MISCRIBE_RECORDING_SUMMARY_RE = new RegExp(`${MISCRIBE_RECORDING_RE}\\/summary$`, 'i')
 
 export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
   { prefix: '/api/v1/patients/me/assessments', methods: ['GET', 'POST'], match: 'exact' },
@@ -82,6 +91,24 @@ export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
   { prefix: '/api/v1/patients/me/treatments', methods: ['GET'] },
   { prefix: '/api/v1/patients/me/documents', methods: ['GET', 'POST', 'DELETE'] },
   { prefix: '/api/v1/patients/me/intake', methods: ['GET', 'POST', 'PUT'] },
+  { prefix: `${MISCRIBE_PREFIX}/recording-policy`, methods: ['GET'], match: 'exact' },
+  { prefix: MISCRIBE_RECORDINGS_PREFIX, methods: ['GET'], match: 'exact' },
+  { prefix: `${MISCRIBE_RECORDINGS_PREFIX}/setup`, methods: ['POST'], match: 'exact' },
+  {
+    prefix: MISCRIBE_RECORDINGS_PREFIX,
+    methods: ['GET', 'DELETE'],
+    pathPattern: MISCRIBE_RECORDING_EXACT_RE,
+  },
+  {
+    prefix: MISCRIBE_RECORDINGS_PREFIX,
+    methods: ['POST'],
+    pathPattern: MISCRIBE_RECORDING_ACTION_RE,
+  },
+  {
+    prefix: MISCRIBE_RECORDINGS_PREFIX,
+    methods: ['GET'],
+    pathPattern: MISCRIBE_RECORDING_SUMMARY_RE,
+  },
   { prefix: '/api/v1/patients/me/providers', methods: ['GET'] },
   { prefix: '/api/v1/patients/me', methods: ['GET', 'PATCH'], match: 'exact' },
   { prefix: '/api/v1/invite-codes', methods: ['GET', 'POST'] },

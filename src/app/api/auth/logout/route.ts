@@ -1,24 +1,35 @@
 import type { NextRequest } from 'next/server'
 
+import { COOKIE_NAMES } from '@/lib/auth/cookies'
 import { validateAuthMutation } from '@/lib/auth/route-guards'
 import { logoutWithCookie } from '@/lib/server/auth'
-import { auditLog, extractUserIdFromToken } from '@/lib/server/audit'
-import { COOKIE_NAMES } from '@/lib/auth/cookies'
+import { auditLog, createRequestAuditContext } from '@/lib/server/audit'
 
 export async function POST(request: NextRequest) {
+  const auditContext = createRequestAuditContext(
+    request,
+    request.cookies.get(COOKIE_NAMES.access)?.value,
+  )
   const failure = validateAuthMutation(request)
-  if (failure) return failure
+  if (failure) {
+    auditLog({
+      ts: new Date().toISOString(),
+      event: 'auth.logout.failure',
+      method: 'POST',
+      status: failure.status,
+      reason: 'request_policy_denied',
+      ...auditContext,
+    })
+    return failure
+  }
 
-  const requestId = request.headers.get('x-request-id') ?? undefined
-  const userId = extractUserIdFromToken(request.cookies.get(COOKIE_NAMES.access)?.value)
-
+  const response = await logoutWithCookie(request)
   auditLog({
     ts: new Date().toISOString(),
-    event: 'auth.logout',
+    event: response.ok ? 'auth.logout.success' : 'auth.logout.failure',
     method: 'POST',
-    userId,
-    requestId,
+    status: response.status,
+    ...auditContext,
   })
-
-  return logoutWithCookie(request)
+  return response
 }

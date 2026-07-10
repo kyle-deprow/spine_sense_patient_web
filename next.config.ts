@@ -1,5 +1,7 @@
 import type { NextConfig } from 'next'
 
+import { buildPermissionsPolicyHeader } from './src/lib/server/securityPolicy'
+
 const nextConfig: NextConfig = {
   output: 'standalone',
   skipTrailingSlashRedirect: true,
@@ -15,7 +17,7 @@ const nextConfig: NextConfig = {
       { key: 'Referrer-Policy', value: 'strict-origin' },
       {
         key: 'Permissions-Policy',
-        value: 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()',
+        value: buildPermissionsPolicyHeader(),
       },
       { key: 'Cache-Control', value: 'no-store' },
     ]

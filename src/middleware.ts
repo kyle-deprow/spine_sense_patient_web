@@ -1,13 +1,13 @@
 import { NextResponse, type NextRequest } from 'next/server'
 
+import { buildPermissionsPolicyHeader, getStorageConnectOrigins } from '@/lib/server/securityPolicy'
+
 type CspOptions = {
   requireTrustedTypes?: boolean
 }
 
 export function buildCspHeader(nonce: string, options: CspOptions = {}): string {
-  const storageOrigins =
-    process.env.NEXT_PUBLIC_STORAGE_DOMAINS ??
-    'https://*.s3.amazonaws.com https://*.storage.googleapis.com'
+  const storageOrigins = getStorageConnectOrigins().join(' ')
 
   const directives = [
     "default-src 'self'",
@@ -35,7 +35,9 @@ export function buildCspHeader(nonce: string, options: CspOptions = {}): string 
 }
 
 export function buildCspHeaderForPath(nonce: string, _pathname: string): string {
-  return buildCspHeader(nonce, { requireTrustedTypes: !isPatientAppShellPath(_pathname) })
+  return buildCspHeader(nonce, {
+    requireTrustedTypes: !isPatientAppShellPath(_pathname),
+  })
 }
 
 function applySecurityHeaders(response: NextResponse, nonce: string, pathname: string): void {
@@ -43,10 +45,7 @@ function applySecurityHeaders(response: NextResponse, nonce: string, pathname: s
   response.headers.set('X-Frame-Options', 'DENY')
   response.headers.set('X-Content-Type-Options', 'nosniff')
   response.headers.set('Referrer-Policy', 'strict-origin')
-  response.headers.set(
-    'Permissions-Policy',
-    'camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()',
-  )
+  response.headers.set('Permissions-Policy', buildPermissionsPolicyHeader())
 
   if (process.env.NODE_ENV !== 'development') {
     response.headers.set('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload')

@@ -4,9 +4,9 @@ import { createHash, randomBytes } from 'crypto'
 import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
 
-import { issueSessionIssuedAt, setAuthCookies } from '@/lib/auth/cookies'
-import { auditLog } from '@/lib/server/audit'
-import { issueCsrfCookie } from '@/lib/server/auth'
+import { clearAuthCookies, issueAuthenticatedSessionCookies } from '@/lib/auth/cookies'
+import { auditLog, createAuditContext } from '@/lib/server/audit'
+import { issueCsrfCookie, resolveBackendAuthenticatedActorId } from '@/lib/server/auth'
 import { backendFetch, hasTokenPair, readJsonBody } from '@/lib/server/backend'
 import { getPatientWebConfig } from '@/lib/server/config'
 import type { BackendLoginResponse } from '@/types/auth'
@@ -102,6 +102,7 @@ function googleConfig(): { clientId: string; clientSecret: string } {
 }
 
 export function startGoogleOAuth(request: NextRequest): NextResponse {
+  const auditContext = createAuditContext()
   const { clientId } = googleConfig()
   const mode = parseMode(request.nextUrl.searchParams.get('mode'))
   const returnTo = safeReturnTo(request.nextUrl.searchParams.get('returnTo'))
@@ -120,6 +121,7 @@ export function startGoogleOAuth(request: NextRequest): NextResponse {
   authUrl.searchParams.set('prompt', 'select_account')
 
   const response = NextResponse.redirect(authUrl)
+  clearAuthCookies(response)
   response.cookies.set(OAUTH_COOKIE_NAMES.state, state, oauthCookieOptions())
   response.cookies.set(OAUTH_COOKIE_NAMES.verifier, verifier, oauthCookieOptions())
   response.cookies.set(OAUTH_COOKIE_NAMES.mode, mode, oauthCookieOptions())
@@ -128,11 +130,13 @@ export function startGoogleOAuth(request: NextRequest): NextResponse {
     ts: new Date().toISOString(),
     event: 'auth.google.start',
     method: 'GET',
+    ...auditContext,
   })
   return response
 }
 
 export async function completeGoogleOAuth(request: NextRequest): Promise<NextResponse> {
+  const auditContext = createAuditContext()
   const expectedState = request.cookies.get(OAUTH_COOKIE_NAMES.state)?.value
   const verifier = request.cookies.get(OAUTH_COOKIE_NAMES.verifier)?.value
   const mode = parseMode(request.cookies.get(OAUTH_COOKIE_NAMES.mode)?.value ?? null)
@@ -157,17 +161,22 @@ export async function completeGoogleOAuth(request: NextRequest): Promise<NextRes
       body: JSON.stringify({ id_token: token.id_token }),
     })
     const data = await readJsonBody<BackendLoginResponse & BackendErrorResponse>(backendResponse)
-
+    const backendActorId = data.user_id
     if (!backendResponse.ok || !hasTokenPair(data)) {
       return googleFailureRedirect(request, mode, googleFailureReason(mode, backendResponse.status, data))
     }
+    const actorId = await resolveBackendAuthenticatedActorId(backendActorId, data)
+    if (actorId === undefined) {
+      return googleFailureRedirect(request, mode, 'callback_failed')
+    }
 
     const response = redirectWithinApp(request, returnTo)
-    setAuthCookies(response, {
+    clearAuthCookies(response)
+    const issued = issueAuthenticatedSessionCookies(response, {
       accessToken: data.access_token,
       refreshToken: data.refresh_token,
+      actorId,
     })
-    issueSessionIssuedAt(response)
     issueCsrfCookie(response)
     clearOauthCookies(response)
     auditLog({
@@ -175,6 +184,19 @@ export async function completeGoogleOAuth(request: NextRequest): Promise<NextRes
       event: mode === 'register' ? 'auth.google.register.success' : 'auth.google.login.success',
       method: 'GET',
       status: backendResponse.status,
+      ...auditContext,
+      actorId,
+      sessionCorrelation: issued.sessionCorrelation,
+    })
+    auditLog({
+      ts: new Date().toISOString(),
+      event: 'auth.token.issued',
+      method: 'GET',
+      status: backendResponse.status,
+      ...auditContext,
+      actorId,
+      sessionCorrelation: issued.sessionCorrelation,
+      reason: 'google_token_pair',
     })
     return response
   } catch {
@@ -217,6 +239,7 @@ function googleFailureRedirect(
   mode: GoogleAuthMode,
   reason: GoogleFailureReason,
 ): NextResponse {
+  const auditContext = createAuditContext()
   const targetPath = mode === 'register' && (reason === 'account_exists' || reason === 'already_linked')
     ? '/login'
     : mode === 'register'
@@ -224,12 +247,14 @@ function googleFailureRedirect(
       : '/login'
   const target = `${targetPath}?socialAuthError=${encodeURIComponent(reason)}`
   const response = redirectWithinApp(request, target)
+  clearAuthCookies(response)
   clearOauthCookies(response)
   auditLog({
     ts: new Date().toISOString(),
     event: mode === 'register' ? 'auth.google.register.failure' : 'auth.google.login.failure',
     method: 'GET',
     reason,
+    ...auditContext,
   })
   return response
 }

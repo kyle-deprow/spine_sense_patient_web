@@ -148,20 +148,13 @@ describe('proxy allowlist', () => {
   })
 
   it('normalizes exact backend root routes to avoid auth-losing redirects', () => {
-    expect(
-      validateProxyTarget(
-        ['api', 'v1', 'patients', 'me'],
-        'GET',
-        '/api/proxy/api/v1/patients/me',
-      ),
-    ).toEqual({ ok: true, targetPath: '/api/v1/patients/me/' })
+    expect(validateProxyTarget(['api', 'v1', 'patients', 'me'], 'GET', '/api/proxy/api/v1/patients/me')).toEqual({
+      ok: true,
+      targetPath: '/api/v1/patients/me/',
+    })
 
     expect(
-      validateProxyTarget(
-        ['api', 'v1', 'patients', 'me', 'symptoms'],
-        'GET',
-        '/api/proxy/api/v1/patients/me/symptoms',
-      ),
+      validateProxyTarget(['api', 'v1', 'patients', 'me', 'symptoms'], 'GET', '/api/proxy/api/v1/patients/me/symptoms'),
     ).toEqual({ ok: true, targetPath: '/api/v1/patients/me/symptoms/' })
   })
 
@@ -191,6 +184,68 @@ describe('proxy allowlist', () => {
     ).toEqual({ ok: true, targetPath: '/api/v1/patients/me/intake/progress/complete' })
   })
 
+  it('allows only the implemented MyScribe route and method combinations', () => {
+    const recordingId = '10000000-0000-4000-8000-000000000001'
+    const routes = [
+      ['GET', '/api/v1/patients/me/miscribe/recording-policy'],
+      ['GET', '/api/v1/patients/me/miscribe/recordings'],
+      ['POST', '/api/v1/patients/me/miscribe/recordings/setup'],
+      ['POST', `/api/v1/patients/me/miscribe/recordings/${recordingId}/all-party-attestation`],
+      ['POST', `/api/v1/patients/me/miscribe/recordings/${recordingId}/begin`],
+      ['POST', `/api/v1/patients/me/miscribe/recordings/${recordingId}/abandon`],
+      ['POST', `/api/v1/patients/me/miscribe/recordings/${recordingId}/upload-url`],
+      ['POST', `/api/v1/patients/me/miscribe/recordings/${recordingId}/upload-complete`],
+      ['POST', `/api/v1/patients/me/miscribe/recordings/${recordingId}/process`],
+      ['GET', `/api/v1/patients/me/miscribe/recordings/${recordingId}`],
+      ['GET', `/api/v1/patients/me/miscribe/recordings/${recordingId}/summary`],
+      ['DELETE', `/api/v1/patients/me/miscribe/recordings/${recordingId}`],
+    ] as const
+
+    for (const [method, targetPath] of routes) {
+      expect(validateProxyTarget(targetPath.slice(1).split('/'), method, `/api/proxy${targetPath}`)).toEqual({
+        ok: true,
+        targetPath,
+      })
+    }
+  })
+
+  it('blocks unimplemented or malformed MyScribe paths', () => {
+    const cases = [
+      ['POST', '/api/v1/patients/me/miscribe/recordings/not-a-uuid/process'],
+      ['POST', '/api/v1/patients/me/miscribe/recordings/10000000-0000-4000-8000-000000000001/share'],
+      ['GET', '/api/v1/patients/me/miscribe/summaries'],
+    ] as const
+
+    for (const [method, targetPath] of cases) {
+      expect(validateProxyTarget(targetPath.slice(1).split('/'), method, `/api/proxy${targetPath}`)).toEqual({
+        ok: false,
+        status: 404,
+        code: 'proxy_path_not_allowed',
+      })
+    }
+  })
+
+  it('blocks method mismatches on implemented MyScribe paths', () => {
+    const recordingId = '10000000-0000-4000-8000-000000000001'
+    const cases = [
+      ['POST', '/api/v1/patients/me/miscribe/recording-policy'],
+      ['POST', '/api/v1/patients/me/miscribe/recordings'],
+      ['DELETE', '/api/v1/patients/me/miscribe/recordings'],
+      ['GET', '/api/v1/patients/me/miscribe/recordings/setup'],
+      ['PUT', `/api/v1/patients/me/miscribe/recordings/${recordingId}`],
+      ['GET', `/api/v1/patients/me/miscribe/recordings/${recordingId}/process`],
+      ['DELETE', `/api/v1/patients/me/miscribe/recordings/${recordingId}/summary`],
+    ] as const
+
+    for (const [method, targetPath] of cases) {
+      expect(validateProxyTarget(targetPath.slice(1).split('/'), method, `/api/proxy${targetPath}`)).toEqual({
+        ok: false,
+        status: 405,
+        code: 'proxy_method_not_allowed',
+      })
+    }
+  })
+
   it('preserves explicit trailing slashes for FastAPI collection routes', () => {
     expect(
       validateProxyTarget(
@@ -202,19 +257,23 @@ describe('proxy allowlist', () => {
   })
 
   it('blocks backend auth routes in the generic proxy', () => {
-    expect(
-      validateProxyTarget(['api', 'v1', 'auth', 'session'], 'GET', '/api/proxy/api/v1/auth/session'),
-    ).toEqual({ ok: false, status: 404, code: 'proxy_auth_blocked' })
+    expect(validateProxyTarget(['api', 'v1', 'auth', 'session'], 'GET', '/api/proxy/api/v1/auth/session')).toEqual({
+      ok: false,
+      status: 404,
+      code: 'proxy_auth_blocked',
+    })
   })
 
   it('rejects encoded traversal and double slash prefix bypasses', () => {
-    expect(
-      validateProxyTarget(['api', 'v1', 'patients', 'me'], 'GET', '/api/proxy/api/v1/patients/%2e%2e/me'),
-    ).toEqual({ ok: false, status: 400, code: 'proxy_path_invalid' })
+    expect(validateProxyTarget(['api', 'v1', 'patients', 'me'], 'GET', '/api/proxy/api/v1/patients/%2e%2e/me')).toEqual(
+      { ok: false, status: 400, code: 'proxy_path_invalid' },
+    )
 
-    expect(
-      validateProxyTarget(['api', 'v1', 'patients', 'me'], 'GET', '/api/proxy//api/v1/patients/me'),
-    ).toEqual({ ok: false, status: 404, code: 'proxy_prefix_not_allowed' })
+    expect(validateProxyTarget(['api', 'v1', 'patients', 'me'], 'GET', '/api/proxy//api/v1/patients/me')).toEqual({
+      ok: false,
+      status: 404,
+      code: 'proxy_prefix_not_allowed',
+    })
   })
 
   it('blocks method mismatches before forwarding', () => {

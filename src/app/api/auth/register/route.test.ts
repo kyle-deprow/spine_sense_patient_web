@@ -13,10 +13,10 @@ vi.mock('@/lib/server/backend', async (importOriginal) => {
   }
 })
 
-vi.mock('@/lib/server/audit', () => ({
-  auditLog: vi.fn(),
-  extractUserIdFromToken: vi.fn(),
-}))
+vi.mock('@/lib/server/audit', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/server/audit')>()
+  return { ...actual, auditLog: vi.fn() }
+})
 
 const mockedBackendFetch = vi.mocked(backendFetch)
 const mockedAuditLog = vi.mocked(auditLog)
@@ -66,8 +66,9 @@ describe('register route handler', () => {
   })
 
   it('normalizes current app registration fields before forwarding to the backend', async () => {
+    const actorId = '10000000-0000-4000-8000-000000000001'
     mockedBackendFetch.mockResolvedValue(
-      Response.json({ id: 'patient-1', email: 'patient@example.test' }),
+      Response.json({ id: actorId, user_id: actorId, email: 'patient@example.test' }),
     )
 
     const response = await POST(makeRegisterRequest({
@@ -98,6 +99,10 @@ describe('register route handler', () => {
     )
     expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain('Synthetic')
     expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain('Password123!!')
+    expect(mockedAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'auth.register.success', actorId }),
+    )
+    expect(response.headers.getSetCookie().join('\n')).toContain('spine_patient_audit_actor=;')
   })
 
   it('prefers backend-native snake_case fields when both shapes are present', async () => {

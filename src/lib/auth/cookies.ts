@@ -1,16 +1,34 @@
+import { createHmac, timingSafeEqual } from 'node:crypto'
+
+import type { NextRequest } from 'next/server'
 import type { NextResponse } from 'next/server'
+
+import {
+  getPatientWebConfig,
+  type AuditActorSigningKey,
+  type AuditActorSigningKeys,
+} from '@/lib/server/config'
 
 export const COOKIE_NAMES = {
   access: 'spine_patient_sess',
   refresh: 'spine_patient_refresh',
   csrf: 'spine_patient_csrf',
   sessionIssuedAt: 'spine_patient_sess_iat',
+  auditActor: 'spine_patient_audit_actor',
 } as const
 
 export const ACCESS_TOKEN_MAX_AGE_SECONDS = 15 * 60
 export const REFRESH_TOKEN_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 export const CSRF_TOKEN_MAX_AGE_SECONDS = 2 * 60 * 60
 export const SESSION_MAX_AGE_SECONDS = 12 * 60 * 60 // 12 hours absolute limit
+
+const AUDIT_ACTOR_COOKIE_VERSION = 'v2'
+const AUDIT_ACTOR_SIGNING_PURPOSE = 'patient-web-audit-actor\0'
+const SESSION_CORRELATION_PURPOSE = 'patient-web-audit-session\0'
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const BASE64URL_SHA256_RE = /^[A-Za-z0-9_-]{43}$/
+const KEY_ID_RE = /^[A-Za-z0-9_-]{1,32}$/
+const UNIX_SECONDS_RE = /^[1-9][0-9]{9}$/
 
 export interface CookieOptions {
   httpOnly: boolean
@@ -89,13 +107,119 @@ export function csrfCookieOptions(): CookieOptions {
   }
 }
 
-export function setAuthCookies(
+export function auditActorCookieOptions(): CookieOptions {
+  return {
+    httpOnly: true,
+    secure: shouldUseSecureCookies(),
+    sameSite: 'strict',
+    path: '/',
+    maxAge: SESSION_MAX_AGE_SECONDS,
+  }
+}
+
+export function normalizeAuditActorId(value: unknown): string | undefined {
+  return typeof value === 'string' && UUID_RE.test(value) ? value.toLowerCase() : undefined
+}
+
+export function tokenSessionCorrelation(accessToken: string, key: AuditActorSigningKey): string {
+  return `sess_${createHmac('sha256', key.secret)
+    .update(SESSION_CORRELATION_PURPOSE, 'utf8')
+    .update(accessToken, 'utf8')
+    .digest('base64url')}`
+}
+
+export function signAuditActorCookie(
+  actorId: unknown,
+  accessToken: string,
+  issuedAt: number,
+  key: AuditActorSigningKey,
+): string | undefined {
+  const normalizedActorId = normalizeAuditActorId(actorId)
+  if (
+    normalizedActorId === undefined ||
+    !accessToken ||
+    !validSessionIssuedAt(issuedAt) ||
+    !KEY_ID_RE.test(key.id)
+  ) return undefined
+
+  const correlation = tokenSessionCorrelation(accessToken, key)
+  const payload = `${AUDIT_ACTOR_COOKIE_VERSION}.${key.id}.${normalizedActorId}.${issuedAt}.${correlation}`
+  return `${payload}.${auditActorSignature(payload, key.secret)}`
+}
+
+export function verifyAuditActorCookie(
+  value: string | undefined,
+  accessToken: string | undefined,
+  issuedAtValue: string | undefined,
+  keys: AuditActorSigningKeys,
+): string | undefined {
+  if (!value) return undefined
+  const parts = value.split('.')
+  if (parts.length !== 6 || !accessToken || !issuedAtValue) return undefined
+
+  const [version, keyId, actorId, issuedAt, correlation, signature] = parts
+  if (
+    version !== AUDIT_ACTOR_COOKIE_VERSION ||
+    keyId === undefined ||
+    actorId === undefined ||
+    issuedAt === undefined ||
+    correlation === undefined ||
+    signature === undefined ||
+    normalizeAuditActorId(actorId) !== actorId ||
+    issuedAt !== issuedAtValue ||
+    !UNIX_SECONDS_RE.test(issuedAt) ||
+    !validSessionIssuedAt(Number(issuedAt)) ||
+    !/^sess_[A-Za-z0-9_-]{43}$/.test(correlation) ||
+    !BASE64URL_SHA256_RE.test(signature)
+  ) {
+    return undefined
+  }
+
+  const key = signingKeyById(keyId, keys)
+  if (!key || correlation !== tokenSessionCorrelation(accessToken, key)) return undefined
+
+  const payload = `${version}.${keyId}.${actorId}.${issuedAt}.${correlation}`
+  const expected = Buffer.from(auditActorSignature(payload, key.secret), 'base64url')
+  const received = Buffer.from(signature, 'base64url')
+  if (received.length !== expected.length || !timingSafeEqual(received, expected)) return undefined
+  return actorId
+}
+
+export function auditActorIdFromRequest(request: NextRequest): string | undefined {
+  const { auditActorSigningKeys } = getPatientWebConfig()
+  return verifyAuditActorCookie(
+    request.cookies.get(COOKIE_NAMES.auditActor)?.value,
+    request.cookies.get(COOKIE_NAMES.access)?.value,
+    request.cookies.get(COOKIE_NAMES.sessionIssuedAt)?.value,
+    auditActorSigningKeys,
+  )
+}
+
+export function issueAuthenticatedSessionCookies(
   response: NextResponse,
-  tokens: { accessToken: string; refreshToken?: string },
-): void {
-  response.cookies.set(COOKIE_NAMES.access, tokens.accessToken, accessCookieOptions())
-  if (tokens.refreshToken) {
-    response.cookies.set(COOKIE_NAMES.refresh, tokens.refreshToken, refreshCookieOptions())
+  session: { accessToken: string; refreshToken: string; actorId: unknown; issuedAt?: number },
+): { actorId: string; issuedAt: number; sessionCorrelation: string } {
+  const { auditActorSigningKeys } = getPatientWebConfig()
+  const actorId = normalizeAuditActorId(session.actorId)
+  const issuedAt = session.issuedAt ?? Math.floor(Date.now() / 1000)
+  const actorCookie = signAuditActorCookie(
+    actorId,
+    session.accessToken,
+    issuedAt,
+    auditActorSigningKeys.current,
+  )
+  if (!session.accessToken || !session.refreshToken || !actorId || !actorCookie) {
+    throw new Error('Cannot issue patient web session without a full token pair and trusted actor')
+  }
+
+  response.cookies.set(COOKIE_NAMES.access, session.accessToken, accessCookieOptions())
+  response.cookies.set(COOKIE_NAMES.refresh, session.refreshToken, refreshCookieOptions())
+  response.cookies.set(COOKIE_NAMES.sessionIssuedAt, String(issuedAt), sessionIssuedAtCookieOptions())
+  response.cookies.set(COOKIE_NAMES.auditActor, actorCookie, auditActorCookieOptions())
+  return {
+    actorId,
+    issuedAt,
+    sessionCorrelation: tokenSessionCorrelation(session.accessToken, auditActorSigningKeys.current),
   }
 }
 
@@ -117,22 +241,37 @@ export function clearAuthCookies(response: NextResponse): void {
     maxAge: 0,
   })
   response.cookies.set(COOKIE_NAMES.sessionIssuedAt, '', {
-    httpOnly: true,
-    secure: shouldUseSecureCookies(),
-    sameSite: 'strict',
-    path: '/api/auth/refresh',
+    ...sessionIssuedAtCookieOptions(),
+    maxAge: 0,
+  })
+  response.cookies.set(COOKIE_NAMES.auditActor, '', {
+    ...auditActorCookieOptions(),
     maxAge: 0,
   })
 }
 
-export function issueSessionIssuedAt(response: NextResponse, nodeEnv?: 'development' | 'production' | 'test'): void {
-  const isSecure = shouldUseSecureCookies(nodeEnv)
-  const now = Math.floor(Date.now() / 1000) // Unix seconds
-  response.cookies.set(COOKIE_NAMES.sessionIssuedAt, String(now), {
+function sessionIssuedAtCookieOptions(): CookieOptions {
+  return {
     httpOnly: true,
-    secure: isSecure,
+    secure: shouldUseSecureCookies(),
     sameSite: 'strict',
-    path: '/api/auth/refresh', // only sent to the refresh endpoint
+    path: '/',
     maxAge: SESSION_MAX_AGE_SECONDS,
-  })
+  }
+}
+
+function auditActorSignature(payload: string, secret: string): string {
+  return createHmac('sha256', secret)
+    .update(AUDIT_ACTOR_SIGNING_PURPOSE, 'utf8')
+    .update(payload, 'utf8')
+    .digest('base64url')
+}
+
+function signingKeyById(id: string, keys: AuditActorSigningKeys): AuditActorSigningKey | undefined {
+  if (keys.current.id === id) return keys.current
+  return keys.previous?.id === id ? keys.previous : undefined
+}
+
+function validSessionIssuedAt(value: number, now = Math.floor(Date.now() / 1000)): boolean {
+  return Number.isInteger(value) && value > 0 && value <= now + 60 && now - value <= SESSION_MAX_AGE_SECONDS
 }

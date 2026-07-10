@@ -5,7 +5,7 @@ import { COOKIE_NAMES } from '@/lib/auth/cookies'
 import { validateUnsafeRequest } from '@/lib/auth/csrf'
 import { validateProxyTarget } from '@/lib/proxy/allowlist'
 import { buildProxyRequestHeaders, buildProxyResponseHeaders } from '@/lib/proxy/headers'
-import { auditLog, deriveResourceType, extractUserIdFromToken } from '@/lib/server/audit'
+import { auditLog, createRequestAuditContext, deriveResourceType, type AuditContext } from '@/lib/server/audit'
 import { assessmentBackendTimeoutOptions } from '@/lib/server/assessment-timeouts'
 import { BackendUnavailableError, backendFetch } from '@/lib/server/backend'
 import { getPatientWebConfig } from '@/lib/server/config'
@@ -16,14 +16,19 @@ type ProxyContext = {
 }
 
 async function handler(request: NextRequest, context: ProxyContext) {
+  const accessToken = request.cookies.get(COOKIE_NAMES.access)?.value
+  const auditContext = createRequestAuditContext(request, accessToken)
   const { path } = await context.params
   const target = validateProxyTarget(path, request.method, request.nextUrl.pathname)
   if (!target.ok) {
+    auditDenial(request.method, target.status, target.code, auditContext)
     return jsonNoStore({ error: target.code }, { status: target.status })
   }
 
-  const accessToken = request.cookies.get(COOKIE_NAMES.access)?.value
+  const resourceType = deriveResourceType(target.targetPath)
+
   if (!accessToken) {
+    auditDenial(request.method, 401, 'authentication_required', auditContext, resourceType)
     return jsonNoStore({ error: 'unauthorized' }, { status: 401 })
   }
 
@@ -33,10 +38,12 @@ async function handler(request: NextRequest, context: ProxyContext) {
     allowedOrigins: config.allowedOrigins,
   })
   if (!csrf.ok) {
+    auditDenial(request.method, csrf.status, csrf.code, auditContext, resourceType)
     return csrfFailureResponse(csrf.status, csrf.code)
   }
 
   const headers = buildProxyRequestHeaders(request, accessToken)
+  headers.set('X-Request-Id', auditContext.requestId)
   const backendRequest: RequestInit = {
     method: request.method,
     headers,
@@ -59,23 +66,19 @@ async function handler(request: NextRequest, context: ProxyContext) {
     )
   } catch (err) {
     if (err instanceof BackendUnavailableError) {
+      auditDenial(request.method, 503, 'backend_unavailable', auditContext, resourceType)
       return jsonNoStore({ error: 'service_unavailable' }, { status: 503 })
     }
     throw err
   }
 
-  // Emit audit event after the backend response so status is available.
-  // userId is extracted from the access token JWT payload (sub claim) without
-  // signature verification — for audit correlation only, not authentication.
-  // resourceType is derived from the target path, never the full request path.
   auditLog({
     ts: new Date().toISOString(),
     event: 'phi.proxy.access',
     method: request.method,
-    resourceType: deriveResourceType(target.targetPath),
-    userId: extractUserIdFromToken(accessToken),
+    resourceType,
     status: backendResponse.status,
-    requestId: request.headers.get('x-request-id') ?? undefined,
+    ...auditContext,
   })
 
   const responseHeaders = buildProxyResponseHeaders(backendResponse)
@@ -86,6 +89,24 @@ async function handler(request: NextRequest, context: ProxyContext) {
   return new NextResponse(await backendResponse.arrayBuffer(), {
     status: backendResponse.status,
     headers: responseHeaders,
+  })
+}
+
+function auditDenial(
+  method: string,
+  status: number,
+  reason: string,
+  auditContext: AuditContext,
+  resourceType = 'proxy',
+): void {
+  auditLog({
+    ts: new Date().toISOString(),
+    event: 'phi.proxy.denied',
+    method,
+    resourceType,
+    status,
+    ...auditContext,
+    reason,
   })
 }
 

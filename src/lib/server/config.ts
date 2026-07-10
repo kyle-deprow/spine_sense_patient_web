@@ -1,6 +1,7 @@
 export interface PatientWebConfig {
   backendInternalUrl: string
   csrfSecret: string
+  auditActorSigningKeys: AuditActorSigningKeys
   allowedOrigins: string[]
   storageOrigins: string[]
   googleClientId: string
@@ -8,6 +9,18 @@ export interface PatientWebConfig {
   googleOauthBaaConfirmed: boolean
   publicUrl: string | null
 }
+
+export interface AuditActorSigningKey {
+  id: string
+  secret: string
+}
+
+export interface AuditActorSigningKeys {
+  current: AuditActorSigningKey
+  previous?: AuditActorSigningKey | undefined
+}
+
+const SIGNING_KEY_ID_RE = /^[A-Za-z0-9_-]{1,32}$/
 
 function splitList(value: string | undefined): string[] {
   if (!value) return []
@@ -21,6 +34,48 @@ function requireSecret(name: string, fallback?: string): string {
   const value = process.env[name] ?? fallback
   if (value) return value
   throw new Error(`${name} is required outside development`)
+}
+
+function requireValue(name: string): string {
+  const value = process.env[name]
+  if (value) return value
+  throw new Error(`${name} is required`)
+}
+
+function auditActorSigningKeys(): AuditActorSigningKeys {
+  const current = signingKey(
+    'PATIENT_WEB_AUDIT_ACTOR_SIGNING_CURRENT_KEY_ID',
+    'PATIENT_WEB_AUDIT_ACTOR_SIGNING_CURRENT_KEY',
+  )
+  const previousId = process.env.PATIENT_WEB_AUDIT_ACTOR_SIGNING_PREVIOUS_KEY_ID
+  const previousSecret = process.env.PATIENT_WEB_AUDIT_ACTOR_SIGNING_PREVIOUS_KEY
+
+  if (Boolean(previousId) !== Boolean(previousSecret)) {
+    throw new Error(
+      'PATIENT_WEB_AUDIT_ACTOR_SIGNING_PREVIOUS_KEY_ID and PATIENT_WEB_AUDIT_ACTOR_SIGNING_PREVIOUS_KEY must be set together',
+    )
+  }
+  if (!previousId || !previousSecret) return { current }
+
+  const previous = validateSigningKey(previousId, previousSecret, 'previous')
+  if (previous.id === current.id) {
+    throw new Error('Patient web audit actor current and previous signing key IDs must differ')
+  }
+  return { current, previous }
+}
+
+function signingKey(idName: string, secretName: string): AuditActorSigningKey {
+  return validateSigningKey(requireValue(idName), requireValue(secretName), 'current')
+}
+
+function validateSigningKey(id: string, secret: string, label: string): AuditActorSigningKey {
+  if (!SIGNING_KEY_ID_RE.test(id)) {
+    throw new Error(`Patient web audit actor ${label} signing key ID is invalid`)
+  }
+  if (Buffer.byteLength(secret, 'utf8') < 32) {
+    throw new Error(`Patient web audit actor ${label} signing key must be at least 32 bytes`)
+  }
+  return { id, secret }
 }
 
 function parseBooleanEnv(name: string): boolean {
@@ -92,11 +147,9 @@ export function getPatientWebConfig(): PatientWebConfig {
   return {
     backendInternalUrl,
     csrfSecret,
+    auditActorSigningKeys: auditActorSigningKeys(),
     allowedOrigins: splitList(process.env.PATIENT_WEB_ALLOWED_ORIGINS),
-    storageOrigins: splitList(
-      process.env.NEXT_PUBLIC_STORAGE_DOMAINS ??
-        'https://*.s3.amazonaws.com https://*.storage.googleapis.com',
-    ),
+    storageOrigins: splitList(process.env.NEXT_PUBLIC_STORAGE_DOMAINS),
     googleClientId,
     googleClientSecret,
     googleOauthBaaConfirmed,
