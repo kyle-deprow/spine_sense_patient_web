@@ -76,6 +76,40 @@ describe('BFF auth boundary', () => {
     expect(response.headers.get('Cache-Control')).toBe('no-store')
   })
 
+  it('reissues CSRF after successful no-token registration transitions', async () => {
+    mockedBackendFetch.mockResolvedValue(
+      Response.json({
+        id: actorId,
+        user_id: actorId,
+        email: 'patient@example.test',
+        verification_token: 'registration-verification-token',
+      }),
+    )
+
+    const response = await forwardCredentialAuth(
+      '/api/v1/auth/register/patient',
+      {
+        email: 'patient@example.test',
+        password: 'redacted',
+      },
+      undefined,
+      { errorMode: 'registration' },
+    )
+
+    await expect(response.json()).resolves.toEqual({
+      id: actorId,
+      email: 'patient@example.test',
+      verification_token: 'registration-verification-token',
+    })
+    const setCookie = response.headers.getSetCookie().join('\n')
+    expect(setCookie).toContain('spine_patient_sess=;')
+    expect(setCookie).toContain('spine_patient_refresh=;')
+    expect(setCookie).toContain('spine_patient_audit_actor=;')
+    expect(setCookie).toContain('spine_patient_csrf=')
+    expect(setCookie).toContain('SameSite=strict')
+    expect(response.headers.get('Cache-Control')).toBe('no-store')
+  })
+
   it('does not set auth cookies when backend authentication fails', async () => {
     mockedBackendFetch.mockResolvedValue(
       Response.json({ error: 'invalid_credentials' }, { status: 401 }),

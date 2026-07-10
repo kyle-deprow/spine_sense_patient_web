@@ -135,6 +135,7 @@ export async function forwardCredentialAuth(
       reason: 'backend_token_pair',
     })
   } else if (mfaRequired) {
+    issueCsrfCookie(response)
     auditLog({
       ts: new Date().toISOString(),
       event: 'auth.mfa.interim',
@@ -143,6 +144,8 @@ export async function forwardCredentialAuth(
       ...auditContext,
       ...(actorId === undefined ? {} : { actorId }),
     })
+  } else {
+    issueCsrfCookie(response)
   }
   return response
 }
