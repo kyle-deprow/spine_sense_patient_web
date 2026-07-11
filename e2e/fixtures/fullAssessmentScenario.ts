@@ -1,8 +1,9 @@
 // SYNTHETIC DATA ONLY.
 //
 // Browser E2E fixture for the server-owned v2 questionnaire. Screening IDs
-// follow the reachable low-back path; adaptive IDs are bank-backed candidates
-// because the server selects the final subset at runtime.
+// follow the reachable low-back path, including deterministic goals before
+// adaptive loading. Adaptive IDs are bank-backed candidates because the server
+// selects the final subset at runtime.
 
 type AssessmentAnswer = {
   readonly id: string
@@ -54,6 +55,8 @@ export const fullAssessmentScenario = {
     reloadAfterScreeningQuestionId: 'A03_Q2',
     backtrackAfterScreeningQuestionId: 'R03',
   },
+  requiredScreeningGoalQuestionIds: ['G01', 'G02', 'G03'],
+  optionalScreeningGoalQuestionIds: ['G04'],
   finalScreeningQuestionId: 'G04',
   screening: [
     { id: 'A00', value: ['low_back'] },
@@ -88,6 +91,12 @@ export const fullAssessmentScenario = {
     { id: 'T01', value: ['none'] },
     { id: 'T06_Q1', value: 'no' },
     { id: 'T06_Q2', value: 'yes' },
+    {
+      id: 'G01',
+      value: ['relieve_pain', 'return_to_work', 'understand_diagnosis'],
+    },
+    { id: 'G02', value: 'only_if_conservative_fails' },
+    { id: 'G03', value: 'want_a_plan' },
   ] satisfies readonly AssessmentAnswer[],
   screeningText: [
     {
@@ -139,11 +148,6 @@ export const fullAssessmentScenario = {
     { id: 'F03_Q3', value: 'no' },
     { id: 'F04', value: ['sitting', 'driving', 'exercise_recreation'] },
     { id: 'INF_STIFF_SPINE', value: 'no' },
-    {
-      id: 'G01',
-      value: ['relieve_pain', 'return_to_work', 'understand_diagnosis'],
-    },
-    { id: 'G03', value: 'want_a_plan' },
   ] satisfies readonly AssessmentAnswer[],
 } as const
 

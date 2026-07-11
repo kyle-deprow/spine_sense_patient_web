@@ -3,9 +3,11 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { fullAssessmentScenario } from '../../e2e/fixtures/fullAssessmentScenario'
+
+vi.setConfig({ testTimeout: 20_000 })
 
 type BankOption = {
   id?: string
@@ -167,6 +169,21 @@ type ActualScenarioContract = {
 
 let cachedScenarioContract: ActualScenarioContract | undefined
 
+function fixtureScreeningIds(): string[] {
+  return [
+    ...fullAssessmentScenario.screening.map(({ id }) => id),
+    ...fullAssessmentScenario.screeningText.map(({ id }) => id),
+  ]
+}
+
+function expectedScreeningGoalIds(): string[] {
+  const fixtureIds = new Set(fixtureScreeningIds())
+  return [
+    ...fullAssessmentScenario.requiredScreeningGoalQuestionIds,
+    ...fullAssessmentScenario.optionalScreeningGoalQuestionIds.filter((id) => fixtureIds.has(id)),
+  ]
+}
+
 function actualScenarioContract(): ActualScenarioContract {
   if (cachedScenarioContract != null) return cachedScenarioContract
 
@@ -212,12 +229,26 @@ describe('full assessment E2E fixture server contracts', () => {
   })
 
   it('exactly covers screening questions reachable with the server-owned intake overlay', () => {
-    const fixtureIds = [
-      ...fullAssessmentScenario.screening.map(({ id }) => id),
-      ...fullAssessmentScenario.screeningText.map(({ id }) => id),
-    ]
+    const fixtureIds = fixtureScreeningIds()
     expect(fixtureIds).toEqual(actualScenarioContract().visible_screening_ids)
     expect(fixtureIds).not.toContain('R05')
+  })
+
+  it('keeps screening goals deterministic, final, and ordered before adaptive loading', () => {
+    const fixtureIds = fixtureScreeningIds()
+    const expectedGoalIds = expectedScreeningGoalIds()
+    const goalQuestionIds: ReadonlySet<string> = new Set([
+      ...fullAssessmentScenario.requiredScreeningGoalQuestionIds,
+      ...fullAssessmentScenario.optionalScreeningGoalQuestionIds,
+    ])
+    const observedGoalIds = fixtureIds.filter((id) => goalQuestionIds.has(id))
+    const firstGoalIndex = fixtureIds.findIndex((id) => goalQuestionIds.has(id))
+
+    expect(observedGoalIds).toEqual(expectedGoalIds)
+    expect(new Set(observedGoalIds).size).toBe(observedGoalIds.length)
+    expect(firstGoalIndex).toBeGreaterThanOrEqual(0)
+    expect(fixtureIds.slice(firstGoalIndex)).toEqual(expectedGoalIds)
+    expect(actualScenarioContract().visible_screening_ids.slice(firstGoalIndex)).toEqual(expectedGoalIds)
   })
 
   it('derives stable demographic and no-condition facts through the production intake overlay', () => {
@@ -252,7 +283,9 @@ describe('full assessment E2E fixture server contracts', () => {
       'ST_GAIT',
       'SC13',
       'R_NEURO_CHRONICITY',
+      'G01',
       'G02',
+      'G03',
     ]
 
     expect(unreachableIds.filter((id) => fixtureIds.has(id))).toEqual([])

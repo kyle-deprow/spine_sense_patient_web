@@ -55,6 +55,16 @@ const SCREENING_ANSWERS_BY_ID = new Map(fullAssessmentScenario.screening.map((an
 const SCREENING_TEXT_ANSWERS_BY_ID = new Map(fullAssessmentScenario.screeningText.map((answer) => [answer.id, answer]))
 const ADAPTIVE_ANSWERS_BY_ID = new Map(fullAssessmentScenario.adaptive.map((answer) => [answer.id, answer]))
 const FINAL_SCREENING_QUESTION_ID = fullAssessmentScenario.finalScreeningQuestionId
+const EXPECTED_SCREENING_GOAL_QUESTION_IDS: readonly string[] = [
+  ...fullAssessmentScenario.requiredScreeningGoalQuestionIds,
+  ...fullAssessmentScenario.optionalScreeningGoalQuestionIds.filter(
+    (id) => SCREENING_ANSWERS_BY_ID.has(id) || SCREENING_TEXT_ANSWERS_BY_ID.has(id),
+  ),
+]
+const SCREENING_GOAL_QUESTION_IDS: ReadonlySet<string> = new Set([
+  ...fullAssessmentScenario.requiredScreeningGoalQuestionIds,
+  ...fullAssessmentScenario.optionalScreeningGoalQuestionIds,
+])
 
 function logMilestone(message: string): void {
   console.log(`[milestone] ${message}`)
@@ -179,6 +189,8 @@ function expectQuestionnaireMutationContracts(mutations: readonly QuestionnaireM
     ...fullAssessmentScenario.screeningText.map(({ id, text }) => [id, text] as const),
   ])
   const adaptiveAnswers = new Map<string, unknown>(fullAssessmentScenario.adaptive.map(({ id, value }) => [id, value]))
+  const screeningGoalSubmissionCounts = new Map(EXPECTED_SCREENING_GOAL_QUESTION_IDS.map((id) => [id, 0]))
+  const adaptiveGoalSubmissionIds = new Set<string>()
   const contracts = {
     '/screening/answers': {
       allowedKeys: ['answers', 'expected_revision', 'question_notes'],
@@ -237,6 +249,16 @@ function expectQuestionnaireMutationContracts(mutations: readonly QuestionnaireM
       if (isRecord(payload.answers) && contract.fixtureAnswers != null) {
         for (const [questionId, value] of Object.entries(payload.answers)) {
           expect(
+            !(path.endsWith('/adaptive/answers') && SCREENING_GOAL_QUESTION_IDS.has(questionId)),
+            `${path} must not submit screening goal ${questionId} as an adaptive follow-up`,
+          ).toBe(true)
+          if (path.endsWith('/screening/answers') && screeningGoalSubmissionCounts.has(questionId)) {
+            screeningGoalSubmissionCounts.set(questionId, (screeningGoalSubmissionCounts.get(questionId) ?? 0) + 1)
+          }
+          if (path.endsWith('/adaptive/answers') && SCREENING_GOAL_QUESTION_IDS.has(questionId)) {
+            adaptiveGoalSubmissionIds.add(questionId)
+          }
+          expect(
             contract.fixtureAnswers.has(questionId),
             `${path} answer ${questionId} must be an exact scenario fixture ID`,
           ).toBe(true)
@@ -258,6 +280,11 @@ function expectQuestionnaireMutationContracts(mutations: readonly QuestionnaireM
       }
     }
   }
+
+  expect(Object.fromEntries(screeningGoalSubmissionCounts), 'Each screening goal must be PATCHed exactly once').toEqual(
+    Object.fromEntries(EXPECTED_SCREENING_GOAL_QUESTION_IDS.map((id) => [id, 1])),
+  )
+  expect([...adaptiveGoalSubmissionIds], 'Adaptive answers must never include screening goals').toEqual([])
 }
 
 function isAssessmentReportGenerationResponse(response: PlaywrightResponse): boolean {
@@ -885,6 +912,28 @@ function answerValues(value: AssessmentAnswer['value']): readonly (string | numb
   return typeof value === 'string' || typeof value === 'number' ? [value] : value
 }
 
+function expectScreeningGoalRoutePrefix(observedQuestionIds: readonly string[]): void {
+  const firstGoalIndex = observedQuestionIds.findIndex((id) => SCREENING_GOAL_QUESTION_IDS.has(id))
+  if (firstGoalIndex < 0) return
+
+  const goalTail = observedQuestionIds.slice(firstGoalIndex)
+  expect(
+    goalTail.filter((id) => !SCREENING_GOAL_QUESTION_IDS.has(id)),
+    'Screening must not route back to Symptoms or earlier screening questions after goals start',
+  ).toEqual([])
+  expect(goalTail, 'Screening goals must appear once in target order before adaptive loading').toEqual(
+    EXPECTED_SCREENING_GOAL_QUESTION_IDS.slice(0, goalTail.length),
+  )
+}
+
+function expectCompletedScreeningGoalRoute(observedQuestionIds: readonly string[]): void {
+  expectScreeningGoalRoutePrefix(observedQuestionIds)
+  const observedGoalIds = observedQuestionIds.filter((id) => SCREENING_GOAL_QUESTION_IDS.has(id))
+  expect(observedGoalIds, 'Screening goals must appear exactly once in target order').toEqual(
+    EXPECTED_SCREENING_GOAL_QUESTION_IDS,
+  )
+}
+
 async function findVisibleCandidate(page: Page, candidates: readonly string[]): Promise<Locator | null> {
   for (const testId of candidates) {
     const locators = page.getByTestId(testId)
@@ -1257,18 +1306,27 @@ async function answerScreening(page: Page) {
     reloadedDuringScreening: false,
     backtrackedDuringScreening: false,
   }
+  const observedQuestionIds: string[] = []
 
   for (let questionIndex = 0; questionIndex < 80; questionIndex += 1) {
     const postScreeningStage = await waitForAnyVisibleTestId(page, POST_SCREENING_STAGE_TEST_IDS, 250).catch(() => null)
-    if (postScreeningStage != null) return
+    if (postScreeningStage != null) {
+      expectCompletedScreeningGoalRoute(observedQuestionIds)
+      return
+    }
 
     const screeningNavGone = !(await page
       .getByTestId('screening-nav-next')
       .isVisible({ timeout: 250 })
       .catch(() => false))
-    if (screeningNavGone) return
+    if (screeningNavGone) {
+      expectCompletedScreeningGoalRoute(observedQuestionIds)
+      return
+    }
 
     const questionId = await currentVisibleScreeningQuestionId(page)
+    observedQuestionIds.push(questionId)
+    expectScreeningGoalRoutePrefix(observedQuestionIds)
     if (questionId === 'A02') {
       const [painId, tinglingId, fullWidthReferenceId] = fullAssessmentScenario.uiContracts.a02OptionIds
       const painOption = page.getByTestId(`question-A02-option-${painId}`)
@@ -1334,6 +1392,7 @@ async function answerScreening(page: Page) {
     ).toBeEnabled({ timeout: 30_000 })
 
     if (await isScreeningSubmitButton(page)) {
+      expectCompletedScreeningGoalRoute(observedQuestionIds)
       return
     }
 
@@ -1371,6 +1430,10 @@ async function answerIssuedAdaptiveQuestion(page: Page): Promise<void> {
   }
 
   const questionId = match[1]
+  if (SCREENING_GOAL_QUESTION_IDS.has(questionId)) {
+    throw new Error(`Screening goal question ${questionId} was issued during adaptive follow-ups`)
+  }
+
   const answer = ADAPTIVE_ANSWERS_BY_ID.get(questionId)
   if (answer == null) {
     throw new Error(`No exact adaptive fixture answer is defined for issued question ${questionId}`)
