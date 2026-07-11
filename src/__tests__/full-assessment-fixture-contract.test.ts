@@ -208,7 +208,7 @@ describe('full assessment E2E fixture server contracts', () => {
     expect(unreachableIds.filter((id) => actualReachableAdaptiveIds().includes(id))).toEqual([])
   })
 
-  it('locks A02 layout selectors to the target entry bank and final screening question', () => {
+  it('locks A02 stacked layout selectors to the target entry bank and final screening question', () => {
     const a02 = screeningBank.get('A02')
     expect(a02?.options?.map(({ id }) => id)).toEqual(fullAssessmentScenario.uiContracts.a02OptionIds)
     expect(a02?.options?.map(({ label }) => label)).toEqual([
@@ -220,6 +220,11 @@ describe('full assessment E2E fixture server contracts', () => {
       'Hand clumsiness / dexterity difficulty',
       'Stiffness / heaviness',
     ])
+
+    const [painOption, tinglingOption] = a02?.options ?? []
+    expect(painOption?.label.length).toBeLessThanOrEqual(18)
+    expect(tinglingOption?.label.length).toBeGreaterThan(24)
+    expect(tinglingOption?.label).toContain('/')
 
     expect(fullAssessmentScenario.screeningText.at(-1)?.id).toBe(fullAssessmentScenario.finalScreeningQuestionId)
     expect(screeningBank.has(fullAssessmentScenario.stress.reloadAfterScreeningQuestionId)).toBe(true)

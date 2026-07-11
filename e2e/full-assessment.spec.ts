@@ -1270,19 +1270,33 @@ async function answerScreening(page: Page) {
 
     const questionId = await currentVisibleScreeningQuestionId(page)
     if (questionId === 'A02') {
-      const [painId, tinglingId] = fullAssessmentScenario.uiContracts.a02OptionIds
+      const [painId, tinglingId, fullWidthReferenceId] = fullAssessmentScenario.uiContracts.a02OptionIds
       const painOption = page.getByTestId(`question-A02-option-${painId}`)
       const tinglingOption = page.getByTestId(`question-A02-option-${tinglingId}`)
-      const [painBox, tinglingBox] = await Promise.all([painOption.boundingBox(), tinglingOption.boundingBox()])
-      if (painBox == null || tinglingBox == null) {
-        throw new Error('Expected the first two A02 options to have measurable layout boxes')
+      const fullWidthReference = page.getByTestId(`question-A02-option-${fullWidthReferenceId}`)
+      const [painBox, tinglingBox, fullWidthReferenceBox] = await Promise.all([
+        painOption.boundingBox(),
+        tinglingOption.boundingBox(),
+        fullWidthReference.boundingBox(),
+      ])
+      if (painBox == null || tinglingBox == null || fullWidthReferenceBox == null) {
+        throw new Error('Expected the first three A02 options to have measurable layout boxes')
       }
-      expect(Math.abs(painBox.y - tinglingBox.y)).toBeLessThanOrEqual(1)
-      expect(Math.abs(painBox.width - tinglingBox.width)).toBeLessThanOrEqual(1)
-      expect(Math.abs(tinglingBox.x - painBox.x - painBox.width - 8)).toBeLessThanOrEqual(1)
-      await expect(painOption).toHaveCSS('box-sizing', 'border-box')
-      await expect(painOption).toHaveCSS('display', 'flex')
-      await expect(painOption).toHaveCSS('flex-direction', 'column')
+      expect(tinglingBox.x).toBeCloseTo(painBox.x, 1)
+      expect(tinglingBox.width).toBeCloseTo(painBox.width, 1)
+      expect(painBox.x).toBeCloseTo(fullWidthReferenceBox.x, 1)
+      expect(painBox.width).toBeCloseTo(fullWidthReferenceBox.width, 1)
+      expect(painBox.height).toBeCloseTo(52, 1)
+      expect(tinglingBox.height).toBeCloseTo(52, 1)
+      expect(tinglingBox.y - painBox.y).toBeCloseTo(60, 1)
+      expect(tinglingBox.y - (painBox.y + painBox.height)).toBeCloseTo(8, 1)
+
+      for (const option of [painOption, tinglingOption]) {
+        await expect(option).toHaveCSS('box-sizing', 'border-box')
+        await expect(option).toHaveCSS('display', 'flex')
+        await expect(option).toHaveCSS('flex-direction', 'column')
+        await expect(option).toHaveCSS('min-height', '52px')
+      }
 
       const optionLabelStyles = await Promise.all(
         fullAssessmentScenario.uiContracts.a02OptionIds.map((optionId) =>
