@@ -1372,6 +1372,23 @@ async function continueWelcomeIntroIfPresent(page: Page): Promise<boolean> {
     return false
   }
 
+  const lockup = page.getByTestId('welcome-intro-lockup')
+  const initialTransform = await lockup.evaluate((element) => getComputedStyle(element).transform)
+  await expect
+    .poll(() => lockup.evaluate((element) => getComputedStyle(element).transform), {
+      message: 'welcome lockup should animate into its docked position',
+      timeout: 5_000,
+    })
+    .not.toBe(initialTransform)
+
+  const content = page.getByTestId('welcome-intro-content')
+  await expect
+    .poll(() => content.evaluate((element) => Number.parseFloat(getComputedStyle(element).opacity)), {
+      message: 'welcome content should fade in after the logo animation',
+      timeout: 6_000,
+    })
+    .toBeGreaterThan(0.95)
+
   if (!(await clickIfPresent(page, 'welcome-intro-begin'))) {
     await page.getByRole('button', { name: /let's begin/i }).click()
   }
@@ -1493,6 +1510,7 @@ test.describe('patient web full assessment flow', () => {
     request,
   }) => {
     test.setTimeout(FULL_FLOW_TIMEOUT_MS)
+    await page.emulateMedia({ reducedMotion: 'no-preference' })
 
     let email = uniqueSyntheticEmail()
     const { registration, onboarding } = fullAssessmentScenario
