@@ -16,13 +16,12 @@ const BACKEND_REGISTRATION_CODE_URL = process.env.PATIENT_WEB_BACKEND_REGISTRATI
 const GATEWAY_RESET_URL = process.env.PATIENT_WEB_GATEWAY_RESET_URL
 const GATEWAY_RESET_TOKEN = process.env.PATIENT_WEB_GATEWAY_RESET_TOKEN
 const EXPECT_SECURE_COOKIES = process.env.PATIENT_WEB_EXPECT_SECURE_COOKIES === 'true'
-const ENABLE_FULL_ASSESSMENT_STRESS =
-  process.env.PATIENT_WEB_FULL_ASSESSMENT_STRESS !== 'false'
+const ENABLE_FULL_ASSESSMENT_STRESS = process.env.PATIENT_WEB_FULL_ASSESSMENT_STRESS !== 'false'
 const FULL_FLOW_TIMEOUT_MS = 15 * 60 * 1000
 const ASSESSMENT_REPORT_PROXY_PATH_RE =
   /^\/api\/proxy\/api\/v1\/patients\/me\/assessments\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/reports$/i
-const STRESS_RELOAD_AFTER_SCREENING_QUESTION_ID = 'A03_Q2b'
-const STRESS_BACKTRACK_AFTER_SCREENING_QUESTION_ID = 'R03'
+const STRESS_RELOAD_AFTER_SCREENING_QUESTION_ID = fullAssessmentScenario.stress.reloadAfterScreeningQuestionId
+const STRESS_BACKTRACK_AFTER_SCREENING_QUESTION_ID = fullAssessmentScenario.stress.backtrackAfterScreeningQuestionId
 
 type BrowserCookie = {
   name: string
@@ -47,19 +46,15 @@ type ScreeningStressState = {
   backtrackedDuringScreening: boolean
 }
 
-const SCREENING_ANSWERS_BY_ID = new Map(
-  [
-    ...fullAssessmentScenario.screening,
-    ...fullAssessmentScenario.adaptive,
-  ].map((answer) => [answer.id, answer]),
-)
-const SCREENING_TEXT_ANSWERS_BY_ID = new Map(
-  [
-    ...fullAssessmentScenario.adaptiveText,
-  ].map((answer) => [answer.id, answer]),
-)
-const FINAL_SCREENING_QUESTION_ID =
-  fullAssessmentScenario.screening[fullAssessmentScenario.screening.length - 1]?.id
+type QuestionnaireMutation = {
+  path: string
+  payload: unknown
+}
+
+const SCREENING_ANSWERS_BY_ID = new Map(fullAssessmentScenario.screening.map((answer) => [answer.id, answer]))
+const SCREENING_TEXT_ANSWERS_BY_ID = new Map(fullAssessmentScenario.screeningText.map((answer) => [answer.id, answer]))
+const ADAPTIVE_ANSWERS_BY_ID = new Map(fullAssessmentScenario.adaptive.map((answer) => [answer.id, answer]))
+const FINAL_SCREENING_QUESTION_ID = fullAssessmentScenario.finalScreeningQuestionId
 
 function logMilestone(message: string): void {
   console.log(`[milestone] ${message}`)
@@ -74,10 +69,7 @@ function sanitizeDiagnostic(value: string): string {
   return value
     .replace(/https?:\/\/[^/\s)]+/g, '[origin]')
     .replace(/\?[^)\]\s"']+/g, '?[query]')
-    .replace(
-      /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi,
-      '[uuid]',
-    )
+    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi, '[uuid]')
     .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, '[email]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [token]')
     .replace(/\b(cookie|set-cookie)\b\s*[:=]\s*[^\n\r]+/gi, '$1=[redacted]')
@@ -86,9 +78,7 @@ function sanitizeDiagnostic(value: string): string {
     .replace(/"(cookie|set-cookie)"\s*:\s*\[[^\]]*\]/gi, '"$1":["[redacted]"]')
     .replace(/"(authorization|x-csrf-token|csrf-token)"\s*:\s*"[^"]*"/gi, '"$1":"[redacted]"')
     .replace(/\b(password|verification_code|verificationCode|mfa_code|mfaCode)\b\s*[:=]\s*[^,\s)]+/gi, '$1=[redacted]')
-    .replace(/"[^"]*token[^"]*"\s*:\s*"[^"]+"/gi, (match) =>
-      match.replace(/:\s*"[^"]+"/, ':"[token]"'),
-    )
+    .replace(/"[^"]*token[^"]*"\s*:\s*"[^"]+"/gi, (match) => match.replace(/:\s*"[^"]+"/, ':"[token]"'))
     .replace(/"password"\s*:\s*"[^"]+"/gi, '"password":"[redacted]"')
     .replace(/"csrfToken"\s*:\s*"[^"]+"/gi, '"csrfToken":"[redacted]"')
     .replace(/"csrf_token"\s*:\s*"[^"]+"/gi, '"csrf_token":"[redacted]"')
@@ -146,12 +136,133 @@ function installPhiSafeDiagnostics(page: Page) {
   })
 }
 
+function captureQuestionnaireMutations(page: Page): QuestionnaireMutation[] {
+  const mutations: QuestionnaireMutation[] = []
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname
+    if (!/(screening|adaptive)\/(answers|complete)$/.test(path)) return
+
+    let payload: unknown = null
+    try {
+      payload = request.postDataJSON()
+    } catch {
+      payload = null
+    }
+    mutations.push({ path, payload })
+  })
+  return mutations
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function expectRawAnswerValue(path: string, questionId: string, value: unknown): void {
+  const validScalar =
+    (typeof value === 'string' && value.length > 0) ||
+    (typeof value === 'number' && Number.isInteger(value)) ||
+    typeof value === 'boolean'
+  const validList =
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((item) => typeof item === 'string' && item.length > 0) &&
+    new Set(value).size === value.length
+  expect(
+    validScalar || validList,
+    `${path} answer ${questionId} must use the exact raw scalar-or-string-list shape`,
+  ).toBe(true)
+}
+
+function expectQuestionnaireMutationContracts(mutations: readonly QuestionnaireMutation[]) {
+  const screeningAnswers = new Map<string, unknown>([
+    ...fullAssessmentScenario.screening.map(({ id, value }) => [id, value] as const),
+    ...fullAssessmentScenario.screeningText.map(({ id, text }) => [id, text] as const),
+  ])
+  const adaptiveAnswers = new Map<string, unknown>(fullAssessmentScenario.adaptive.map(({ id, value }) => [id, value]))
+  const contracts = {
+    '/screening/answers': {
+      allowedKeys: ['answers', 'expected_revision', 'question_notes'],
+      requiredKeys: ['answers', 'expected_revision'],
+      fixtureAnswers: screeningAnswers,
+    },
+    '/screening/complete': {
+      allowedKeys: ['answers', 'expected_revision', 'question_notes'],
+      requiredKeys: ['expected_revision'],
+      fixtureAnswers: screeningAnswers,
+    },
+    '/adaptive/answers': {
+      allowedKeys: ['answers', 'expected_revision', 'question_notes'],
+      requiredKeys: ['answers', 'expected_revision'],
+      fixtureAnswers: adaptiveAnswers,
+    },
+    '/adaptive/complete': {
+      allowedKeys: ['expected_revision'],
+      requiredKeys: ['expected_revision'],
+      fixtureAnswers: null,
+    },
+  } as const
+
+  for (const suffix of Object.keys(contracts) as Array<keyof typeof contracts>) {
+    expect(
+      mutations.some(({ path }) => path.endsWith(suffix)),
+      `${suffix} must be exercised`,
+    ).toBe(true)
+  }
+
+  for (const { path, payload } of mutations) {
+    const suffix = (Object.keys(contracts) as Array<keyof typeof contracts>).find((candidate) =>
+      path.endsWith(candidate),
+    )
+    expect(suffix, `${path} must have an endpoint-specific request contract`).toBeDefined()
+    if (suffix == null) continue
+
+    expect(isRecord(payload), `${path} must send a plain JSON object`).toBe(true)
+    if (!isRecord(payload)) continue
+
+    const contract = contracts[suffix]
+    expect(
+      Object.keys(payload).filter((key) => !(contract.allowedKeys as readonly string[]).includes(key)),
+      `${path} must not send aliases, derived fields, or arbitrary extras`,
+    ).toEqual([])
+    for (const requiredKey of contract.requiredKeys) {
+      expect(payload, `${path} must send ${requiredKey}`).toHaveProperty(requiredKey)
+    }
+    expect(
+      Number.isSafeInteger(payload.expected_revision) && (payload.expected_revision as number) >= 0,
+      `${path} expected_revision must be a non-negative integer`,
+    ).toBe(true)
+
+    if ('answers' in payload) {
+      expect(isRecord(payload.answers), `${path} answers must be a raw answer map`).toBe(true)
+      if (isRecord(payload.answers) && contract.fixtureAnswers != null) {
+        for (const [questionId, value] of Object.entries(payload.answers)) {
+          expect(
+            contract.fixtureAnswers.has(questionId),
+            `${path} answer ${questionId} must be an exact scenario fixture ID`,
+          ).toBe(true)
+          expectRawAnswerValue(path, questionId, value)
+          expect(value, `${path} answer ${questionId} must equal its exact fixture value`).toEqual(
+            contract.fixtureAnswers.get(questionId),
+          )
+        }
+      }
+    }
+
+    if ('question_notes' in payload) {
+      expect(isRecord(payload.question_notes), `${path} question_notes must be a keyed map`).toBe(true)
+      if (isRecord(payload.question_notes) && contract.fixtureAnswers != null) {
+        for (const [questionId, note] of Object.entries(payload.question_notes)) {
+          expect(contract.fixtureAnswers.has(questionId)).toBe(true)
+          expect(typeof note === 'string' && note.trim().length > 0).toBe(true)
+        }
+      }
+    }
+  }
+}
+
 function isAssessmentReportGenerationResponse(response: PlaywrightResponse): boolean {
   const url = new URL(response.url())
-  return (
-    response.request().method() === 'POST' &&
-    ASSESSMENT_REPORT_PROXY_PATH_RE.test(url.pathname)
-  )
+  return response.request().method() === 'POST' && ASSESSMENT_REPORT_PROXY_PATH_RE.test(url.pathname)
 }
 
 async function postTestSupport(
@@ -177,9 +288,7 @@ async function resetBackend(request: APIRequestContext) {
 
   if (GATEWAY_RESET_URL) {
     if (!GATEWAY_RESET_TOKEN) {
-      throw new Error(
-        'PATIENT_WEB_GATEWAY_RESET_TOKEN is required when PATIENT_WEB_GATEWAY_RESET_URL is set',
-      )
+      throw new Error('PATIENT_WEB_GATEWAY_RESET_TOKEN is required when PATIENT_WEB_GATEWAY_RESET_URL is set')
     }
     await postTestSupport(request, GATEWAY_RESET_URL, GATEWAY_RESET_TOKEN, 'patient web gateway reset')
   }
@@ -207,10 +316,7 @@ async function getRegistrationVerificationCode(
     data: { email },
     timeout: 30_000,
   })
-  expect(
-    response.status(),
-    `registration verification code lookup failed status=${response.status()}`,
-  ).toBe(200)
+  expect(response.status(), `registration verification code lookup failed status=${response.status()}`).toBe(200)
   const payload = (await response.json()) as { code?: unknown }
   if (typeof payload.code !== 'string') {
     throw new Error('registration verification code lookup returned no code')
@@ -229,16 +335,13 @@ async function expectNoTokenLeak(responseText: string) {
 
 async function expectNoBrowserStorage(page: Page) {
   const storage = await page.evaluate(async () => {
-    const indexedDbDatabases =
-      typeof indexedDB.databases === 'function' ? await indexedDB.databases() : []
+    const indexedDbDatabases = typeof indexedDB.databases === 'function' ? await indexedDB.databases() : []
 
     return {
       localStorageLength: localStorage.length,
       sessionStorageLength: sessionStorage.length,
       indexedDbDatabases: indexedDbDatabases.map((db) => db.name).filter(Boolean),
-      serviceWorkerCount: navigator.serviceWorker
-        ? (await navigator.serviceWorker.getRegistrations()).length
-        : 0,
+      serviceWorkerCount: navigator.serviceWorker ? (await navigator.serviceWorker.getRegistrations()).length : 0,
     }
   })
 
@@ -282,7 +385,10 @@ async function warmCsrfSession(page: Page) {
 
 async function gotoWelcome(page: Page) {
   const isWelcomeVisible = async () =>
-    (await page.getByTestId('welcome-screen').isVisible({ timeout: 1000 }).catch(() => false)) ||
+    (await page
+      .getByTestId('welcome-screen')
+      .isVisible({ timeout: 1000 })
+      .catch(() => false)) ||
     (await page
       .getByRole('button', { name: /start my assessment/i })
       .isVisible({ timeout: 1000 })
@@ -324,8 +430,13 @@ async function gotoWelcome(page: Page) {
         href: location.href,
         text: document.body.innerText.slice(0, 500),
       }))
-      .catch((error) => ({ href: page.url(), text: `diagnostic unavailable: ${error.message}` }))
-    throw new Error(`Expected welcome screen. href=${sanitizeDiagnostic(diagnostic.href)} text=${sanitizeDiagnostic(diagnostic.text)}`)
+      .catch((error) => ({
+        href: page.url(),
+        text: `diagnostic unavailable: ${error.message}`,
+      }))
+    throw new Error(
+      `Expected welcome screen. href=${sanitizeDiagnostic(diagnostic.href)} text=${sanitizeDiagnostic(diagnostic.text)}`,
+    )
   }
 }
 
@@ -370,7 +481,12 @@ async function expectAuthenticatedCookieSession(page: Page) {
 }
 
 async function expectConsentScreenAfterVerification(page: Page) {
-  if (await page.getByTestId('consent-screen').isVisible({ timeout: 60_000 }).catch(() => false)) {
+  if (
+    await page
+      .getByTestId('consent-screen')
+      .isVisible({ timeout: 60_000 })
+      .catch(() => false)
+  ) {
     return
   }
   await expect(page.getByRole('heading', { name: /Privacy & Consent/i })).toBeVisible({
@@ -403,11 +519,7 @@ async function clickIfPresent(page: Page, testId: string, timeout = 1000): Promi
   return true
 }
 
-async function waitForAnyVisibleTestId(
-  page: Page,
-  testIds: readonly string[],
-  timeout = 60_000,
-): Promise<string> {
+async function waitForAnyVisibleTestId(page: Page, testIds: readonly string[], timeout = 60_000): Promise<string> {
   const deadline = Date.now() + timeout
   while (Date.now() < deadline) {
     for (const testId of testIds) {
@@ -421,11 +533,7 @@ async function waitForAnyVisibleTestId(
   throw new Error(`None of these test IDs became visible: ${testIds.join(', ')}`)
 }
 
-async function waitForAssessmentStage(
-  page: Page,
-  testIds: readonly string[],
-  timeout = 360_000,
-): Promise<string> {
+async function waitForAssessmentStage(page: Page, testIds: readonly string[], timeout = 360_000): Promise<string> {
   return waitForAnyVisibleTestId(page, testIds, timeout)
 }
 
@@ -467,14 +575,24 @@ function semanticLocatorForTestId(page: Page, testId: string): Locator | null {
     case 'tab-home':
       return page.getByRole('tab', { name: /Home/i }).last()
     case 'adaptive-submit':
-      return page.getByRole('button', { name: /^(Continue to next question|Submit answers)$/i }).first()
+      return page
+        .getByRole('button', {
+          name: /^(Continue to next question|Submit answers)$/i,
+        })
+        .first()
     default:
       return null
   }
 }
 
 async function isVisibleByTestIdOrSemantic(page: Page, testId: string, timeout = 500): Promise<boolean> {
-  if (await page.getByTestId(testId).isVisible({ timeout }).catch(() => false)) return true
+  if (
+    await page
+      .getByTestId(testId)
+      .isVisible({ timeout })
+      .catch(() => false)
+  )
+    return true
   const semantic = semanticLocatorForTestId(page, testId)
   return semantic != null && (await semantic.isVisible({ timeout }).catch(() => false))
 }
@@ -491,10 +609,7 @@ async function actionableLocatorForTestId(page: Page, testId: string): Promise<L
   return page.getByTestId(testId).first()
 }
 
-async function visibleDynamicQuestionTestId(
-  page: Page,
-  questionPrefix: string,
-): Promise<string | null> {
+async function visibleDynamicQuestionTestId(page: Page, questionPrefix: string): Promise<string | null> {
   return page
     .locator(`[data-testid^="${questionPrefix}-"]:visible`)
     .evaluateAll((elements) => {
@@ -546,10 +661,7 @@ async function waitForDynamicQuestionAdvance(
 
     const submit = await actionableLocatorForTestId(page, submitTestId)
     if (await submit.isVisible({ timeout: 250 }).catch(() => false)) {
-      if (
-        previousQuestionTestId == null &&
-        !(await submit.isEnabled({ timeout: 250 }).catch(() => false))
-      ) {
+      if (previousQuestionTestId == null && !(await submit.isEnabled({ timeout: 250 }).catch(() => false))) {
         return currentScreenTestId
       }
     }
@@ -564,12 +676,7 @@ async function maybeContinueSectionTransition(page: Page) {
   await clickIfPresent(page, 'screening-section-transition-continue')
 }
 
-async function waitForEnabledAndClick(
-  page: Page,
-  testId: string,
-  timeout = 30_000,
-  attempts = 4,
-) {
+async function waitForEnabledAndClick(page: Page, testId: string, timeout = 30_000, attempts = 4) {
   let lastError: unknown
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const locator = await actionableLocatorForTestId(page, testId)
@@ -588,9 +695,7 @@ async function waitForEnabledAndClick(
     }
   }
 
-  throw lastError instanceof Error
-    ? lastError
-    : new Error(`Could not click ${testId}`)
+  throw lastError instanceof Error ? lastError : new Error(`Could not click ${testId}`)
 }
 
 async function clickAndWaitForResponse({
@@ -669,7 +774,10 @@ async function clickAndWaitForResponseOrSuccess({
 
     const response = await Promise.race([
       page.waitForResponse(matches, { timeout }).catch(() => null),
-      page.getByTestId(successTestId).waitFor({ state: 'visible', timeout }).then(() => null),
+      page
+        .getByTestId(successTestId)
+        .waitFor({ state: 'visible', timeout })
+        .then(() => null),
     ])
 
     return response ?? observedResponses.find((candidate) => candidate.ok()) ?? observedResponses[0] ?? null
@@ -680,9 +788,14 @@ async function clickAndWaitForResponseOrSuccess({
 
 async function isConsentVisible(page: Page): Promise<boolean> {
   return (
-    await page.getByTestId('consent-screen').isVisible({ timeout: 500 }).catch(() => false)
-  ) || (
-    await page.getByRole('heading', { name: /Privacy & Consent/i }).isVisible({ timeout: 500 }).catch(() => false)
+    (await page
+      .getByTestId('consent-screen')
+      .isVisible({ timeout: 500 })
+      .catch(() => false)) ||
+    (await page
+      .getByRole('heading', { name: /Privacy & Consent/i })
+      .isVisible({ timeout: 500 })
+      .catch(() => false))
   )
 }
 
@@ -697,7 +810,11 @@ async function acceptConsentIfPresent(page: Page): Promise<boolean> {
   if (await firstConsent.isVisible({ timeout: 1000 }).catch(() => false)) {
     await firstConsent.click()
   } else {
-    await page.getByRole('checkbox', { name: /I agree to Privacy and Health Data Use/i }).click()
+    await page
+      .getByRole('checkbox', {
+        name: /I agree to Privacy and Health Data Use/i,
+      })
+      .click()
   }
   await expect
     .poll(() => consentScroll.evaluate((element) => element.scrollTop), {
@@ -709,19 +826,22 @@ async function acceptConsentIfPresent(page: Page): Promise<boolean> {
   await expect
     .poll(
       async () => {
-        const [containerBox, consentBox] = await Promise.all([
-          consentScroll.boundingBox(),
-          nextConsent.boundingBox(),
-        ])
+        const [containerBox, consentBox] = await Promise.all([consentScroll.boundingBox(), nextConsent.boundingBox()])
         if (containerBox == null || consentBox == null) return false
-        return consentBox.y >= containerBox.y && consentBox.y + consentBox.height <= containerBox.y + containerBox.height
+        return (
+          consentBox.y >= containerBox.y && consentBox.y + consentBox.height <= containerBox.y + containerBox.height
+        )
       },
       { message: 'auto-scroll should reveal the next required consent' },
     )
     .toBe(true)
 
   if (!(await clickIfPresent(page, 'consent-checkbox-pa-cons-educational'))) {
-    await page.getByRole('checkbox', { name: /I understand SpineSense is educational use only/i }).click()
+    await page
+      .getByRole('checkbox', {
+        name: /I understand SpineSense is educational use only/i,
+      })
+      .click()
   }
   await page.waitForTimeout(250)
   if (!(await clickIfPresent(page, 'consent-checkbox-pa-cons-ai-analysis'))) {
@@ -729,7 +849,12 @@ async function acceptConsentIfPresent(page: Page): Promise<boolean> {
   }
   await page.waitForTimeout(250)
 
-  if (await page.getByTestId('consent-accept').isVisible({ timeout: 1000 }).catch(() => false)) {
+  if (
+    await page
+      .getByTestId('consent-accept')
+      .isVisible({ timeout: 1000 })
+      .catch(() => false)
+  ) {
     await waitForEnabledAndClick(page, 'consent-accept')
   } else {
     const accept = page.getByRole('button', { name: /Accept & Continue/i })
@@ -760,27 +885,7 @@ function answerValues(value: AssessmentAnswer['value']): readonly (string | numb
   return typeof value === 'string' || typeof value === 'number' ? [value] : value
 }
 
-const DYNAMIC_OPTION_LABEL_PREFERENCES = [
-  /^same all day$/i,
-  /^no$/i,
-  /^none$/i,
-  /^not sure$/i,
-  /^no change$/i,
-  /^constant$/i,
-  /^under 10 min/i,
-  /^later in the day$/i,
-  /^driving$/i,
-  /^sitting$/i,
-  /^walking$/i,
-  /^somewhat helpful$/i,
-  /^mild$/i,
-  /^physical therapy$/i,
-]
-
-async function findVisibleCandidate(
-  page: Page,
-  candidates: readonly string[],
-): Promise<Locator | null> {
+async function findVisibleCandidate(page: Page, candidates: readonly string[]): Promise<Locator | null> {
   for (const testId of candidates) {
     const locators = page.getByTestId(testId)
     const count = await locators.count()
@@ -793,39 +898,6 @@ async function findVisibleCandidate(
     }
   }
   return null
-}
-
-async function clickPreferredVisibleOption(page: Page): Promise<boolean> {
-  const visibleOptions: Array<{ label: string; locator: Locator }> = []
-  for (const role of ['button', 'checkbox', 'radio'] as const) {
-    const optionControls = page.getByRole(role, { name: /^Option \d+ of \d+:/ })
-    const count = await optionControls.count()
-
-    for (let index = 0; index < count; index += 1) {
-      const locator = optionControls.nth(index)
-      if (!(await locator.isVisible({ timeout: 500 }).catch(() => false))) continue
-      const accessibleName = await locator.getAttribute('aria-label')
-      const label =
-        accessibleName?.replace(/^Option \d+ of \d+:\s*/i, '').trim() ??
-        (await locator.textContent().catch(() => ''))?.trim() ??
-        ''
-      if (label.length > 0) {
-        visibleOptions.push({ label, locator })
-      }
-    }
-  }
-  if (visibleOptions.length === 0) return false
-
-  for (const preference of DYNAMIC_OPTION_LABEL_PREFERENCES) {
-    const option = visibleOptions.find((candidate) => preference.test(candidate.label))
-    if (option != null) {
-      await option.locator.click()
-      return true
-    }
-  }
-
-  await visibleOptions[0]!.locator.click()
-  return true
 }
 
 async function clickScreeningSubmitIfPresent(page: Page, timeout = 30_000): Promise<boolean> {
@@ -852,21 +924,23 @@ async function clickScreeningSubmitIfPresent(page: Page, timeout = 30_000): Prom
 }
 
 const POST_SCREENING_STAGE_TEST_IDS = [
-    'adaptive-loading-state',
-    'adaptive-loading-error-state',
-    'adaptive-screen',
-    'adaptive-error-state',
-    'review-screen',
-    'assessment-processing',
-    'results-screen',
-    'home-screen',
-  ] as const
+  'adaptive-loading-state',
+  'adaptive-loading-error-state',
+  'adaptive-screen',
+  'adaptive-error-state',
+  'review-screen',
+  'assessment-processing',
+  'results-screen',
+  'home-screen',
+] as const
 
 async function submitScreening(page: Page) {
   const existingStage = await waitForAnyVisibleTestId(page, POST_SCREENING_STAGE_TEST_IDS, 1000).catch(() => null)
   if (existingStage != null) return
 
-  await expect(page.getByTestId('screening-nav-next')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('screening-nav-next')).toBeVisible({
+    timeout: 30_000,
+  })
 
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const clickedSubmit = await clickScreeningSubmitIfPresent(page)
@@ -876,20 +950,6 @@ async function submitScreening(page: Page) {
   }
 
   await waitForAnyVisibleTestId(page, POST_SCREENING_STAGE_TEST_IDS, 120_000)
-}
-
-async function fillVisibleDynamicTextbox(page: Page): Promise<boolean> {
-  const textboxes = page.getByRole('textbox')
-  const count = await textboxes.count()
-  for (let index = 0; index < count; index += 1) {
-    const locator = textboxes.nth(index)
-    if (!(await locator.isVisible({ timeout: 500 }).catch(() => false))) continue
-    await locator.fill(
-      'Synthetic E2E note: symptoms are mostly low-back pain and sitting or bending can make them worse.',
-    )
-    return true
-  }
-  return false
 }
 
 function answerCandidateTestIds(prefix: string, id: string, value: string | number): string[] {
@@ -937,9 +997,11 @@ async function answerOneValue(page: Page, prefix: string, id: string, value: str
   }
 
   if (typeof value === 'number') {
-    const painLevel = page.getByRole('radio', {
-      name: new RegExp(`^Pain level ${normalized}\\b`, 'i'),
-    }).first()
+    const painLevel = page
+      .getByRole('radio', {
+        name: new RegExp(`^Pain level ${normalized}\\b`, 'i'),
+      })
+      .first()
     if (await painLevel.isVisible({ timeout: 1000 }).catch(() => false)) {
       await painLevel.click()
       return
@@ -998,19 +1060,17 @@ async function answerTextQuestion(page: Page, prefix: string, answer: TextAnswer
 }
 
 async function currentVisibleScreeningQuestionId(page: Page): Promise<string> {
-  const visibleQuestionIds = await page
-    .locator('[data-testid^="question-"]:visible')
-    .evaluateAll((elements) => {
-      const ids: string[] = []
-      for (const element of elements) {
-        const testId = element.getAttribute('data-testid')
-        const match = /^question-([A-Za-z0-9_]+)$/.exec(testId ?? '')
-        if (match?.[1] != null) {
-          ids.push(match[1])
-        }
+  const visibleQuestionIds = await page.locator('[data-testid^="question-"]:visible').evaluateAll((elements) => {
+    const ids: string[] = []
+    for (const element of elements) {
+      const testId = element.getAttribute('data-testid')
+      const match = /^question-([A-Za-z0-9_]+)$/.exec(testId ?? '')
+      if (match?.[1] != null) {
+        ids.push(match[1])
       }
-      return ids
-    })
+    }
+    return ids
+  })
 
   if (visibleQuestionIds.length === 0) {
     throw new Error('No current visible screening question container was found')
@@ -1059,12 +1119,20 @@ async function waitForScreeningAdvance(page: Page, previousQuestionId: string, t
       return
     }
 
-    const screeningNavGone = !(await page.getByTestId('screening-nav-next').isVisible({ timeout: 250 }).catch(() => false))
+    const screeningNavGone = !(await page
+      .getByTestId('screening-nav-next')
+      .isVisible({ timeout: 250 })
+      .catch(() => false))
     if (screeningNavGone) {
       return
     }
 
-    if (await page.getByTestId('screening-section-transition-continue').isVisible({ timeout: 250 }).catch(() => false)) {
+    if (
+      await page
+        .getByTestId('screening-section-transition-continue')
+        .isVisible({ timeout: 250 })
+        .catch(() => false)
+    ) {
       await maybeContinueSectionTransition(page)
       continue
     }
@@ -1105,10 +1173,18 @@ async function clickScreeningNextAndWaitForAdvance(page: Page, previousQuestionI
 }
 
 async function expectNoAssessmentBlockingState(page: Page) {
-  await expect(page.getByTestId('emergency-screen')).toBeHidden({ timeout: 500 })
-  await expect(page.getByTestId('adaptive-loading-error-state')).toBeHidden({ timeout: 500 })
-  await expect(page.getByTestId('adaptive-error-state')).toBeHidden({ timeout: 500 })
-  await expect(page.getByTestId('assessment-processing-failed')).toBeHidden({ timeout: 500 })
+  await expect(page.getByTestId('emergency-screen')).toBeHidden({
+    timeout: 500,
+  })
+  await expect(page.getByTestId('adaptive-loading-error-state')).toBeHidden({
+    timeout: 500,
+  })
+  await expect(page.getByTestId('adaptive-error-state')).toBeHidden({
+    timeout: 500,
+  })
+  await expect(page.getByTestId('assessment-processing-failed')).toBeHidden({
+    timeout: 500,
+  })
 }
 
 async function stressReloadCurrentScreeningQuestion(page: Page) {
@@ -1123,9 +1199,19 @@ async function stressReloadCurrentScreeningQuestion(page: Page) {
   )
   if (reloadStage === 'home-screen') {
     await expectNoBrowserStorage(page)
-    if (await page.getByTestId('continue-assessment-btn').isVisible({ timeout: 1000 }).catch(() => false)) {
+    if (
+      await page
+        .getByTestId('continue-assessment-btn')
+        .isVisible({ timeout: 1000 })
+        .catch(() => false)
+    ) {
       await waitForFirstVisibleEnabledAndClick(page, 'continue-assessment-btn')
-    } else if (await page.getByTestId('start-assessment-btn').isVisible({ timeout: 1000 }).catch(() => false)) {
+    } else if (
+      await page
+        .getByTestId('start-assessment-btn')
+        .isVisible({ timeout: 1000 })
+        .catch(() => false)
+    ) {
       await waitForFirstVisibleEnabledAndClick(page, 'start-assessment-btn')
     } else {
       const continueAssessment = page.getByRole('button', { name: /continue assessment/i }).first()
@@ -1134,7 +1220,9 @@ async function stressReloadCurrentScreeningQuestion(page: Page) {
     }
   }
 
-  await expect(page.getByTestId('screening-screen')).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByTestId('screening-screen')).toBeVisible({
+    timeout: 60_000,
+  })
   await waitForScreeningNavIdle(page, 60_000)
   await expectNoBrowserStorage(page)
 
@@ -1162,7 +1250,9 @@ async function stressBacktrackOneScreeningQuestion(
 }
 
 async function answerScreening(page: Page) {
-  await expect(page.getByTestId('screening-nav-next')).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByTestId('screening-nav-next')).toBeVisible({
+    timeout: 60_000,
+  })
   const stressState: ScreeningStressState = {
     reloadedDuringScreening: false,
     backtrackedDuringScreening: false,
@@ -1172,37 +1262,30 @@ async function answerScreening(page: Page) {
     const postScreeningStage = await waitForAnyVisibleTestId(page, POST_SCREENING_STAGE_TEST_IDS, 250).catch(() => null)
     if (postScreeningStage != null) return
 
-    const screeningNavGone = !(await page.getByTestId('screening-nav-next').isVisible({ timeout: 250 }).catch(() => false))
+    const screeningNavGone = !(await page
+      .getByTestId('screening-nav-next')
+      .isVisible({ timeout: 250 })
+      .catch(() => false))
     if (screeningNavGone) return
 
     const questionId = await currentVisibleScreeningQuestionId(page)
     if (questionId === 'A02') {
-      const painOption = page.getByTestId('question-A02-option-pain_tingling')
-      const numbnessOption = page.getByTestId('question-A02-option-numbness')
-      const [painBox, numbnessBox] = await Promise.all([
-        painOption.boundingBox(),
-        numbnessOption.boundingBox(),
-      ])
-      expect(painBox).not.toBeNull()
-      expect(numbnessBox).not.toBeNull()
-      expect(Math.abs(painBox!.y - numbnessBox!.y)).toBeLessThanOrEqual(1)
-      expect(Math.abs(painBox!.width - numbnessBox!.width)).toBeLessThanOrEqual(1)
-      expect(Math.abs(numbnessBox!.x - painBox!.x - painBox!.width - 8)).toBeLessThanOrEqual(1)
+      const [painId, tinglingId] = fullAssessmentScenario.uiContracts.a02OptionIds
+      const painOption = page.getByTestId(`question-A02-option-${painId}`)
+      const tinglingOption = page.getByTestId(`question-A02-option-${tinglingId}`)
+      const [painBox, tinglingBox] = await Promise.all([painOption.boundingBox(), tinglingOption.boundingBox()])
+      if (painBox == null || tinglingBox == null) {
+        throw new Error('Expected the first two A02 options to have measurable layout boxes')
+      }
+      expect(Math.abs(painBox.y - tinglingBox.y)).toBeLessThanOrEqual(1)
+      expect(Math.abs(painBox.width - tinglingBox.width)).toBeLessThanOrEqual(1)
+      expect(Math.abs(tinglingBox.x - painBox.x - painBox.width - 8)).toBeLessThanOrEqual(1)
       await expect(painOption).toHaveCSS('box-sizing', 'border-box')
       await expect(painOption).toHaveCSS('display', 'flex')
       await expect(painOption).toHaveCSS('flex-direction', 'column')
 
-      const optionIds = [
-        'pain_tingling',
-        'numbness',
-        'weakness',
-        'balance_walking',
-        'hand_clumsiness',
-        'stiffness_heaviness',
-        'mixed',
-      ]
       const optionLabelStyles = await Promise.all(
-        optionIds.map((optionId) =>
+        fullAssessmentScenario.uiContracts.a02OptionIds.map((optionId) =>
           page.getByTestId(`question-A02-option-${optionId}-label`).evaluate((element) => {
             const style = getComputedStyle(element)
             return {
@@ -1266,34 +1349,27 @@ async function answerScreening(page: Page) {
   throw new Error('Timed out answering screening questions before reaching submit')
 }
 
-async function answerVisibleDynamicQuestions(
-  page: Page,
-  prefix: 'adaptive-question',
-  options: readonly AssessmentAnswer[],
-  textAnswers: readonly TextAnswer[],
-  submitTestId: string,
-) {
-  let answered = 0
-  for (const answer of textAnswers) {
-    if (await answerTextQuestion(page, prefix, answer)) answered += 1
-  }
-  for (const answer of options) {
-    try {
-      await answerQuestion(page, prefix, answer)
-      answered += 1
-    } catch {
-      // Live LLM may omit candidate questions. Required visible questions are
-      // handled by the submit-enabled assertion below.
-    }
-  }
-  if (!(await isEnabled(page, submitTestId)) && (await clickPreferredVisibleOption(page))) {
-    answered += 1
-  }
-  if (!(await isEnabled(page, submitTestId)) && (await fillVisibleDynamicTextbox(page))) {
-    answered += 1
+async function answerIssuedAdaptiveQuestion(page: Page): Promise<void> {
+  const testId = await visibleDynamicQuestionTestId(page, 'adaptive-question')
+  const match = /^adaptive-question-([A-Za-z0-9_]+)$/.exec(testId ?? '')
+  if (match?.[1] == null) {
+    throw new Error('Adaptive question is visible without an exact question ID selector')
   }
 
-  return answered
+  const questionId = match[1]
+  const answer = ADAPTIVE_ANSWERS_BY_ID.get(questionId)
+  if (answer == null) {
+    throw new Error(`No exact adaptive fixture answer is defined for issued question ${questionId}`)
+  }
+
+  for (const value of answerValues(answer.value)) {
+    const selectors = answerCandidateTestIds('adaptive-question', questionId, value)
+    const locator = await findVisibleCandidate(page, selectors)
+    if (locator == null) {
+      throw new Error(`No exact adaptive selector matched issued question ${questionId} (${selectors.length} checked)`)
+    }
+    await locator.click()
+  }
 }
 
 async function completeAdaptiveIfPresent(page: Page): Promise<string | null> {
@@ -1327,22 +1403,14 @@ async function completeAdaptiveIfPresent(page: Page): Promise<string | null> {
   }
   if (initialStage !== 'adaptive-screen') return initialStage
 
-  await expect(page.getByTestId('adaptive-list')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('adaptive-list')).toBeVisible({
+    timeout: 30_000,
+  })
   for (let index = 0; index < 20; index += 1) {
     if (!(await adaptiveScreen.isVisible({ timeout: 1000 }).catch(() => false))) {
-      return waitForAnyVisibleTestId(
-        page,
-        ['review-screen'],
-        60_000,
-      ).catch(() => 'left-adaptive-screen')
+      return waitForAnyVisibleTestId(page, ['review-screen'], 60_000).catch(() => 'left-adaptive-screen')
     }
-    await answerVisibleDynamicQuestions(
-      page,
-      'adaptive-question',
-      fullAssessmentScenario.adaptive,
-      fullAssessmentScenario.adaptiveText,
-      'adaptive-submit',
-    )
+    await answerIssuedAdaptiveQuestion(page)
     const currentQuestionTestId = await visibleDynamicQuestionTestId(page, 'adaptive-question')
     await waitForEnabledAndClick(page, 'adaptive-submit')
     const nextStage = await waitForDynamicQuestionAdvance(
@@ -1351,11 +1419,7 @@ async function completeAdaptiveIfPresent(page: Page): Promise<string | null> {
       'adaptive-question',
       currentQuestionTestId,
       'adaptive-submit',
-      [
-        'adaptive-loading-state',
-        'adaptive-error-state',
-        'review-screen',
-      ],
+      ['adaptive-loading-state', 'adaptive-error-state', 'review-screen'],
     )
     if (nextStage !== 'adaptive-screen') return nextStage
   }
@@ -1383,7 +1447,12 @@ async function waitForAnalysisReadyAndConfirm(page: Page) {
 }
 
 async function completeProfileIfPresent(page: Page) {
-  if (!(await page.getByTestId('step-profile').isVisible({ timeout: 1000 }).catch(() => false))) {
+  if (
+    !(await page
+      .getByTestId('step-profile')
+      .isVisible({ timeout: 1000 })
+      .catch(() => false))
+  ) {
     return
   }
 
@@ -1399,19 +1468,15 @@ async function completeProfileIfPresent(page: Page) {
 }
 
 async function continueWelcomeIntroIfPresent(page: Page): Promise<boolean> {
-  const stage = await waitForAnyVisibleTestId(
-    page,
-    ['welcome-intro-screen', 'onboarding-layout'],
-    10_000,
-  ).catch(async () => {
-    const welcomeCta = page.getByRole('button', { name: /let's begin/i })
-    if (await welcomeCta.isVisible({ timeout: 1_000 }).catch(() => false)) {
-      return 'welcome-intro-screen'
-    }
-    throw new Error(
-      "Neither onboarding test IDs nor the visible welcome intro CTA became visible",
-    )
-  })
+  const stage = await waitForAnyVisibleTestId(page, ['welcome-intro-screen', 'onboarding-layout'], 10_000).catch(
+    async () => {
+      const welcomeCta = page.getByRole('button', { name: /let's begin/i })
+      if (await welcomeCta.isVisible({ timeout: 1_000 }).catch(() => false)) {
+        return 'welcome-intro-screen'
+      }
+      throw new Error('Neither onboarding test IDs nor the visible welcome intro CTA became visible')
+    },
+  )
   if (stage !== 'welcome-intro-screen') {
     return false
   }
@@ -1447,9 +1512,18 @@ async function expectChiefComplaintAfterProfileSave(page: Page) {
   await expect
     .poll(
       async () =>
-        (await page.getByTestId('step-chief-complaint-select').isVisible({ timeout: 1000 }).catch(() => false)) ||
-        (await page.getByTestId('chief-complaint-text-option').isVisible({ timeout: 1000 }).catch(() => false)) ||
-        (await page.getByText(/Tell us what's/i).isVisible({ timeout: 1000 }).catch(() => false)),
+        (await page
+          .getByTestId('step-chief-complaint-select')
+          .isVisible({ timeout: 1000 })
+          .catch(() => false)) ||
+        (await page
+          .getByTestId('chief-complaint-text-option')
+          .isVisible({ timeout: 1000 })
+          .catch(() => false)) ||
+        (await page
+          .getByText(/Tell us what's/i)
+          .isVisible({ timeout: 1000 })
+          .catch(() => false)),
       {
         timeout: 60_000,
         message: 'Expected chief complaint step after profile save',
@@ -1462,10 +1536,22 @@ async function expectImagingRecordsAfterHistorySave(page: Page) {
   await expect
     .poll(
       async () =>
-        (await page.getByTestId('records-continue-btn').isVisible({ timeout: 1000 }).catch(() => false)) ||
-        (await page.getByTestId('step-imaging-records').isVisible({ timeout: 1000 }).catch(() => false)) ||
-        (await page.getByRole('button', { name: /complete intake/i }).isVisible({ timeout: 1000 }).catch(() => false)) ||
-        (await page.getByText(/Bring in your records/i).isVisible({ timeout: 1000 }).catch(() => false)),
+        (await page
+          .getByTestId('records-continue-btn')
+          .isVisible({ timeout: 1000 })
+          .catch(() => false)) ||
+        (await page
+          .getByTestId('step-imaging-records')
+          .isVisible({ timeout: 1000 })
+          .catch(() => false)) ||
+        (await page
+          .getByRole('button', { name: /complete intake/i })
+          .isVisible({ timeout: 1000 })
+          .catch(() => false)) ||
+        (await page
+          .getByText(/Bring in your records/i)
+          .isVisible({ timeout: 1000 })
+          .catch(() => false)),
       {
         timeout: 60_000,
         message: 'Expected imaging records step after treatment history save',
@@ -1475,7 +1561,12 @@ async function expectImagingRecordsAfterHistorySave(page: Page) {
 }
 
 async function clickRecordsContinue(page: Page) {
-  if (await page.getByTestId('records-continue-btn').isVisible({ timeout: 1000 }).catch(() => false)) {
+  if (
+    await page
+      .getByTestId('records-continue-btn')
+      .isVisible({ timeout: 1000 })
+      .catch(() => false)
+  ) {
     await waitForEnabledAndClick(page, 'records-continue-btn')
     return
   }
@@ -1494,7 +1585,12 @@ async function clickRecordsContinue(page: Page) {
 }
 
 async function clickChiefComplaintSave(page: Page) {
-  if (await page.getByTestId('text-save-btn').isVisible({ timeout: 1000 }).catch(() => false)) {
+  if (
+    await page
+      .getByTestId('text-save-btn')
+      .isVisible({ timeout: 1000 })
+      .catch(() => false)
+  ) {
     await waitForEnabledAndClick(page, 'text-save-btn')
     return
   }
@@ -1508,13 +1604,7 @@ async function clickChiefComplaintSave(page: Page) {
 async function waitForAssessmentEntry(page: Page): Promise<string> {
   let firstAssessmentScreen = await waitForAnyVisibleTestId(
     page,
-    [
-      'home-screen',
-      'assessment-entry-guard',
-      'screening-screen',
-      'story-capture',
-      'story-screen',
-    ],
+    ['home-screen', 'assessment-entry-guard', 'screening-screen', 'story-capture', 'story-screen'],
     120_000,
   )
 
@@ -1522,19 +1612,15 @@ async function waitForAssessmentEntry(page: Page): Promise<string> {
     await expect(page.getByTestId('start-assessment-btn').first()).toBeVisible()
     await expectNoBrowserStorage(page)
     await waitForFirstVisibleEnabledAndClick(page, 'start-assessment-btn')
-    firstAssessmentScreen = await waitForAnyVisibleTestId(page, [
-      'screening-screen',
-      'story-capture',
-      'story-screen',
-    ])
+    firstAssessmentScreen = await waitForAnyVisibleTestId(page, ['screening-screen', 'story-capture', 'story-screen'])
   }
 
   if (firstAssessmentScreen === 'assessment-entry-guard') {
-    firstAssessmentScreen = await waitForAnyVisibleTestId(page, [
-      'screening-screen',
-      'story-capture',
-      'story-screen',
-    ], 120_000)
+    firstAssessmentScreen = await waitForAnyVisibleTestId(
+      page,
+      ['screening-screen', 'story-capture', 'story-screen'],
+      120_000,
+    )
   }
 
   return firstAssessmentScreen
@@ -1549,12 +1635,10 @@ test.describe('patient web full assessment flow', () => {
     installPhiSafeDiagnostics(page)
   })
 
-  test('registers a new patient and completes assessment to home @full-assessment', async ({
-    page,
-    request,
-  }) => {
+  test('registers a new patient and completes assessment to home @full-assessment', async ({ page, request }) => {
     test.setTimeout(FULL_FLOW_TIMEOUT_MS)
     await page.emulateMedia({ reducedMotion: 'no-preference' })
+    const questionnaireMutations = captureQuestionnaireMutations(page)
 
     let email = uniqueSyntheticEmail()
     const { registration, onboarding } = fullAssessmentScenario
@@ -1566,7 +1650,9 @@ test.describe('patient web full assessment flow', () => {
     logMilestone('welcome visible; opening registration')
     await clickWelcomeGetStarted(page)
 
-    await expect(page.getByTestId('register-screen')).toBeVisible({ timeout: 30_000 })
+    await expect(page.getByTestId('register-screen')).toBeVisible({
+      timeout: 30_000,
+    })
     logMilestone('registration screen visible; submitting registration')
     await fillByTestId(page, 'register-first-name', registration.firstName)
     await fillByTestId(page, 'register-last-name', registration.lastName)
@@ -1580,9 +1666,7 @@ test.describe('patient web full assessment flow', () => {
         page,
         testId: 'register-submit',
         successTestId: 'verify-screen',
-        matches: (response) =>
-          response.url().includes('/api/auth/register') &&
-          response.request().method() === 'POST',
+        matches: (response) => response.url().includes('/api/auth/register') && response.request().method() === 'POST',
       })
       if (registerResponse != null) {
         expect(registerResponse.ok()).toBeTruthy()
@@ -1590,11 +1674,18 @@ test.describe('patient web full assessment flow', () => {
       }
       expect(page.url()).not.toContain('verification')
 
-      if (await page.getByTestId('verify-screen').isVisible({ timeout: 10_000 }).catch(() => false)) {
+      if (
+        await page
+          .getByTestId('verify-screen')
+          .isVisible({ timeout: 10_000 })
+          .catch(() => false)
+      ) {
         break
       }
       if (attempt === 2) {
-        await expect(page.getByTestId('verify-screen')).toBeVisible({ timeout: 60_000 })
+        await expect(page.getByTestId('verify-screen')).toBeVisible({
+          timeout: 60_000,
+        })
         break
       }
 
@@ -1603,7 +1694,9 @@ test.describe('patient web full assessment flow', () => {
       await fillByTestId(page, 'register-email', email)
     }
 
-    await expect(page.getByTestId('verify-screen')).toBeVisible({ timeout: 60_000 })
+    await expect(page.getByTestId('verify-screen')).toBeVisible({
+      timeout: 60_000,
+    })
     logMilestone('verification screen visible; checking browser storage')
     await expectNoBrowserStorage(page)
 
@@ -1614,8 +1707,7 @@ test.describe('patient web full assessment flow', () => {
       page,
       testId: 'verify-submit',
       matches: (response) =>
-        response.url().includes('/api/auth/verify/registration/confirm') &&
-        response.request().method() === 'POST',
+        response.url().includes('/api/auth/verify/registration/confirm') && response.request().method() === 'POST',
     })
     expect(verifyResponse.ok()).toBeTruthy()
     await expectNoTokenLeak(await verifyResponse.text())
@@ -1630,7 +1722,9 @@ test.describe('patient web full assessment flow', () => {
 
     logMilestone('consent accepted; continuing welcome intro')
     await continueWelcomeIntroIfPresent(page)
-    await expect(page.getByTestId('onboarding-layout')).toBeVisible({ timeout: 60_000 })
+    await expect(page.getByTestId('onboarding-layout')).toBeVisible({
+      timeout: 60_000,
+    })
     logMilestone('onboarding layout visible; filling onboarding')
     await completeProfileIfPresent(page)
     await expectChiefComplaintAfterProfileSave(page)
@@ -1652,11 +1746,15 @@ test.describe('patient web full assessment flow', () => {
       await page.getByTestId('story-capture-text-input').blur()
       await waitForEnabledAndClick(page, 'story-capture-continue-btn')
 
-      await expect(page.getByTestId('documents-screen')).toBeVisible({ timeout: 60_000 })
+      await expect(page.getByTestId('documents-screen')).toBeVisible({
+        timeout: 60_000,
+      })
       await clickByTestId(page, 'documents-skip-btn')
     }
 
-    await expect(page.getByTestId('screening-screen')).toBeVisible({ timeout: 60_000 })
+    await expect(page.getByTestId('screening-screen')).toBeVisible({
+      timeout: 60_000,
+    })
     await answerScreening(page)
     await submitScreening(page)
 
@@ -1664,7 +1762,10 @@ test.describe('patient web full assessment flow', () => {
     if (postAdaptiveStage !== 'review-screen') {
       throw new Error(`Expected review-screen after adaptive flow, got ${postAdaptiveStage}`)
     }
-    await expect(page.getByTestId('review-screen')).toBeVisible({ timeout: 120_000 })
+    expectQuestionnaireMutationContracts(questionnaireMutations)
+    await expect(page.getByTestId('review-screen')).toBeVisible({
+      timeout: 120_000,
+    })
     await expect(page.getByTestId('review-ready-icon')).toBeVisible()
     await expect(page.getByTestId('review-ready-title')).toBeVisible()
     await expect(page.getByText('ASSESSMENT COMPLETE')).toBeVisible()
@@ -1687,16 +1788,10 @@ test.describe('patient web full assessment flow', () => {
     await expect(page.getByTestId('results-self-care')).toBeVisible()
     await expect(page.getByTestId('results-share')).toBeVisible()
     await expect(page.getByTestId('results-share')).toBeEnabled()
-    await expect(page.getByTestId('results-share')).toHaveAttribute(
-      'aria-label',
-      'Open PDF report options',
-    )
+    await expect(page.getByTestId('results-share')).toHaveAttribute('aria-label', 'Open PDF report options')
     await page.getByTestId('results-share').click()
     await expect(page.getByTestId('results-report-options')).toBeVisible()
-    await expect(page.getByTestId('results-report-options-generate')).toHaveAttribute(
-      'aria-label',
-      'Generate PDF',
-    )
+    await expect(page.getByTestId('results-report-options-generate')).toHaveAttribute('aria-label', 'Generate PDF')
     const reportResponse = await clickAndWaitForResponse({
       page,
       testId: 'results-report-options-generate',
