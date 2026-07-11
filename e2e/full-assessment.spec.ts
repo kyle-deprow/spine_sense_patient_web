@@ -764,6 +764,11 @@ test.describe('patient web full assessment flow', () => {
     await expect(page.locator('[data-testid="clinical-summary-card"]:visible')).toBeVisible()
     await expect(page.locator('[data-testid="summary-headline"]:visible')).toBeVisible()
     await expect(page.locator('[data-testid="active-problems-card"]:visible')).toBeVisible()
+    // P8 James-Tucker batch: a completed analysis with a mappable diagnosis
+    // must render a VISIBLE Suggested Reading card (the scenario's radicular
+    // picture maps via the label rules or the phenotype fallback). Guards the
+    // CSP/animation regression where the card mounted invisible.
+    await expect(page.locator('[data-testid="suggested-reading-card"]:visible')).toBeVisible()
     await expectNoBrowserStorage(page)
   })
 })

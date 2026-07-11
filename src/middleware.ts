@@ -55,7 +55,28 @@ export function buildCspHeaderForPath(nonce: string, _pathname: string): string 
         `style-src-elem 'self' 'unsafe-inline'`,
       )
   }
-  return buildCspHeader(nonce, { requireTrustedTypes: !isPatientAppShellPath(_pathname) })
+
+  // P13 James-Tucker batch (Ed-approved posture): react-native-web and
+  // Reanimated inject <style> tags and inline style attributes at runtime —
+  // the nonce-only policy blocked every injection (console floods, and the
+  // Suggested Reading card left invisible in its pre-animation state). Allow
+  // 'unsafe-inline' for STYLES ONLY, on the patient-app shell path ONLY.
+  // Scripts stay strictly nonce-gated; every other PHI protection (no durable
+  // storage, no service worker, BFF-only tokens, CSRF, cache-control) is
+  // untouched. This is the standard accommodation for react-native-web.
+  if (isPatientAppShellPath(_pathname)) {
+    return buildCspHeader(nonce, { requireTrustedTypes: false })
+      .replace("style-src-attr 'none'", "style-src-attr 'unsafe-inline'")
+      .replace(
+        `style-src 'self' 'nonce-${nonce}'`,
+        `style-src 'self' 'unsafe-inline'`,
+      )
+      .replace(
+        `style-src-elem 'self' 'nonce-${nonce}'`,
+        `style-src-elem 'self' 'unsafe-inline'`,
+      )
+  }
+  return buildCspHeader(nonce, { requireTrustedTypes: true })
 }
 
 function applySecurityHeaders(response: NextResponse, nonce: string, pathname: string): void {
