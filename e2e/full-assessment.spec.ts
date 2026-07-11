@@ -22,6 +22,15 @@ const ASSESSMENT_REPORT_PROXY_PATH_RE =
   /^\/api\/proxy\/api\/v1\/patients\/me\/assessments\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/reports$/i
 const STRESS_RELOAD_AFTER_SCREENING_QUESTION_ID = fullAssessmentScenario.stress.reloadAfterScreeningQuestionId
 const STRESS_BACKTRACK_AFTER_SCREENING_QUESTION_ID = fullAssessmentScenario.stress.backtrackAfterScreeningQuestionId
+const SYNTHETIC_ASSESSMENT_UPLOAD = {
+  name: 'synthetic-e2e-upload.png',
+  mimeType: 'image/png',
+  // 1x1 transparent PNG. Keep synthetic; no PHI fixture file is needed.
+  buffer: Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
+    'base64',
+  ),
+} as const
 
 type BrowserCookie = {
   name: string
@@ -49,6 +58,23 @@ type ScreeningStressState = {
 type QuestionnaireMutation = {
   path: string
   payload: unknown
+}
+
+type AssessmentUploadUrlResponse = {
+  document_id?: string
+  documentId?: string
+}
+
+type AssessmentDocumentRecord = {
+  id?: string
+  file_name?: string | null
+  fileName?: string | null
+  file_type?: string | null
+  fileType?: string | null
+  file_size_bytes?: number | null
+  fileSizeBytes?: number | null
+  processing_status?: string
+  processingStatus?: string
 }
 
 const SCREENING_ANSWERS_BY_ID = new Map(fullAssessmentScenario.screening.map((answer) => [answer.id, answer]))
@@ -181,6 +207,88 @@ function expectRawAnswerValue(path: string, questionId: string, value: unknown):
     validScalar || validList,
     `${path} answer ${questionId} must use the exact raw scalar-or-string-list shape`,
   ).toBe(true)
+}
+
+function assessmentIdFromDocumentsUrl(url: string): string {
+  const pathname = new URL(url).pathname
+  const match = pathname.match(/\/assessments\/([^/]+)\/documents(?:\/upload-url)?$/)
+  if (match?.[1] == null) {
+    throw new Error(`Could not resolve assessment id from document upload URL: ${sanitizeDiagnostic(pathname)}`)
+  }
+  return match[1]
+}
+
+function documentIdFromUploadResponse(payload: AssessmentUploadUrlResponse): string {
+  const documentId = payload.document_id ?? payload.documentId
+  if (typeof documentId !== 'string' || documentId.length === 0) {
+    throw new Error('Assessment document upload response did not include a document id')
+  }
+  return documentId
+}
+
+function normalizeAssessmentDocument(record: AssessmentDocumentRecord) {
+  return {
+    id: record.id,
+    fileName: record.file_name ?? record.fileName ?? null,
+    fileType: record.file_type ?? record.fileType ?? null,
+    fileSizeBytes: record.file_size_bytes ?? record.fileSizeBytes ?? null,
+    processingStatus: record.processing_status ?? record.processingStatus,
+  }
+}
+
+async function uploadSyntheticAssessmentDocumentFromRecordsStep(page: Page): Promise<void> {
+  await clickByTestId(page, 'records-documents-file-tab')
+
+  const uploadUrlResponsePromise = page.waitForResponse(
+    (response) =>
+      response.url().includes('/api/proxy/api/v1/patients/me/assessments/') &&
+      response.url().endsWith('/documents/upload-url') &&
+      response.request().method() === 'POST',
+    { timeout: 60_000 },
+  )
+  const confirmResponsePromise = page.waitForResponse(
+    (response) =>
+      response.url().includes('/api/proxy/api/v1/patients/me/assessments/') &&
+      /\/documents\/[0-9a-f-]+\/confirm$/i.test(new URL(response.url()).pathname) &&
+      response.request().method() === 'POST',
+    { timeout: 120_000 },
+  )
+  const fileChooserPromise = page.waitForEvent('filechooser', {
+    timeout: 30_000,
+  })
+
+  await waitForEnabledAndClick(page, 'records-choose-file-button', 60_000)
+  const fileChooser = await fileChooserPromise
+  await fileChooser.setFiles(SYNTHETIC_ASSESSMENT_UPLOAD)
+
+  const uploadUrlResponse = await uploadUrlResponsePromise
+  expect(uploadUrlResponse.ok(), `assessment document upload-url status=${uploadUrlResponse.status()}`).toBe(true)
+  const uploadPayload = (await uploadUrlResponse.json()) as AssessmentUploadUrlResponse
+  const documentId = documentIdFromUploadResponse(uploadPayload)
+  const assessmentId = assessmentIdFromDocumentsUrl(uploadUrlResponse.url())
+
+  const confirmResponse = await confirmResponsePromise
+  expect(confirmResponse.ok(), `assessment document confirm status=${confirmResponse.status()}`).toBe(true)
+
+  await expect(page.getByTestId(`records-document-${documentId}`)).toBeVisible({
+    timeout: 30_000,
+  })
+  await expect(page.getByText(SYNTHETIC_ASSESSMENT_UPLOAD.name)).toBeVisible()
+
+  const listResponse = await page.request.get(`/api/proxy/api/v1/patients/me/assessments/${assessmentId}/documents`)
+  expect(listResponse.ok(), `assessment document list status=${listResponse.status()}`).toBe(true)
+  const listPayload = (await listResponse.json()) as {
+    items?: AssessmentDocumentRecord[]
+  }
+  const landed = listPayload.items?.map(normalizeAssessmentDocument).find((record) => record.id === documentId)
+  expect(landed, 'uploaded assessment document must be returned by assessment document list').toEqual(
+    expect.objectContaining({
+      fileName: SYNTHETIC_ASSESSMENT_UPLOAD.name,
+      fileType: SYNTHETIC_ASSESSMENT_UPLOAD.mimeType,
+      fileSizeBytes: SYNTHETIC_ASSESSMENT_UPLOAD.buffer.length,
+      processingStatus: 'complete',
+    }),
+  )
 }
 
 function expectQuestionnaireMutationContracts(mutations: readonly QuestionnaireMutation[]) {
@@ -1814,6 +1922,8 @@ test.describe('patient web full assessment flow', () => {
     await waitForEnabledAndClick(page, 'medical-history-continue-btn')
 
     await expectImagingRecordsAfterHistorySave(page)
+    logMilestone('imaging records visible; uploading synthetic assessment document')
+    await uploadSyntheticAssessmentDocumentFromRecordsStep(page)
     await clickRecordsContinue(page)
 
     const firstAssessmentScreen = await waitForAssessmentEntry(page)
