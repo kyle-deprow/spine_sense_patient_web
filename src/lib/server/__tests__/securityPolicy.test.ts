@@ -3,7 +3,11 @@ import { NextRequest } from 'next/server'
 
 import nextConfig from '../../../../next.config'
 import { middleware } from '@/middleware'
-import { buildPermissionsPolicyHeader, isWebVoiceEnabled } from '@/lib/server/securityPolicy'
+import {
+  buildPermissionsPolicyHeader,
+  getStorageConnectOrigins,
+  isWebVoiceEnabled,
+} from '@/lib/server/securityPolicy'
 
 async function staticPermissionsPolicy(): Promise<string | undefined> {
   const headerSets = await nextConfig.headers?.()
@@ -60,5 +64,28 @@ describe('patient web Permissions-Policy', () => {
     expect(await staticPermissionsPolicy()).toContain(expected)
     const response = middleware(new NextRequest('http://localhost/login'))
     expect(response.headers.get('Permissions-Policy')).toContain(expected)
+  })
+
+  it('returns only the exact storage connect origins configured for patient web', () => {
+    vi.stubEnv('PATIENT_APP_ENVIRONMENT', 'test')
+    vi.stubEnv(
+      'NEXT_PUBLIC_STORAGE_DOMAINS',
+      'https://storage.example.test https://cdn.example.test:8443 https://storage.example.test',
+    )
+
+    expect(getStorageConnectOrigins()).toEqual(['https://storage.example.test', 'https://cdn.example.test:8443'])
+  })
+
+  it.each([
+    'https://storage.example.test/path',
+    'https://storage.example.test?token=private',
+    'https://user:pass@storage.example.test',
+    'https://*.s3.amazonaws.com',
+    'https://*.storage.googleapis.com',
+  ])('rejects non-origin storage connect source %j', (origin) => {
+    vi.stubEnv('PATIENT_APP_ENVIRONMENT', 'test')
+    vi.stubEnv('NEXT_PUBLIC_STORAGE_DOMAINS', origin)
+
+    expect(() => getStorageConnectOrigins()).toThrow('Patient web storage connect origins must be exact origins')
   })
 })

@@ -31,6 +31,10 @@ async function handler(request: NextRequest, context: ProxyContext) {
     auditDenial(request.method, 401, 'authentication_required', auditContext, resourceType)
     return jsonNoStore({ error: 'unauthorized' }, { status: 401 })
   }
+  if (isBinaryDocumentPayload(target.targetPath, request)) {
+    auditDenial(request.method, 415, 'binary_document_payload_not_allowed', auditContext, resourceType)
+    return jsonNoStore({ error: 'unsupported_media_type' }, { status: 415 })
+  }
 
   const config = getPatientWebConfig()
   const csrf = validateUnsafeRequest(request, request.cookies.get(COOKIE_NAMES.csrf)?.value, {
@@ -112,6 +116,19 @@ function auditDenial(
 
 function shouldForwardBody(method: string): boolean {
   return !['GET', 'HEAD'].includes(method.toUpperCase())
+}
+
+function isBinaryDocumentPayload(targetPath: string, request: NextRequest): boolean {
+  if (!targetPath.startsWith('/api/v1/patients/me/documents')) return false
+  if (!shouldForwardBody(request.method)) return false
+  const contentType = request.headers.get('content-type')?.toLowerCase() ?? ''
+  if (!contentType) return false
+  return (
+    contentType.startsWith('application/octet-stream') ||
+    contentType.startsWith('image/') ||
+    contentType.startsWith('application/pdf') ||
+    contentType.startsWith('multipart/form-data')
+  )
 }
 
 export { handler as DELETE, handler as GET, handler as PATCH, handler as POST, handler as PUT }

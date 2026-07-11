@@ -24,7 +24,7 @@ const mockedBackendFetch = vi.mocked(backendFetch)
 const mockedAuditLog = vi.mocked(auditLog)
 
 // Import after mocking so the route module picks up the mocked backendFetch.
-const { DELETE, GET, POST } = await import('@/app/api/proxy/[...path]/route')
+const { DELETE, GET, POST, PUT } = await import('@/app/api/proxy/[...path]/route')
 
 function makeProxyRequest(
   pathname: string,
@@ -346,6 +346,64 @@ describe('proxy route handler', () => {
         event: 'phi.proxy.denied',
         reason: 'proxy_method_not_allowed',
         status: 405,
+      }),
+    )
+  })
+
+  it('does not proxy document blob PUTs through the BFF upload-url route', async () => {
+    const csrf = createCsrfToken(CSRF_SECRET, 'document-upload-url-put-test')
+    const request = makeProxyRequest(
+      '/api/proxy/api/v1/patients/me/documents/upload-url',
+      'PUT',
+      {
+        spine_patient_sess: 'access-token',
+        spine_patient_csrf: csrf,
+      },
+      {
+        'Content-Type': 'application/octet-stream',
+        [CSRF_HEADER]: csrf,
+        Origin: ORIGIN,
+      },
+      new Uint8Array([1, 2, 3]),
+    )
+    const response = await PUT(request, makeContext(['api', 'v1', 'patients', 'me', 'documents', 'upload-url']))
+
+    expect(response.status).toBe(405)
+    await expect(response.json()).resolves.toEqual({
+      error: 'proxy_method_not_allowed',
+    })
+    expect(mockedBackendFetch).not.toHaveBeenCalled()
+  })
+
+  it('does not proxy binary bodies to allowed document API routes', async () => {
+    const csrf = createCsrfToken(CSRF_SECRET, 'document-confirm-binary-test')
+    const documentId = '10000000-0000-4000-8000-000000000001'
+    const request = makeProxyRequest(
+      `/api/proxy/api/v1/patients/me/documents/${documentId}/confirm`,
+      'POST',
+      {
+        spine_patient_sess: 'access-token',
+        spine_patient_csrf: csrf,
+      },
+      {
+        'Content-Type': 'application/octet-stream',
+        [CSRF_HEADER]: csrf,
+        Origin: ORIGIN,
+      },
+      new Uint8Array([1, 2, 3]),
+    )
+    const response = await POST(request, makeContext(['api', 'v1', 'patients', 'me', 'documents', documentId, 'confirm']))
+
+    expect(response.status).toBe(415)
+    await expect(response.json()).resolves.toEqual({
+      error: 'unsupported_media_type',
+    })
+    expect(mockedBackendFetch).not.toHaveBeenCalled()
+    expect(mockedAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'phi.proxy.denied',
+        reason: 'binary_document_payload_not_allowed',
+        status: 415,
       }),
     )
   })

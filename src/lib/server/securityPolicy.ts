@@ -6,7 +6,6 @@
  */
 const WEB_VOICE_ENVIRONMENTS = new Set(['development', 'test', 'e2e'])
 const PATIENT_APP_ENVIRONMENTS = new Set([...WEB_VOICE_ENVIRONMENTS, 'staging', 'production'])
-const CSP_HOST_SOURCE_RE = /^https:\/\/(?:\*\.)?[A-Za-z0-9.-]+(?::[0-9]+)?$/
 
 export function isWebVoiceEnabled(
   flag = process.env.EXPO_PUBLIC_ENABLE_WEB_VOICE,
@@ -71,13 +70,14 @@ export function validateSecurityPolicyConfiguration(): void {
 }
 
 function validateConnectOrigin(origin: string, environment: string): void {
-  if (CSP_HOST_SOURCE_RE.test(origin)) return
-
   let parsed: URL
   try {
     parsed = new URL(origin)
   } catch {
     throw new Error(`Invalid patient web storage connect origin: ${origin}`)
+  }
+  if (parsed.hostname.includes('*')) {
+    throw new Error(`Patient web storage connect origins must be exact origins: ${origin}`)
   }
   if (parsed.origin !== origin || parsed.username || parsed.password) {
     throw new Error(`Patient web storage connect origins must be exact origins: ${origin}`)

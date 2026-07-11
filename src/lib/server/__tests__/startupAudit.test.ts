@@ -21,7 +21,7 @@ describe('web voice startup audit', () => {
     )
     vi.stubEnv(
       'NEXT_PUBLIC_STORAGE_DOMAINS',
-      'https://*.s3.amazonaws.com http://127.0.0.1:9000',
+      'https://patient-documents.example.test http://127.0.0.1:9000',
     )
     vi.stubEnv('PATIENT_WEB_LOCAL_MINIO_PUBLIC_ORIGIN', 'http://127.0.0.1:9000')
     mockedAuditLog.mockReset()

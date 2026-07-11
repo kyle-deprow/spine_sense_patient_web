@@ -7,7 +7,7 @@ export default defineConfig({
     env: {
       PATIENT_APP_ENVIRONMENT: 'test',
       NEXT_PUBLIC_STORAGE_DOMAINS:
-        'https://*.s3.amazonaws.com https://*.storage.googleapis.com http://127.0.0.1:9000',
+        'https://patient-documents.example.test https://assets.example.test http://127.0.0.1:9000',
       PATIENT_WEB_LOCAL_MINIO_PUBLIC_ORIGIN: 'http://127.0.0.1:9000',
       PATIENT_WEB_AUDIT_ACTOR_SIGNING_CURRENT_KEY_ID: 'test-current',
       PATIENT_WEB_AUDIT_ACTOR_SIGNING_CURRENT_KEY:

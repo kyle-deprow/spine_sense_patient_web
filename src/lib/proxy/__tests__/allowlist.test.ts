@@ -137,6 +137,69 @@ describe('proxy allowlist', () => {
     ).toEqual({ ok: false, status: 404, code: 'proxy_path_not_allowed' })
   })
 
+  it('allows only implemented patient document routes and methods', () => {
+    const documentId = '10000000-0000-4000-8000-000000000001'
+    const routes = [
+      ['GET', '/api/v1/patients/me/documents'],
+      ['GET', '/api/v1/patients/me/documents/overview'],
+      ['POST', '/api/v1/patients/me/documents/text'],
+      ['POST', '/api/v1/patients/me/documents/upload-url'],
+      ['POST', `/api/v1/patients/me/documents/${documentId}/confirm`],
+      ['GET', `/api/v1/patients/me/documents/${documentId}/download-url`],
+      ['GET', `/api/v1/patients/me/documents/${documentId}/findings`],
+      ['DELETE', `/api/v1/patients/me/documents/${documentId}`],
+      ['PATCH', `/api/v1/patients/me/documents/${documentId}/text`],
+      ['PATCH', `/api/v1/patients/me/documents/${documentId}/extracted-text`],
+    ] as const
+
+    for (const [method, targetPath] of routes) {
+      expect(validateProxyTarget(targetPath.slice(1).split('/'), method, `/api/proxy${targetPath}`)).toEqual({
+        ok: true,
+        targetPath,
+      })
+    }
+  })
+
+  it('blocks arbitrary patient document children at the BFF boundary', () => {
+    const documentId = '10000000-0000-4000-8000-000000000001'
+    const cases = [
+      ['GET', '/api/v1/patients/me/documents/recent'],
+      ['GET', '/api/v1/patients/me/documents/not-a-uuid/findings'],
+      ['POST', `/api/v1/patients/me/documents/${documentId}/share`],
+    ] as const
+
+    for (const [method, targetPath] of cases) {
+      expect(validateProxyTarget(targetPath.slice(1).split('/'), method, `/api/proxy${targetPath}`)).toEqual({
+        ok: false,
+        status: 404,
+        code: 'proxy_path_not_allowed',
+      })
+    }
+  })
+
+  it('blocks method mismatches on patient document routes before forwarding', () => {
+    const documentId = '10000000-0000-4000-8000-000000000001'
+    const cases = [
+      ['POST', '/api/v1/patients/me/documents'],
+      ['POST', '/api/v1/patients/me/documents/overview'],
+      ['PUT', '/api/v1/patients/me/documents/upload-url'],
+      ['PUT', `/api/v1/patients/me/documents/${documentId}`],
+      ['GET', `/api/v1/patients/me/documents/${documentId}/confirm`],
+      ['POST', `/api/v1/patients/me/documents/${documentId}/download-url`],
+      ['POST', `/api/v1/patients/me/documents/${documentId}/findings`],
+      ['DELETE', `/api/v1/patients/me/documents/${documentId}/findings`],
+      ['POST', `/api/v1/patients/me/documents/${documentId}/extracted-text`],
+    ] as const
+
+    for (const [method, targetPath] of cases) {
+      expect(validateProxyTarget(targetPath.slice(1).split('/'), method, `/api/proxy${targetPath}`)).toEqual({
+        ok: false,
+        status: 405,
+        code: 'proxy_method_not_allowed',
+      })
+    }
+  })
+
   it('does not allow arbitrary patient child routes through the patient profile route', () => {
     expect(
       validateProxyTarget(

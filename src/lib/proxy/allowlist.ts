@@ -23,6 +23,13 @@ const ASSESSMENT_REPORT_RE = new RegExp(`${ASSESSMENT_RE}\\/reports$`, 'i')
 const REPORT_RE = `^\\/api\\/v1\\/patients\\/me\\/reports\\/${UUID_RE}`
 const REPORT_EXACT_RE = new RegExp(`${REPORT_RE}$`, 'i')
 const REPORT_DOWNLOAD_URL_RE = new RegExp(`${REPORT_RE}\\/download-url$`, 'i')
+const DOCUMENTS_PREFIX = '/api/v1/patients/me/documents'
+const DOCUMENT_RE = `^\\/api\\/v1\\/patients\\/me\\/documents\\/${UUID_RE}`
+const DOCUMENT_EXACT_RE = new RegExp(`${DOCUMENT_RE}$`, 'i')
+const DOCUMENT_CONFIRM_RE = new RegExp(`${DOCUMENT_RE}\\/confirm$`, 'i')
+const DOCUMENT_DOWNLOAD_URL_RE = new RegExp(`${DOCUMENT_RE}\\/download-url$`, 'i')
+const DOCUMENT_FINDINGS_RE = new RegExp(`${DOCUMENT_RE}\\/findings$`, 'i')
+const DOCUMENT_TEXT_UPDATE_RE = new RegExp(`${DOCUMENT_RE}\\/(?:text|extracted-text)$`, 'i')
 const MISCRIBE_PREFIX = '/api/v1/patients/me/miscribe'
 const MISCRIBE_RECORDINGS_PREFIX = `${MISCRIBE_PREFIX}/recordings`
 const MISCRIBE_RECORDING_RE = `^\\/api\\/v1\\/patients\\/me\\/miscribe\\/recordings\\/${UUID_RE}`
@@ -89,7 +96,39 @@ export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
   },
   { prefix: '/api/v1/patients/me/checkins', methods: ['GET', 'POST', 'PATCH', 'DELETE'] },
   { prefix: '/api/v1/patients/me/treatments', methods: ['GET'] },
-  { prefix: '/api/v1/patients/me/documents', methods: ['GET', 'POST', 'DELETE'] },
+  { prefix: DOCUMENTS_PREFIX, methods: ['GET'], match: 'exact' },
+  { prefix: `${DOCUMENTS_PREFIX}/overview`, methods: ['GET'], match: 'exact' },
+  { prefix: `${DOCUMENTS_PREFIX}/text`, methods: ['POST'], match: 'exact' },
+  {
+    prefix: `${DOCUMENTS_PREFIX}/upload-url`,
+    methods: ['POST'],
+    match: 'exact',
+  },
+  {
+    prefix: DOCUMENTS_PREFIX,
+    methods: ['DELETE'],
+    pathPattern: DOCUMENT_EXACT_RE,
+  },
+  {
+    prefix: DOCUMENTS_PREFIX,
+    methods: ['POST'],
+    pathPattern: DOCUMENT_CONFIRM_RE,
+  },
+  {
+    prefix: DOCUMENTS_PREFIX,
+    methods: ['GET'],
+    pathPattern: DOCUMENT_DOWNLOAD_URL_RE,
+  },
+  {
+    prefix: DOCUMENTS_PREFIX,
+    methods: ['GET'],
+    pathPattern: DOCUMENT_FINDINGS_RE,
+  },
+  {
+    prefix: DOCUMENTS_PREFIX,
+    methods: ['PATCH'],
+    pathPattern: DOCUMENT_TEXT_UPDATE_RE,
+  },
   { prefix: '/api/v1/patients/me/intake', methods: ['GET', 'POST', 'PUT'] },
   { prefix: `${MISCRIBE_PREFIX}/recording-policy`, methods: ['GET'], match: 'exact' },
   { prefix: MISCRIBE_RECORDINGS_PREFIX, methods: ['GET'], match: 'exact' },

@@ -1,7 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildCspHeader, buildCspHeaderForPath } from '@/middleware'
 
 describe('middleware CSP', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
   it('keeps script hardening while allowing Expo runtime styles', () => {
     const csp = buildCspHeader('nonce-value')
 
@@ -11,6 +15,16 @@ describe('middleware CSP', () => {
     expect(csp).toContain("object-src 'none'")
     expect(csp).toContain("frame-ancestors 'none'")
     expect(csp).not.toContain("require-trusted-types-for 'script'")
+  })
+
+  it('uses exact storage connect sources from NEXT_PUBLIC_STORAGE_DOMAINS', () => {
+    vi.stubEnv('NEXT_PUBLIC_STORAGE_DOMAINS', 'https://storage.example.test https://cdn.example.test:8443')
+
+    const csp = buildCspHeader('nonce-value')
+
+    expect(csp).toContain("connect-src 'self' https://storage.example.test https://cdn.example.test:8443")
+    expect(csp).not.toContain('https://*.storage.example.test')
+    expect(csp).not.toContain('https://storage.example.test/')
   })
 
   it('can require Trusted Types on routes that do not serve the Expo app shell', () => {
