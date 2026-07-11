@@ -691,10 +691,35 @@ async function acceptConsentIfPresent(page: Page): Promise<boolean> {
     return false
   }
 
-  if (!(await clickIfPresent(page, 'consent-checkbox-pa-cons-privacy'))) {
+  const consentScroll = page.getByTestId('consent-flow-scroll')
+  const initialScrollTop = await consentScroll.evaluate((element) => element.scrollTop)
+  const firstConsent = page.getByTestId('consent-checkbox-pa-cons-privacy')
+  if (await firstConsent.isVisible({ timeout: 1000 }).catch(() => false)) {
+    await firstConsent.click()
+  } else {
     await page.getByRole('checkbox', { name: /I agree to Privacy and Health Data Use/i }).click()
   }
-  await page.waitForTimeout(250)
+  await expect
+    .poll(() => consentScroll.evaluate((element) => element.scrollTop), {
+      message: 'first consent should auto-scroll to the next required consent',
+    })
+    .toBeGreaterThan(initialScrollTop)
+
+  const nextConsent = page.getByTestId('consent-checkbox-pa-cons-educational')
+  await expect
+    .poll(
+      async () => {
+        const [containerBox, consentBox] = await Promise.all([
+          consentScroll.boundingBox(),
+          nextConsent.boundingBox(),
+        ])
+        if (containerBox == null || consentBox == null) return false
+        return consentBox.y >= containerBox.y && consentBox.y + consentBox.height <= containerBox.y + containerBox.height
+      },
+      { message: 'auto-scroll should reveal the next required consent' },
+    )
+    .toBe(true)
+
   if (!(await clickIfPresent(page, 'consent-checkbox-pa-cons-educational'))) {
     await page.getByRole('checkbox', { name: /I understand SpineSense is educational use only/i }).click()
   }
