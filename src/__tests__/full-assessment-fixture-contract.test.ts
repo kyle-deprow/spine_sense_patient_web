@@ -32,7 +32,10 @@ const API_ROOT = fileURLToPath(new URL('../../../spine_sense_api/', import.meta.
 const PHASE2_SELECTION_SCRIPT = String.raw`
 import json
 import sys
+from datetime import date
+from types import SimpleNamespace
 
+from spine_sense.services.assessment.intake_context_overlay import build_intake_answer_overlay, merge_intake_overlay
 from spine_sense.services.assessment.lumbar_paint import canonicalize_lumbar_paint_answers
 from spine_sense.services.assessment.phase1_context_enrichment import build_enriched_context
 from spine_sense.services.assessment.phase2_prompt_builder import build_phase2_selection_constraints
@@ -53,14 +56,26 @@ from spine_sense.services.assessment.screening_engine import (
 from spine_sense.services.assessment.screening_engine_v2 import build_screening_context
 from spine_sense.services.assessment.service import _adaptive_question_has_unresolved_metadata
 
-raw_answers = json.loads(sys.argv[1])
+scenario = json.loads(sys.argv[1])
+raw_answers = scenario["answers"]
+date_of_birth = date.fromisoformat(scenario["date_of_birth"])
+patient = SimpleNamespace(
+    date_of_birth=date_of_birth,
+    sex_at_birth=scenario["sex_at_birth"],
+)
+intake_overlay = build_intake_answer_overlay(
+    scenario["intake_step_data"],
+    patient=patient,
+    as_of_date=date(date_of_birth.year + 38, date_of_birth.month, date_of_birth.day),
+)
+engine_answers = merge_intake_overlay(raw_answers, intake_overlay)
 question_bank = load_question_bank("2.0")
 cord_module = load_cord_module_bank("2.0")
 adaptive_bank = load_adaptive_question_bank("2.0")
-screening_context = build_screening_context(raw_answers, question_bank, cord_module)
-phase1_context = build_enriched_context(raw_answers, screening_context)
+screening_context = build_screening_context(engine_answers, question_bank, cord_module)
+phase1_context = build_enriched_context(engine_answers, screening_context)
 visible_ids = set(screening_context.visible_question_ids)
-canonical_answers = canonicalize_lumbar_paint_answers(raw_answers)
+canonical_answers = canonicalize_lumbar_paint_answers(engine_answers)
 phase2_answers = {
     question_id: value
     for question_id, value in canonical_answers.items()
@@ -98,7 +113,9 @@ for question_id in filtered_by_id:
 
 print(json.dumps({
     "dominant_track": phase1_context["dominantTrack"],
+    "intake_overlay": intake_overlay,
     "reachable_ids": sorted(reachable_ids),
+    "visible_screening_ids": list(screening_context.visible_question_ids),
 }))
 `
 
@@ -142,10 +159,16 @@ function expectAnswerMatchesBank(
   }
 }
 
-let cachedReachableAdaptiveIds: string[] | undefined
+type ActualScenarioContract = {
+  intake_overlay: Record<string, string>
+  reachable_ids: string[]
+  visible_screening_ids: string[]
+}
 
-function actualReachableAdaptiveIds(): string[] {
-  if (cachedReachableAdaptiveIds != null) return cachedReachableAdaptiveIds
+let cachedScenarioContract: ActualScenarioContract | undefined
+
+function actualScenarioContract(): ActualScenarioContract {
+  if (cachedScenarioContract != null) return cachedScenarioContract
 
   const screeningAnswers = Object.fromEntries([
     ...fullAssessmentScenario.screening.map(({ id, value }) => [id, value] as const),
@@ -153,14 +176,25 @@ function actualReachableAdaptiveIds(): string[] {
   ])
   const output = execFileSync(
     'uv',
-    ['run', 'python', '-c', PHASE2_SELECTION_SCRIPT, JSON.stringify(screeningAnswers)],
+    [
+      'run',
+      'python',
+      '-c',
+      PHASE2_SELECTION_SCRIPT,
+      JSON.stringify({
+        answers: screeningAnswers,
+        date_of_birth: fullAssessmentScenario.registration.dateOfBirth,
+        intake_step_data: fullAssessmentScenario.onboarding.intakeStepData,
+        sex_at_birth: fullAssessmentScenario.onboarding.sexAtBirth,
+      }),
+    ],
     {
       cwd: API_ROOT,
       encoding: 'utf8',
     },
   )
-  cachedReachableAdaptiveIds = (JSON.parse(output) as { dominant_track: string; reachable_ids: string[] }).reachable_ids
-  return cachedReachableAdaptiveIds
+  cachedScenarioContract = JSON.parse(output) as ActualScenarioContract
+  return cachedScenarioContract
 }
 
 describe('full assessment E2E fixture server contracts', () => {
@@ -177,6 +211,23 @@ describe('full assessment E2E fixture server contracts', () => {
     }
   })
 
+  it('exactly covers screening questions reachable with the server-owned intake overlay', () => {
+    const fixtureIds = [
+      ...fullAssessmentScenario.screening.map(({ id }) => id),
+      ...fullAssessmentScenario.screeningText.map(({ id }) => id),
+    ]
+    expect(fixtureIds).toEqual(actualScenarioContract().visible_screening_ids)
+    expect(fixtureIds).not.toContain('R05')
+  })
+
+  it('derives stable demographic and no-condition facts through the production intake overlay', () => {
+    expect(actualScenarioContract().intake_overlay).toMatchObject({
+      IX_AGE_BAND: '18_39',
+      IX_CANCER: 'no',
+      IX_SEX: 'female',
+    })
+  })
+
   it('uses only exact current bank-backed adaptive question and option IDs', () => {
     for (const answer of fullAssessmentScenario.adaptive) {
       expectAnswerMatchesBank(adaptiveBank.get(answer.id), answer)
@@ -185,7 +236,7 @@ describe('full assessment E2E fixture server contracts', () => {
 
   it('exactly covers adaptive questions reachable after scenario filtering and constraints', () => {
     const fixtureIds = fullAssessmentScenario.adaptive.map(({ id }) => id).sort()
-    expect(fixtureIds).toEqual(actualReachableAdaptiveIds())
+    expect(fixtureIds).toEqual(actualScenarioContract().reachable_ids)
   })
 
   it('excludes adaptive entries that the server cannot issue for this scenario', () => {
@@ -205,7 +256,7 @@ describe('full assessment E2E fixture server contracts', () => {
     ]
 
     expect(unreachableIds.filter((id) => fixtureIds.has(id))).toEqual([])
-    expect(unreachableIds.filter((id) => actualReachableAdaptiveIds().includes(id))).toEqual([])
+    expect(unreachableIds.filter((id) => actualScenarioContract().reachable_ids.includes(id))).toEqual([])
   })
 
   it('locks A02 stacked layout selectors to the target entry bank and final screening question', () => {

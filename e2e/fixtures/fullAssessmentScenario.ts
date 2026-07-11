@@ -31,6 +31,11 @@ export const fullAssessmentScenario = {
     occupation: 'Synthetic desk worker',
     activityLevel: 'lightly-active',
     chiefComplaint: 'Lower back pain that started gradually and gets worse with prolonged sitting and bending',
+    intakeStepData: {
+      'treatment-history': {
+        conditions: { items: [], none: true },
+      },
+    },
   },
   assessmentStory:
     'My low-back pain has been present for more than a year. It built gradually, and sitting, bending forward, and lifting make it worse.',
@@ -61,7 +66,6 @@ export const fullAssessmentScenario = {
     { id: 'R02', value: 'no' },
     { id: 'R03', value: 'no' },
     { id: 'R_SYS', value: ['none'] },
-    { id: 'R05', value: 'no' },
     { id: 'R06', value: 'no' },
     { id: 'R_NEURO', value: ['none'] },
     { id: 'L00', value: 'mostly_back_pain' },
@@ -75,6 +79,7 @@ export const fullAssessmentScenario = {
     { id: 'INF_MORNING', value: 'no' },
     { id: 'INF_ACTIVITY', value: 'no' },
     { id: 'INF_NIGHT', value: 'no' },
+    { id: 'L_EXT_YOUTH', value: 'no' },
     { id: 'F01', value: ['sitting'] },
     { id: 'F02_Q1', value: 'lt_10_min' },
     { id: 'F02_Q2', value: '10_30_min' },
