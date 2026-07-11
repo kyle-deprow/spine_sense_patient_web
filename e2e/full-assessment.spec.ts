@@ -1176,6 +1176,50 @@ async function answerScreening(page: Page) {
     if (screeningNavGone) return
 
     const questionId = await currentVisibleScreeningQuestionId(page)
+    if (questionId === 'A02') {
+      const painOption = page.getByTestId('question-A02-option-pain_tingling')
+      const numbnessOption = page.getByTestId('question-A02-option-numbness')
+      const [painBox, numbnessBox] = await Promise.all([
+        painOption.boundingBox(),
+        numbnessOption.boundingBox(),
+      ])
+      expect(painBox).not.toBeNull()
+      expect(numbnessBox).not.toBeNull()
+      expect(Math.abs(painBox!.y - numbnessBox!.y)).toBeLessThanOrEqual(1)
+      expect(Math.abs(painBox!.width - numbnessBox!.width)).toBeLessThanOrEqual(1)
+      expect(Math.abs(numbnessBox!.x - painBox!.x - painBox!.width - 8)).toBeLessThanOrEqual(1)
+      await expect(painOption).toHaveCSS('box-sizing', 'border-box')
+      await expect(painOption).toHaveCSS('display', 'flex')
+      await expect(painOption).toHaveCSS('flex-direction', 'column')
+
+      const optionIds = [
+        'pain_tingling',
+        'numbness',
+        'weakness',
+        'balance_walking',
+        'hand_clumsiness',
+        'stiffness_heaviness',
+        'mixed',
+      ]
+      const optionLabelStyles = await Promise.all(
+        optionIds.map((optionId) =>
+          page.getByTestId(`question-A02-option-${optionId}-label`).evaluate((element) => {
+            const style = getComputedStyle(element)
+            return {
+              fontFamily: style.fontFamily,
+              fontSize: style.fontSize,
+              fontWeight: style.fontWeight,
+              lineHeight: style.lineHeight,
+            }
+          }),
+        ),
+      )
+      expect(new Set(optionLabelStyles.map((style) => style.fontFamily)).size).toBe(1)
+      expect(new Set(optionLabelStyles.map((style) => style.fontSize)).size).toBe(1)
+      expect(new Set(optionLabelStyles.map((style) => style.lineHeight)).size).toBe(1)
+      expect(optionLabelStyles.every((style) => ['500', '600'].includes(style.fontWeight))).toBe(true)
+      expect(optionLabelStyles[0]?.fontFamily).toContain('BlinkMacSystemFont')
+    }
     const textAnswer = SCREENING_TEXT_ANSWERS_BY_ID.get(questionId)
     if (textAnswer != null && (await answerTextQuestion(page, 'question', textAnswer))) {
       // Text answer entered.
