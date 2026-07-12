@@ -13,6 +13,9 @@ import { fullAssessmentScenario } from './fixtures/fullAssessmentScenario'
 const BACKEND_RESET_URL = process.env.PATIENT_WEB_BACKEND_RESET_URL
 const BACKEND_RESET_TOKEN = process.env.PATIENT_WEB_BACKEND_RESET_TOKEN
 const BACKEND_REGISTRATION_CODE_URL = process.env.PATIENT_WEB_BACKEND_REGISTRATION_CODE_URL
+const BACKEND_DOCUMENT_SCAN_RESULT_URL =
+  process.env.PATIENT_WEB_BACKEND_DOCUMENT_SCAN_RESULT_URL ??
+  (BACKEND_RESET_URL ? BACKEND_RESET_URL.replace(/\/reset\/?$/, '/document-scan-result') : undefined)
 const GATEWAY_RESET_URL = process.env.PATIENT_WEB_GATEWAY_RESET_URL
 const GATEWAY_RESET_TOKEN = process.env.PATIENT_WEB_GATEWAY_RESET_TOKEN
 const EXPECT_SECURE_COOKIES = process.env.PATIENT_WEB_EXPECT_SECURE_COOKIES === 'true'
@@ -269,6 +272,10 @@ async function uploadSyntheticAssessmentDocumentFromRecordsStep(page: Page): Pro
 
   const confirmResponse = await confirmResponsePromise
   expect(confirmResponse.ok(), `assessment document confirm status=${confirmResponse.status()}`).toBe(true)
+  const confirmPayload = (await confirmResponse.json()) as AssessmentDocumentRecord
+  expect(normalizeAssessmentDocument(confirmPayload).processingStatus).toBe('processing')
+
+  await completeSyntheticDocumentScan(page.request, documentId)
 
   await expect(page.getByTestId(`records-document-${documentId}`)).toBeVisible({
     timeout: 30_000,
@@ -289,6 +296,31 @@ async function uploadSyntheticAssessmentDocumentFromRecordsStep(page: Page): Pro
       processingStatus: 'complete',
     }),
   )
+}
+
+async function completeSyntheticDocumentScan(request: APIRequestContext, documentId: string): Promise<void> {
+  if (!BACKEND_DOCUMENT_SCAN_RESULT_URL) {
+    throw new Error('PATIENT_WEB_BACKEND_DOCUMENT_SCAN_RESULT_URL is required for document upload E2E')
+  }
+  if (!BACKEND_RESET_TOKEN) {
+    throw new Error('PATIENT_WEB_BACKEND_RESET_TOKEN is required for document upload E2E scan completion')
+  }
+  const response = await request.post(BACKEND_DOCUMENT_SCAN_RESULT_URL, {
+    headers: {
+      authorization: `Bearer ${BACKEND_RESET_TOKEN}`,
+      'content-type': 'application/json',
+    },
+    data: {
+      document_id: documentId,
+      verdict: 'clean',
+    },
+    timeout: 90_000,
+  })
+  expect(response.status(), `document scan completion failed status=${response.status()}`).toBe(200)
+  const payload = (await response.json()) as AssessmentDocumentRecord & { scan_status?: string; scanStatus?: string }
+  const normalized = normalizeAssessmentDocument(payload)
+  expect(normalized.processingStatus).toBe('complete')
+  expect(payload.scan_status ?? payload.scanStatus).toBe('clean')
 }
 
 function expectQuestionnaireMutationContracts(mutations: readonly QuestionnaireMutation[]) {
