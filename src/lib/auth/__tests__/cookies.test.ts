@@ -24,8 +24,16 @@ describe('patient web cookie helpers', () => {
     expect(COOKIE_NAMES.access).toBe('spine_patient_sess')
     expect(options.httpOnly).toBe(true)
     expect(options.sameSite).toBe('lax')
-    expect(options.path).toBe('/')
+    expect(options.path).toBe('/api')
     expect(options.maxAge).toBeLessThanOrEqual(15 * 60)
+  })
+
+  it('does not scope backend credential cookies to direct websocket paths', () => {
+    expect(accessCookieOptions().path).toBe('/api')
+    expect(auditActorCookieOptions().path).toBe('/api')
+    expect(refreshCookieOptions().path).toBe('/api/auth/refresh')
+    expect(accessCookieOptions().path).not.toBe('/')
+    expect(auditActorCookieOptions().path).not.toBe('/')
   })
 
   it('path-scopes refresh cookies to the refresh route', () => {
@@ -51,7 +59,7 @@ describe('patient web cookie helpers', () => {
     expect(COOKIE_NAMES.auditActor).toBe('spine_patient_audit_actor')
     expect(options.httpOnly).toBe(true)
     expect(options.sameSite).toBe('strict')
-    expect(options.path).toBe('/')
+    expect(options.path).toBe('/api')
     expect(options.maxAge).toBe(12 * 60 * 60)
   })
 

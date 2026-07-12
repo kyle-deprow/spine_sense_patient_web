@@ -20,6 +20,10 @@ const ASSESSMENT_EXACT_RE = new RegExp(`${ASSESSMENT_RE}$`, 'i')
 const ASSESSMENT_DOCUMENT_RE = new RegExp(`${ASSESSMENT_RE}\\/documents\\/${UUID_RE}$`, 'i')
 const ASSESSMENT_DOCUMENT_CONFIRM_RE = new RegExp(`${ASSESSMENT_RE}\\/documents\\/${UUID_RE}\\/confirm$`, 'i')
 const ASSESSMENT_REPORT_RE = new RegExp(`${ASSESSMENT_RE}\\/reports$`, 'i')
+const ASSESSMENT_STORY_LIVE_TRANSCRIPTION_SESSION_RE = new RegExp(
+  `${ASSESSMENT_RE}\\/story\\/live-transcription-session$`,
+  'i',
+)
 const REPORT_RE = `^\\/api\\/v1\\/patients\\/me\\/reports\\/${UUID_RE}`
 const REPORT_EXACT_RE = new RegExp(`${REPORT_RE}$`, 'i')
 const REPORT_DOWNLOAD_URL_RE = new RegExp(`${REPORT_RE}\\/download-url$`, 'i')
@@ -70,6 +74,11 @@ export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
     prefix: '/api/v1/patients/me/assessments',
     methods: ['POST'],
     pathPattern: ASSESSMENT_REPORT_RE,
+  },
+  {
+    prefix: '/api/v1/patients/me/assessments',
+    methods: ['POST'],
+    pathPattern: ASSESSMENT_STORY_LIVE_TRANSCRIPTION_SESSION_RE,
   },
   {
     prefix: '/api/v1/patients/me/assessments',
