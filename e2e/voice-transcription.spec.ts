@@ -610,6 +610,14 @@ async function uploadMiScribeFixtureThroughBulkPath(
       "/api/proxy/api/v1/patients/me/miscribe/recording-policy?visit_location_state=IL",
       { method: "GET" },
     );
+    await proxyFetch<unknown>("/api/proxy/api/v1/patients/me/consents", {
+      method: "POST",
+      body: JSON.stringify({
+        consent_type: "miscribe_recording",
+        consent_version: policy.consent_text_version,
+        acknowledged_at: new Date().toISOString(),
+      }),
+    });
     const recording = await proxyFetch<MiScribeRecording>(
       "/api/proxy/api/v1/patients/me/miscribe/recordings/setup",
       {
