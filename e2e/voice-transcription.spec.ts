@@ -30,6 +30,13 @@ const AUDIO_FIXTURE =
 const LIVE_TRANSCRIPTION_WS_ORIGIN =
   process.env.PATIENT_WEB_LIVE_TRANSCRIPTION_WS_ORIGIN ?? null;
 const SYNTHETIC_ONBOARDING_DOB = "1985-01-15";
+const SYNTHETIC_RUN_NAMESPACE = (
+  process.env.PATIENT_WEB_E2E_RUN_ID ?? "local"
+)
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, "-")
+  .replace(/^-+|-+$/g, "")
+  .slice(0, 18);
 
 type BrowserCookie = {
   name: string;
@@ -201,8 +208,8 @@ function syntheticEmailForTest(testInfo: TestInfo): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, 42);
-  return `patient-web-voice-${testInfo.parallelIndex}-${testInfo.retry}-${slug}@e2e.example.com`;
+    .slice(0, 30);
+  return `patient-web-voice-${SYNTHETIC_RUN_NAMESPACE}-${testInfo.parallelIndex}-${testInfo.retry}-${slug}@e2e.example.com`;
 }
 
 async function clickIfPresent(
