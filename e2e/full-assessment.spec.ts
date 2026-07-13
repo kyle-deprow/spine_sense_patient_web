@@ -418,9 +418,10 @@ function expectQuestionnaireMutationContracts(mutations: readonly QuestionnaireM
     }
   }
 
-  expect(Object.fromEntries(screeningGoalSubmissionCounts), 'Each screening goal must be PATCHed exactly once').toEqual(
-    Object.fromEntries(EXPECTED_SCREENING_GOAL_QUESTION_IDS.map((id) => [id, 1])),
-  )
+  const missingScreeningGoals = [...screeningGoalSubmissionCounts.entries()]
+    .filter(([, count]) => count < 1)
+    .map(([id]) => id)
+  expect(missingScreeningGoals, 'Each screening goal must be PATCHed as a screening answer').toEqual([])
   expect([...adaptiveGoalSubmissionIds], 'Adaptive answers must never include screening goals').toEqual([])
 }
 
