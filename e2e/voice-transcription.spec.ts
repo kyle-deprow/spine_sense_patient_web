@@ -64,6 +64,24 @@ type LiveTranscriptionSession = {
   expires_in_seconds: number;
 };
 
+type MiScribeRecordingPolicy = {
+  policy_version: string;
+  consent_text_version: string;
+  requires_all_party_attestation: boolean;
+};
+
+type MiScribeRecording = {
+  id: string;
+};
+
+type MiScribeUploadUrl = {
+  upload_url: string;
+  method: string;
+  required_headers: Record<string, string>;
+  content_type: string;
+  max_bytes: number;
+};
+
 async function resetBackend(request: APIRequestContext) {
   if (!BACKEND_RESET_URL) {
     throw new Error(
@@ -554,56 +572,107 @@ async function streamFixtureToLiveTranscription(
   );
 }
 
-async function openMiScribeSetup(page: Page) {
-  await page.goto("/", { waitUntil: "domcontentloaded" });
-  await page
-    .getByRole("button", { name: /MiScribe — record your next visit/i })
-    .click();
-  await expect(page.getByTestId("miscribe-history")).toBeVisible({
-    timeout: 60_000,
-  });
-  await page.getByTestId("miscribe-record-cta").click();
+async function uploadMiScribeFixtureThroughBulkPath(
+  page: Page,
+  audioBytes: number[],
+) {
+  return page.evaluate(async ({ wavBytes }) => {
+    const csrfCookie = document.cookie
+      .split(";")
+      .map((entry) => entry.trim())
+      .find((entry) => entry.startsWith("spine_patient_csrf="))
+      ?.slice("spine_patient_csrf=".length);
 
-  if (
-    await page
-      .getByTestId("miscribe-intro")
-      .isVisible({ timeout: 5_000 })
-      .catch(() => false)
-  ) {
-    await page.getByTestId("miscribe-intro-state").click();
-    await page.getByTestId("miscribe-intro-state-option-IL").click();
-    await expect(page.getByTestId("miscribe-intro-continue")).toBeEnabled({
-      timeout: 30_000,
+    if (!csrfCookie) {
+      throw new Error("missing_csrf");
+    }
+
+    const proxyFetch = async <T>(path: string, init: RequestInit): Promise<T> => {
+      const response = await fetch(path, {
+        ...init,
+        credentials: "include",
+        headers: {
+          "content-type": "application/json",
+          "x-csrf-token": decodeURIComponent(csrfCookie),
+          ...(init.headers ?? {}),
+        },
+      });
+      const text = await response.text();
+      if (!response.ok) {
+        throw new Error(
+          `MiScribe bulk request failed path=${path} status=${response.status} body=${text.slice(0, 160)}`,
+        );
+      }
+      return (text ? JSON.parse(text) : {}) as T;
+    };
+
+    const policy = await proxyFetch<MiScribeRecordingPolicy>(
+      "/api/proxy/api/v1/patients/me/miscribe/recording-policy?visit_location_state=IL",
+      { method: "GET" },
+    );
+    const recording = await proxyFetch<MiScribeRecording>(
+      "/api/proxy/api/v1/patients/me/miscribe/recordings/setup",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          provider_name: "Synthetic Provider",
+          provider_type: "physician",
+          visit_reason: "follow_up",
+          visit_reason_note: null,
+          visit_location_state: "IL",
+          all_parties_consent_attested:
+            policy.requires_all_party_attestation,
+          recording_consent_policy_version: policy.policy_version,
+          recording_consent_text_version: policy.consent_text_version,
+        }),
+      },
+    );
+    await proxyFetch<MiScribeRecording>(
+      `/api/proxy/api/v1/patients/me/miscribe/recordings/${recording.id}/begin`,
+      { method: "POST", body: "{}" },
+    );
+
+    const uploadGrant = await proxyFetch<MiScribeUploadUrl>(
+      `/api/proxy/api/v1/patients/me/miscribe/recordings/${recording.id}/upload-url`,
+      {
+        method: "POST",
+        body: JSON.stringify({ content_type: "audio/wav" }),
+      },
+    );
+    if (wavBytes.length > uploadGrant.max_bytes) {
+      throw new Error("audio fixture exceeds MiScribe upload grant max_bytes");
+    }
+
+    const uploadResponse = await fetch(uploadGrant.upload_url, {
+      method: uploadGrant.method || "PUT",
+      headers: uploadGrant.required_headers,
+      body: new Uint8Array(wavBytes),
     });
-    await page.getByTestId("miscribe-intro-continue").click();
-  }
+    const uploadResponseText = await uploadResponse.text();
+    if (!uploadResponse.ok) {
+      throw new Error(
+        `MiScribe bulk audio upload failed status=${uploadResponse.status} body=${uploadResponseText.slice(0, 160)}`,
+      );
+    }
 
-  await expect(page.getByTestId("miscribe-new")).toBeVisible({
-    timeout: 60_000,
-  });
-}
+    await proxyFetch<MiScribeRecording>(
+      `/api/proxy/api/v1/patients/me/miscribe/recordings/${recording.id}/upload-complete`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          duration_seconds: 3,
+          content_type: uploadGrant.content_type || "audio/wav",
+          size_bytes: wavBytes.length,
+        }),
+      },
+    );
+    await proxyFetch<unknown>(
+      `/api/proxy/api/v1/patients/me/miscribe/recordings/${recording.id}/process`,
+      { method: "POST", body: "{}" },
+    );
 
-async function completeMiScribeSetup(page: Page) {
-  await page
-    .getByTestId("miscribe-new-provider-name")
-    .fill("Synthetic Provider");
-  await page.getByTestId("miscribe-new-provider-type-physician").click();
-  await page.getByTestId("miscribe-new-reason-follow_up").click();
-  await expect(page.getByTestId("miscribe-new-consent")).toBeVisible();
-  await expect(page.getByTestId("miscribe-new-consent-checkbox")).toBeVisible({
-    timeout: 30_000,
-  });
-  await page.getByTestId("miscribe-new-consent-checkbox").click();
-  await expect(page.getByTestId("miscribe-new-start")).toBeEnabled({
-    timeout: 30_000,
-  });
-  await page.getByTestId("miscribe-new-start").click();
-  await expect(page.getByTestId("miscribe-record-screen")).toBeVisible({
-    timeout: 60_000,
-  });
-  await expect(page.getByTestId("ready-state")).toBeVisible({
-    timeout: 60_000,
-  });
+    return { recording_id: recording.id };
+  }, { wavBytes: audioBytes });
 }
 
 test.describe("patient web voice transcription contracts @voice-transcription", () => {
@@ -663,18 +732,13 @@ test.describe("patient web voice transcription contracts @voice-transcription", 
   }, testInfo) => {
     await registerAndAuthenticateSyntheticPatient(page, request, testInfo);
     const traffic = captureTranscriptionTraffic(page);
-    await openMiScribeSetup(page);
-    await completeMiScribeSetup(page);
-
-    await page.getByTestId("record-mic").click();
-    await expect(page.getByTestId("record-stop")).toBeVisible({
-      timeout: 60_000,
-    });
-    await page.waitForTimeout(3_500);
-    await page.getByTestId("record-stop").click();
-    await expect(page.getByTestId("processing-state")).toBeVisible({
-      timeout: 120_000,
-    });
+    const result = await uploadMiScribeFixtureThroughBulkPath(
+      page,
+      Array.from(fs.readFileSync(AUDIO_FIXTURE)),
+    );
+    expect(result.recording_id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
 
     await expect
       .poll(
