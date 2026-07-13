@@ -14,10 +14,9 @@ Run it through the root Make targets:
 The opt-in voice transcription suite is tagged `@voice-transcription`. It uses
 `e2e/fixtures/synthetic-voice.wav` as a deterministic, non-PHI browser
 microphone source and verifies both live story transcription and MiScribe bulk
-upload contracts. Override the fixture with `PATIENT_WEB_E2E_AUDIO_FILE` when a
-deployment needs a different prerecorded sample. Deployed environments should
-route the returned `/ws/...` live-transcription path through the same patient web
-origin; local runs that do not proxy WebSockets through the BFF can set
+upload contracts. Deployed environments should route the returned `/ws/...`
+live-transcription path through the same patient web origin; local runs that do
+not proxy WebSockets through the BFF can set
 `PATIENT_WEB_LIVE_TRANSCRIPTION_WS_ORIGIN` to the API origin.
 
 The opt-in full assessment suite runs with deterministic stress enabled by

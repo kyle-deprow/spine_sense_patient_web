@@ -10,9 +10,10 @@ const includeFullAssessment =
   process.env.PATIENT_WEB_INCLUDE_FULL_ASSESSMENT === "true";
 const includeVoiceTranscription =
   process.env.PATIENT_WEB_INCLUDE_VOICE_TRANSCRIPTION === "true";
-const fakeAudioFile =
-  process.env.PATIENT_WEB_E2E_AUDIO_FILE ??
-  path.resolve(__dirname, "e2e/fixtures/synthetic-voice.wav");
+const fakeAudioFile = path.resolve(
+  __dirname,
+  "e2e/fixtures/synthetic-voice.wav",
+);
 const baseProjectGrepInvert = includeFullAssessment
   ? /@voice-transcription/
   : /@full-assessment|@voice-transcription/;

@@ -20,15 +20,11 @@ const SIGNUP_PASSWORD =
   process.env.PATIENT_E2E_SIGNUP_PASSWORD ?? "E2eSignup123!!";
 const INCLUDE_VOICE_TRANSCRIPTION =
   process.env.PATIENT_WEB_INCLUDE_VOICE_TRANSCRIPTION === "true";
-const AUDIO_FIXTURE =
-  process.env.PATIENT_WEB_E2E_AUDIO_FILE ??
-  path.resolve(__dirname, "fixtures/synthetic-voice.wav");
+const AUDIO_FIXTURE = path.resolve(__dirname, "fixtures/synthetic-voice.wav");
 const LIVE_TRANSCRIPTION_WS_ORIGIN =
   process.env.PATIENT_WEB_LIVE_TRANSCRIPTION_WS_ORIGIN ?? null;
 const SYNTHETIC_ONBOARDING_DOB = "1985-01-15";
-const SYNTHETIC_RUN_NAMESPACE = (
-  process.env.PATIENT_WEB_E2E_RUN_ID ?? "local"
-)
+const SYNTHETIC_RUN_NAMESPACE = (process.env.PATIENT_WEB_E2E_RUN_ID ?? "local")
   .toLowerCase()
   .replace(/[^a-z0-9]+/g, "-")
   .replace(/^-+|-+$/g, "")
@@ -93,6 +89,7 @@ type MiScribeScanPendingResponse = {
 type BulkTranscriptionResult = {
   recording_id: string;
   summary_id: string;
+  raw_transcript: string;
   raw_transcript_length: number;
 };
 
@@ -100,6 +97,48 @@ type LiveTranscriptionResult = {
   partialTranscript: string;
   finalTranscript: string;
 };
+
+function expectSyntheticTranscript(transcript: string, pathName: string) {
+  expect(
+    /synthetic/i.test(transcript),
+    `${pathName} must recognize the synthetic fixture marker`,
+  ).toBe(true);
+  expect(
+    /transcription/i.test(transcript),
+    `${pathName} must recognize the transcription fixture marker`,
+  ).toBe(true);
+}
+
+function wavDurationSeconds(audioBytes: Buffer): number {
+  if (
+    audioBytes.length < 44 ||
+    audioBytes.toString("ascii", 0, 4) !== "RIFF" ||
+    audioBytes.toString("ascii", 8, 12) !== "WAVE"
+  ) {
+    throw new Error("voice fixture must be a RIFF/WAVE file");
+  }
+
+  let byteRate: number | null = null;
+  let dataSize: number | null = null;
+  for (let offset = 12; offset + 8 <= audioBytes.length; ) {
+    const chunkName = audioBytes.toString("ascii", offset, offset + 4);
+    const chunkSize = audioBytes.readUInt32LE(offset + 4);
+    const chunkData = offset + 8;
+    if (chunkData + chunkSize > audioBytes.length) {
+      throw new Error("voice fixture contains an invalid WAV chunk size");
+    }
+    if (chunkName === "fmt " && chunkSize >= 16) {
+      byteRate = audioBytes.readUInt32LE(chunkData + 8);
+    } else if (chunkName === "data") {
+      dataSize = chunkSize;
+    }
+    offset = chunkData + chunkSize + (chunkSize % 2);
+  }
+  if (!byteRate || dataSize === null) {
+    throw new Error("voice fixture is missing WAV format or audio data");
+  }
+  return Math.max(1, Math.ceil(dataSize / byteRate));
+}
 
 class ProxyFetchError extends Error {
   constructor(
@@ -326,14 +365,16 @@ async function acceptConsentIfPresent(page: Page) {
   await expect(accept).toBeHidden({ timeout: 60_000 });
 }
 
-async function csrfTokenForApiPath(page: Page, apiPath: string): Promise<string> {
+async function csrfTokenForApiPath(
+  page: Page,
+  apiPath: string,
+): Promise<string> {
   const url = new URL(apiPath, page.url()).toString();
   const cookies = await page.context().cookies(url);
   const csrfCookie = cookies
     .filter(
       (cookie) =>
-        cookie.name === "spine_patient_csrf" &&
-        apiPath.startsWith(cookie.path),
+        cookie.name === "spine_patient_csrf" && apiPath.startsWith(cookie.path),
     )
     .sort((a, b) => b.path.length - a.path.length)[0];
 
@@ -529,33 +570,36 @@ async function requestIntakeLiveTranscriptionSession(
     page,
     "/api/proxy/api/v1/patients/me/intake/story/live-transcription-session",
   );
-  return page.evaluate(async ({ csrfToken }) => {
-    const response = await fetch(
-      "/api/proxy/api/v1/patients/me/intake/story/live-transcription-session",
-      {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "content-type": "application/json",
-          "x-csrf-token": csrfToken,
+  return page.evaluate(
+    async ({ csrfToken }) => {
+      const response = await fetch(
+        "/api/proxy/api/v1/patients/me/intake/story/live-transcription-session",
+        {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "content-type": "application/json",
+            "x-csrf-token": csrfToken,
+          },
+          body: JSON.stringify({ content_type: "audio/wav" }),
         },
-        body: JSON.stringify({ content_type: "audio/wav" }),
-      },
-    );
-    const text = await response.text();
-    if (!response.ok) {
-      const diagnostic = text
-        .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [token]")
-        .replace(/"[^"]*token[^"]*"\s*:\s*"[^"]+"/gi, (match) =>
-          match.replace(/:\s*"[^"]+"/, ':"[token]"'),
-        )
-        .slice(0, 160);
-      throw new Error(
-        `live transcription session failed status=${response.status} body=${diagnostic}`,
       );
-    }
-    return JSON.parse(text) as LiveTranscriptionSession;
-  }, { csrfToken });
+      const text = await response.text();
+      if (!response.ok) {
+        const diagnostic = text
+          .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [token]")
+          .replace(/"[^"]*token[^"]*"\s*:\s*"[^"]+"/gi, (match) =>
+            match.replace(/:\s*"[^"]+"/, ':"[token]"'),
+          )
+          .slice(0, 160);
+        throw new Error(
+          `live transcription session failed status=${response.status} body=${diagnostic}`,
+        );
+      }
+      return JSON.parse(text) as LiveTranscriptionSession;
+    },
+    { csrfToken },
+  );
 }
 
 async function streamFixtureToLiveTranscription(
@@ -619,9 +663,7 @@ async function streamFixtureToLiveTranscription(
               if (audioSent) {
                 window.clearTimeout(timeout);
                 reject(
-                  new Error(
-                    "live transcription audio was sent before ready.",
-                  ),
+                  new Error("live transcription audio was sent before ready."),
                 );
                 socket.close();
                 return;
@@ -744,7 +786,7 @@ function retryAfterMatchesBody(
 
 async function uploadMiScribeFixtureThroughBulkPath(
   page: Page,
-  audioBytes: number[],
+  audioBytes: Buffer,
   traffic: TrafficCapture,
 ): Promise<BulkTranscriptionResult> {
   const proxyFetch = async <T>(
@@ -845,14 +887,13 @@ async function uploadMiScribeFixtureThroughBulkPath(
     {
       method: "POST",
       body: {
-        duration_seconds: 3,
+        duration_seconds: wavDurationSeconds(audioBytes),
         content_type: uploadGrant.content_type || "audio/wav",
         size_bytes: audioBytes.length,
       },
     },
   );
-  const processPath =
-    `/api/proxy/api/v1/patients/me/miscribe/recordings/${recording.id}/process`;
+  const processPath = `/api/proxy/api/v1/patients/me/miscribe/recordings/${recording.id}/process`;
   const scanDeadline = Date.now() + 90_000;
   let summary: MiScribeSummaryResponse | null = null;
   for (;;) {
@@ -903,6 +944,7 @@ async function uploadMiScribeFixtureThroughBulkPath(
   return {
     recording_id: recording.id,
     summary_id: summary.id,
+    raw_transcript: summary.raw_transcript,
     raw_transcript_length: summary.raw_transcript.trim().length,
   };
 }
@@ -946,6 +988,7 @@ test.describe("patient web voice transcription contracts @voice-transcription", 
       transcription.finalTranscript.length,
       "streaming must produce a non-empty final transcription before done",
     ).toBeGreaterThan(0);
+    expectSyntheticTranscript(transcription.finalTranscript, "streaming");
     expect(typeof transcription.partialTranscript).toBe("string");
 
     expect(
@@ -972,7 +1015,7 @@ test.describe("patient web voice transcription contracts @voice-transcription", 
     const traffic = captureTranscriptionTraffic(page);
     const result = await uploadMiScribeFixtureThroughBulkPath(
       page,
-      Array.from(fs.readFileSync(AUDIO_FIXTURE)),
+      fs.readFileSync(AUDIO_FIXTURE),
       traffic,
     );
     expect(result.recording_id).toMatch(
@@ -985,6 +1028,7 @@ test.describe("patient web voice transcription contracts @voice-transcription", 
       result.raw_transcript_length,
       "MiScribe bulk processing must return a non-empty raw transcript",
     ).toBeGreaterThan(0);
+    expectSyntheticTranscript(result.raw_transcript, "bulk");
 
     await expect
       .poll(
