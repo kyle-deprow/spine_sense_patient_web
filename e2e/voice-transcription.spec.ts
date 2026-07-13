@@ -40,6 +40,7 @@ const SYNTHETIC_RUN_NAMESPACE = (
 
 type BrowserCookie = {
   name: string;
+  value?: string;
   httpOnly: boolean;
   path: string;
   sameSite: "Lax" | "None" | "Strict";
@@ -297,25 +298,36 @@ async function acceptConsentIfPresent(page: Page) {
   await expect(accept).toBeHidden({ timeout: 60_000 });
 }
 
+async function csrfTokenForApiPath(page: Page, apiPath: string): Promise<string> {
+  const url = new URL(apiPath, page.url()).toString();
+  const cookies = await page.context().cookies(url);
+  const csrfCookie = cookies
+    .filter(
+      (cookie) =>
+        cookie.name === "spine_patient_csrf" &&
+        apiPath.startsWith(cookie.path),
+    )
+    .sort((a, b) => b.path.length - a.path.length)[0];
+
+  if (!csrfCookie?.value) {
+    throw new Error("missing_csrf");
+  }
+  return csrfCookie.value;
+}
+
 async function completeSyntheticOnboardingGate(page: Page) {
+  const csrfToken = await csrfTokenForApiPath(
+    page,
+    "/api/proxy/api/v1/patients/me",
+  );
   const session = await page.evaluate(
-    async ({ dateOfBirth }) => {
-      const csrfCookie = document.cookie
-        .split(";")
-        .map((entry) => entry.trim())
-        .find((entry) => entry.startsWith("spine_patient_csrf="))
-        ?.slice("spine_patient_csrf=".length);
-
-      if (!csrfCookie) {
-        throw new Error("missing_csrf");
-      }
-
+    async ({ csrfToken, dateOfBirth }) => {
       const updateResponse = await fetch("/api/proxy/api/v1/patients/me", {
         method: "PATCH",
         credentials: "include",
         headers: {
           "content-type": "application/json",
-          "x-csrf-token": decodeURIComponent(csrfCookie),
+          "x-csrf-token": csrfToken,
         },
         body: JSON.stringify({ date_of_birth: dateOfBirth }),
       });
@@ -338,7 +350,7 @@ async function completeSyntheticOnboardingGate(page: Page) {
 
       return JSON.parse(sessionText) as { has_completed_onboarding?: unknown };
     },
-    { dateOfBirth: SYNTHETIC_ONBOARDING_DOB },
+    { csrfToken, dateOfBirth: SYNTHETIC_ONBOARDING_DOB },
   );
 
   expect(session.has_completed_onboarding).toBe(true);
@@ -476,17 +488,11 @@ function expectNoBulkUpload(traffic: TrafficCapture) {
 async function requestIntakeLiveTranscriptionSession(
   page: Page,
 ): Promise<LiveTranscriptionSession> {
-  return page.evaluate(async () => {
-    const csrfCookie = document.cookie
-      .split(";")
-      .map((entry) => entry.trim())
-      .find((entry) => entry.startsWith("spine_patient_csrf="))
-      ?.slice("spine_patient_csrf=".length);
-
-    if (!csrfCookie) {
-      throw new Error("missing_csrf");
-    }
-
+  const csrfToken = await csrfTokenForApiPath(
+    page,
+    "/api/proxy/api/v1/patients/me/intake/story/live-transcription-session",
+  );
+  return page.evaluate(async ({ csrfToken }) => {
     const response = await fetch(
       "/api/proxy/api/v1/patients/me/intake/story/live-transcription-session",
       {
@@ -494,7 +500,7 @@ async function requestIntakeLiveTranscriptionSession(
         credentials: "include",
         headers: {
           "content-type": "application/json",
-          "x-csrf-token": decodeURIComponent(csrfCookie),
+          "x-csrf-token": csrfToken,
         },
         body: JSON.stringify({ content_type: "audio/wav" }),
       },
@@ -506,7 +512,7 @@ async function requestIntakeLiveTranscriptionSession(
       );
     }
     return JSON.parse(text) as LiveTranscriptionSession;
-  });
+  }, { csrfToken });
 }
 
 async function streamFixtureToLiveTranscription(
@@ -576,24 +582,18 @@ async function uploadMiScribeFixtureThroughBulkPath(
   page: Page,
   audioBytes: number[],
 ) {
-  return page.evaluate(async ({ wavBytes }) => {
-    const csrfCookie = document.cookie
-      .split(";")
-      .map((entry) => entry.trim())
-      .find((entry) => entry.startsWith("spine_patient_csrf="))
-      ?.slice("spine_patient_csrf=".length);
-
-    if (!csrfCookie) {
-      throw new Error("missing_csrf");
-    }
-
+  const csrfToken = await csrfTokenForApiPath(
+    page,
+    "/api/proxy/api/v1/patients/me/miscribe/recordings/setup",
+  );
+  return page.evaluate(async ({ csrfToken, wavBytes }) => {
     const proxyFetch = async <T>(path: string, init: RequestInit): Promise<T> => {
       const response = await fetch(path, {
         ...init,
         credentials: "include",
         headers: {
           "content-type": "application/json",
-          "x-csrf-token": decodeURIComponent(csrfCookie),
+          "x-csrf-token": csrfToken,
           ...(init.headers ?? {}),
         },
       });
@@ -686,7 +686,7 @@ async function uploadMiScribeFixtureThroughBulkPath(
     );
 
     return { recording_id: recording.id };
-  }, { wavBytes: audioBytes });
+  }, { csrfToken, wavBytes: audioBytes });
 }
 
 test.describe("patient web voice transcription contracts @voice-transcription", () => {
