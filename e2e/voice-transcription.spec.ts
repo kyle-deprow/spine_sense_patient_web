@@ -635,6 +635,12 @@ async function uploadMiScribeFixtureThroughBulkPath(
         }),
       },
     );
+    if (policy.requires_all_party_attestation) {
+      await proxyFetch<MiScribeRecording>(
+        `/api/proxy/api/v1/patients/me/miscribe/recordings/${recording.id}/all-party-attestation`,
+        { method: "POST", body: "{}" },
+      );
+    }
     await proxyFetch<MiScribeRecording>(
       `/api/proxy/api/v1/patients/me/miscribe/recordings/${recording.id}/begin`,
       { method: "POST", body: "{}" },
