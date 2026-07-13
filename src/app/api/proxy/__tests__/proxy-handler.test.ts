@@ -4,8 +4,8 @@ import { NextRequest } from 'next/server'
 import { CSRF_HEADER, createCsrfToken } from '@/lib/auth/csrf'
 import { signAuditActorCookie } from '@/lib/auth/cookies'
 import { BackendUnavailableError, LONG_BACKEND_TIMEOUT_MS, backendFetch } from '@/lib/server/backend'
-import { isLongAssessmentBackendCall } from '@/lib/server/assessment-timeouts'
 import { auditLog, sessionCorrelationFromToken } from '@/lib/server/audit'
+import { isLongRunningBackendCall } from '@/lib/server/backend-timeouts'
 
 vi.mock('@/lib/server/backend', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/server/backend')>()
@@ -320,12 +320,24 @@ describe('proxy route handler', () => {
     expect(new Headers(requestInit?.headers).has('content-type')).toBe(false)
   })
 
-  it('classifies only adaptive and analysis run assessment calls as long-running', () => {
-    expect(isLongAssessmentBackendCall('/api/v1/patients/me/assessments/assessment-123/adaptive/prepare')).toBe(true)
-    expect(isLongAssessmentBackendCall('/api/v1/patients/me/assessments/assessment-123/prefill')).toBe(false)
-    expect(isLongAssessmentBackendCall('/api/v1/patients/me/assessments/assessment-123/analysis/run')).toBe(true)
-    expect(isLongAssessmentBackendCall('/api/v1/patients/me/assessments/assessment-123/analysis')).toBe(false)
-    expect(isLongAssessmentBackendCall('/api/v1/patients/me/assessments')).toBe(false)
+  it('classifies only explicitly long-running backend calls', () => {
+    expect(isLongRunningBackendCall('/api/v1/patients/me/assessments/assessment-123/adaptive/prepare')).toBe(true)
+    expect(isLongRunningBackendCall('/api/v1/patients/me/assessments/assessment-123/prefill')).toBe(false)
+    expect(isLongRunningBackendCall('/api/v1/patients/me/assessments/assessment-123/analysis/run')).toBe(true)
+    expect(isLongRunningBackendCall('/api/v1/patients/me/assessments/assessment-123/analysis')).toBe(false)
+    expect(isLongRunningBackendCall('/api/v1/patients/me/assessments')).toBe(false)
+    expect(
+      isLongRunningBackendCall('/api/v1/patients/me/miscribe/recordings/10000000-0000-4000-8000-00000000000A/process'),
+    ).toBe(true)
+    expect(
+      isLongRunningBackendCall(
+        '/api/v1/patients/me/miscribe/recordings/10000000-0000-4000-8000-000000000001/upload-complete',
+      ),
+    ).toBe(false)
+    expect(isLongRunningBackendCall('/api/v1/patients/me/miscribe/recordings/not-a-uuid/process')).toBe(false)
+    expect(
+      isLongRunningBackendCall('/api/v1/patients/me/miscribe/recordings/10000000-0000-7000-8000-000000000001/process'),
+    ).toBe(false)
   })
 
   it('returns 405 when HTTP method is not allowed for the matched route', async () => {
@@ -392,7 +404,10 @@ describe('proxy route handler', () => {
       },
       new Uint8Array([1, 2, 3]),
     )
-    const response = await POST(request, makeContext(['api', 'v1', 'patients', 'me', 'documents', documentId, 'confirm']))
+    const response = await POST(
+      request,
+      makeContext(['api', 'v1', 'patients', 'me', 'documents', documentId, 'confirm']),
+    )
 
     expect(response.status).toBe(415)
     await expect(response.json()).resolves.toEqual({
@@ -480,14 +495,10 @@ describe('proxy route handler', () => {
     it('does not trust a browser-forged audit actor cookie', async () => {
       mockedBackendFetch.mockResolvedValue(Response.json([]))
       const forged = `v1.${recordingId}.${'a'.repeat(43)}`
-      const request = makeProxyRequest(
-        `${prefix}/recordings`,
-        'GET',
-        {
-          spine_patient_sess: 'cookie-access-token',
-          spine_patient_audit_actor: forged,
-        },
-      )
+      const request = makeProxyRequest(`${prefix}/recordings`, 'GET', {
+        spine_patient_sess: 'cookie-access-token',
+        spine_patient_audit_actor: forged,
+      })
 
       const response = await GET(request, makeContext([...segments, 'recordings']))
 
@@ -522,6 +533,31 @@ describe('proxy route handler', () => {
       expect(Buffer.from(forwardedBody as ArrayBuffer).toString('utf8')).toBe(requestBody)
       expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain('follow-up')
       expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain('private text')
+    })
+
+    it('uses the long backend timeout for MyScribe transcription and summary processing', async () => {
+      mockedBackendFetch.mockResolvedValue(Response.json({ id: 'summary-1', recording_id: recordingId }))
+      const csrf = createCsrfToken(CSRF_SECRET, 'miscribe-process-test')
+      const request = makeProxyRequest(
+        `${prefix}/recordings/${recordingId}/process`,
+        'POST',
+        { spine_patient_sess: 'cookie-access-token', spine_patient_csrf: csrf },
+        {
+          'Content-Type': 'application/json',
+          [CSRF_HEADER]: csrf,
+          Origin: ORIGIN,
+        },
+        '{}',
+      )
+
+      const response = await POST(request, makeContext([...segments, 'recordings', recordingId, 'process']))
+
+      expect(response.status).toBe(200)
+      expect(mockedBackendFetch).toHaveBeenCalledWith(
+        `/api/v1/patients/me/miscribe/recordings/${recordingId}/process`,
+        expect.any(Object),
+        { timeoutMs: LONG_BACKEND_TIMEOUT_MS },
+      )
     })
 
     it.each([

@@ -6,8 +6,8 @@ import { validateUnsafeRequest } from '@/lib/auth/csrf'
 import { validateProxyTarget } from '@/lib/proxy/allowlist'
 import { buildProxyRequestHeaders, buildProxyResponseHeaders } from '@/lib/proxy/headers'
 import { auditLog, createRequestAuditContext, deriveResourceType, type AuditContext } from '@/lib/server/audit'
-import { assessmentBackendTimeoutOptions } from '@/lib/server/assessment-timeouts'
 import { BackendUnavailableError, backendFetch } from '@/lib/server/backend'
+import { backendTimeoutOptions } from '@/lib/server/backend-timeouts'
 import { getPatientWebConfig } from '@/lib/server/config'
 import { csrfFailureResponse, jsonNoStore } from '@/lib/server/responses'
 
@@ -66,7 +66,7 @@ async function handler(request: NextRequest, context: ProxyContext) {
     backendResponse = await backendFetch(
       `${target.targetPath}${request.nextUrl.search}`,
       backendRequest,
-      assessmentBackendTimeoutOptions(target.targetPath),
+      backendTimeoutOptions(target.targetPath),
     )
   } catch (err) {
     if (err instanceof BackendUnavailableError) {
