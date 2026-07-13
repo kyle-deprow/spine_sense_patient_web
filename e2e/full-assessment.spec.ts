@@ -616,7 +616,7 @@ async function expectAuthenticatedCookieSession(page: Page) {
   expect(
     cookieHasExpectedShape(cookies, 'spine_patient_sess', {
       httpOnly: true,
-      path: '/',
+      path: '/api',
       sameSite: 'Lax',
       secure: EXPECT_SECURE_COOKIES,
     }),

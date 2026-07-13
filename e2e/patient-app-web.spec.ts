@@ -429,7 +429,7 @@ test.describe("patient app web deployment", () => {
       expect(
         cookieHasExpectedShape(cookies, "spine_patient_sess", {
           httpOnly: true,
-          path: "/",
+          path: "/api",
           sameSite: "Lax",
           secure: EXPECT_SECURE_COOKIES,
         }),
