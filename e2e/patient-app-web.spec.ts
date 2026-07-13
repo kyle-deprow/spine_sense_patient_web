@@ -305,7 +305,6 @@ test.describe("patient app web deployment", () => {
       await page.getByTestId("register-first-name").fill("Synthetic");
       await page.getByTestId("register-last-name").fill("Patient");
       await page.getByTestId("register-email").fill(email);
-      await page.getByTestId("register-phone").fill("5551234567");
       await page.getByTestId("register-password").fill(SIGNUP_PASSWORD);
       await page.getByTestId("register-confirm-password").fill(SIGNUP_PASSWORD);
       await clickIfPresent(page, "register-consent-storage");
@@ -313,8 +312,12 @@ test.describe("patient app web deployment", () => {
       await page.getByTestId("register-submit").click();
 
       const registerResponse = await registerResponsePromise;
-      expect(registerResponse.ok()).toBeTruthy();
-      await expectNoTokenLeak(await registerResponse.text());
+      const registerResponseText = await registerResponse.text();
+      expect(
+        registerResponse.ok(),
+        `registration failed status=${registerResponse.status()} body=${sanitizeBrowserDiagnostic(registerResponseText)}`,
+      ).toBeTruthy();
+      await expectNoTokenLeak(registerResponseText);
 
       await expect(page.getByTestId("verify-screen")).toBeVisible({
         timeout: 60_000,
@@ -384,7 +387,6 @@ test.describe("patient app web deployment", () => {
       await page.getByTestId("register-first-name").fill("Synthetic");
       await page.getByTestId("register-last-name").fill("Verified");
       await page.getByTestId("register-email").fill(email);
-      await page.getByTestId("register-phone").fill("5551234567");
       await page.getByTestId("register-password").fill(SIGNUP_PASSWORD);
       await page.getByTestId("register-confirm-password").fill(SIGNUP_PASSWORD);
       await clickIfPresent(page, "register-consent-storage");
@@ -392,8 +394,12 @@ test.describe("patient app web deployment", () => {
       await page.getByTestId("register-submit").click();
 
       const registerResponse = await registerResponsePromise;
-      expect(registerResponse.ok()).toBeTruthy();
-      await expectNoTokenLeak(await registerResponse.text());
+      const registerResponseText = await registerResponse.text();
+      expect(
+        registerResponse.ok(),
+        `registration failed status=${registerResponse.status()} body=${sanitizeBrowserDiagnostic(registerResponseText)}`,
+      ).toBeTruthy();
+      await expectNoTokenLeak(registerResponseText);
       await expect(page.getByTestId("verify-screen")).toBeVisible({
         timeout: 60_000,
       });
