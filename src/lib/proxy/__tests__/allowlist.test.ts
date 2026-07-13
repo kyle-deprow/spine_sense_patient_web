@@ -54,6 +54,35 @@ describe('proxy allowlist', () => {
     }
   })
 
+  it('allows intake story live transcription session token minting', () => {
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'intake', 'story', 'live-transcription-session'],
+        'POST',
+        '/api/proxy/api/v1/patients/me/intake/story/live-transcription-session',
+      ),
+    ).toEqual({
+      ok: true,
+      targetPath: '/api/v1/patients/me/intake/story/live-transcription-session',
+    })
+  })
+
+  it('blocks arbitrary intake live transcription child routes', () => {
+    const cases = [
+      '/api/v1/patients/me/intake/story/live-transcription',
+      '/api/v1/patients/me/intake/story/live-transcription/connect',
+      '/api/v1/patients/me/intake/story/live-transcription-session/extra',
+    ] as const
+
+    for (const targetPath of cases) {
+      expect(validateProxyTarget(targetPath.slice(1).split('/'), 'POST', `/api/proxy${targetPath}`)).toEqual({
+        ok: false,
+        status: 404,
+        code: 'proxy_path_not_allowed',
+      })
+    }
+  })
+
   it('allows patient symptom trend reads used by the home dashboard', () => {
     expect(
       validateProxyTarget(

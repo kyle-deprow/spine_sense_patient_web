@@ -24,6 +24,10 @@ const ASSESSMENT_STORY_LIVE_TRANSCRIPTION_SESSION_RE = new RegExp(
   `${ASSESSMENT_RE}\\/story\\/live-transcription-session$`,
   'i',
 )
+const INTAKE_STORY_LIVE_TRANSCRIPTION_SESSION_RE =
+  /^\/api\/v1\/patients\/me\/intake\/story\/live-transcription-session$/i
+const INTAKE_ALLOWED_RE =
+  /^\/api\/v1\/patients\/me\/intake(?:\/(?:voice-upload-url|transcribe|route|progress|progress\/latest|progress\/complete|steps|steps\/[^/]+|complete))?$/i
 const REPORT_RE = `^\\/api\\/v1\\/patients\\/me\\/reports\\/${UUID_RE}`
 const REPORT_EXACT_RE = new RegExp(`${REPORT_RE}$`, 'i')
 const REPORT_DOWNLOAD_URL_RE = new RegExp(`${REPORT_RE}\\/download-url$`, 'i')
@@ -92,6 +96,11 @@ export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
     pathPattern: REPORT_DOWNLOAD_URL_RE,
   },
   { prefix: '/api/v1/patients/me/consents', methods: ['GET', 'POST', 'PUT', 'PATCH'] },
+  {
+    prefix: '/api/v1/patients/me/intake',
+    methods: ['POST'],
+    pathPattern: INTAKE_STORY_LIVE_TRANSCRIPTION_SESSION_RE,
+  },
   { prefix: '/api/v1/patients/me/dashboard', methods: ['GET'] },
   { prefix: '/api/v1/patients/me/symptom-trends', methods: ['GET'] },
   { prefix: '/api/v1/patients/me/symptoms', methods: ['GET', 'POST', 'PATCH', 'DELETE'] },
@@ -138,7 +147,11 @@ export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
     methods: ['PATCH'],
     pathPattern: DOCUMENT_TEXT_UPDATE_RE,
   },
-  { prefix: '/api/v1/patients/me/intake', methods: ['GET', 'POST', 'PUT'] },
+  {
+    prefix: '/api/v1/patients/me/intake',
+    methods: ['GET', 'POST', 'PUT'],
+    pathPattern: INTAKE_ALLOWED_RE,
+  },
   { prefix: `${MISCRIBE_PREFIX}/recording-policy`, methods: ['GET'], match: 'exact' },
   { prefix: MISCRIBE_RECORDINGS_PREFIX, methods: ['GET'], match: 'exact' },
   { prefix: `${MISCRIBE_RECORDINGS_PREFIX}/setup`, methods: ['POST'], match: 'exact' },
