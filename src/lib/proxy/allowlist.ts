@@ -210,12 +210,12 @@ export function validateProxyTarget(
     return { ok: false, status: 400, code: 'proxy_path_invalid' }
   }
 
-  const route = ALLOWED_PROXY_ROUTES.find((candidate) => matchesRoute(targetPath, candidate))
-  if (!route) {
+  const matchingRoutes = ALLOWED_PROXY_ROUTES.filter((candidate) => matchesRoute(targetPath, candidate))
+  if (matchingRoutes.length === 0) {
     return { ok: false, status: 404, code: 'proxy_path_not_allowed' }
   }
 
-  if (!route.methods.includes(method.toUpperCase())) {
+  if (!matchingRoutes.some((route) => route.methods.includes(method.toUpperCase()))) {
     return { ok: false, status: 405, code: 'proxy_method_not_allowed' }
   }
 

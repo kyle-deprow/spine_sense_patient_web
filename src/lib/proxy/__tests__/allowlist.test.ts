@@ -54,6 +54,16 @@ describe('proxy allowlist', () => {
     }
   })
 
+  it('allows assessment document list reads when a POST-only document route also matches the path', () => {
+    const assessmentId = '10000000-0000-4000-8000-000000000001'
+    const targetPath = `/api/v1/patients/me/assessments/${assessmentId}/documents`
+
+    expect(validateProxyTarget(targetPath.slice(1).split('/'), 'GET', `/api/proxy${targetPath}`)).toEqual({
+      ok: true,
+      targetPath,
+    })
+  })
+
   it('allows intake story live transcription session token minting', () => {
     expect(
       validateProxyTarget(
