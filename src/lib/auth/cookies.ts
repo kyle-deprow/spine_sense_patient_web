@@ -82,7 +82,7 @@ export function accessCookieOptions(): CookieOptions {
     httpOnly: true,
     secure: shouldUseSecureCookies(),
     sameSite: 'lax',
-    path: '/',
+    path: '/api',
     maxAge: ACCESS_TOKEN_MAX_AGE_SECONDS,
   }
 }
@@ -112,7 +112,7 @@ export function auditActorCookieOptions(): CookieOptions {
     httpOnly: true,
     secure: shouldUseSecureCookies(),
     sameSite: 'strict',
-    path: '/',
+    path: '/api',
     maxAge: SESSION_MAX_AGE_SECONDS,
   }
 }
@@ -255,7 +255,7 @@ function sessionIssuedAtCookieOptions(): CookieOptions {
     httpOnly: true,
     secure: shouldUseSecureCookies(),
     sameSite: 'strict',
-    path: '/',
+    path: '/api',
     maxAge: SESSION_MAX_AGE_SECONDS,
   }
 }
