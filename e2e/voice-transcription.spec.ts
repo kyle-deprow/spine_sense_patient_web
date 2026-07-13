@@ -6,6 +6,7 @@ import {
   test,
   type APIRequestContext,
   type Page,
+  type TestInfo,
 } from "@playwright/test";
 
 import { patientClinicalScenario } from "./fixtures/patientClinicalScenario";
@@ -28,6 +29,7 @@ const AUDIO_FIXTURE =
   path.resolve(__dirname, "fixtures/synthetic-voice.wav");
 const LIVE_TRANSCRIPTION_WS_ORIGIN =
   process.env.PATIENT_WEB_LIVE_TRANSCRIPTION_WS_ORIGIN ?? null;
+const SYNTHETIC_ONBOARDING_DOB = "1985-01-15";
 
 type BrowserCookie = {
   name: string;
@@ -194,9 +196,13 @@ async function expectNoTokenLeak(responseText: string) {
   expect(responseText.includes("refreshToken")).toBe(false);
 }
 
-function uniqueSyntheticEmail(): string {
-  const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  return `patient-web-voice-${unique}@e2e.example.com`;
+function syntheticEmailForTest(testInfo: TestInfo): string {
+  const slug = testInfo.title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 42);
+  return `patient-web-voice-${testInfo.parallelIndex}-${testInfo.retry}-${slug}@e2e.example.com`;
 }
 
 async function clickIfPresent(
@@ -263,13 +269,63 @@ async function acceptConsentIfPresent(page: Page) {
   const accept = page.getByTestId("consent-accept");
   await expect(accept).toBeEnabled({ timeout: 30_000 });
   await accept.click();
+  await expect(accept).toBeHidden({ timeout: 60_000 });
+}
+
+async function completeSyntheticOnboardingGate(page: Page) {
+  const session = await page.evaluate(
+    async ({ dateOfBirth }) => {
+      const csrfCookie = document.cookie
+        .split(";")
+        .map((entry) => entry.trim())
+        .find((entry) => entry.startsWith("spine_patient_csrf="))
+        ?.slice("spine_patient_csrf=".length);
+
+      if (!csrfCookie) {
+        throw new Error("missing_csrf");
+      }
+
+      const updateResponse = await fetch("/api/proxy/api/v1/patients/me", {
+        method: "PATCH",
+        credentials: "include",
+        headers: {
+          "content-type": "application/json",
+          "x-csrf-token": decodeURIComponent(csrfCookie),
+        },
+        body: JSON.stringify({ date_of_birth: dateOfBirth }),
+      });
+      const updateText = await updateResponse.text();
+      if (!updateResponse.ok) {
+        throw new Error(
+          `synthetic onboarding profile patch failed status=${updateResponse.status} body=${updateText.slice(0, 160)}`,
+        );
+      }
+
+      const sessionResponse = await fetch("/api/auth/session", {
+        credentials: "include",
+      });
+      const sessionText = await sessionResponse.text();
+      if (!sessionResponse.ok) {
+        throw new Error(
+          `synthetic onboarding session refresh failed status=${sessionResponse.status} body=${sessionText.slice(0, 160)}`,
+        );
+      }
+
+      return JSON.parse(sessionText) as { has_completed_onboarding?: unknown };
+    },
+    { dateOfBirth: SYNTHETIC_ONBOARDING_DOB },
+  );
+
+  expect(session.has_completed_onboarding).toBe(true);
+  await page.goto("/", { waitUntil: "domcontentloaded" });
 }
 
 async function registerAndAuthenticateSyntheticPatient(
   page: Page,
   request: APIRequestContext,
+  testInfo: TestInfo,
 ) {
-  const email = uniqueSyntheticEmail();
+  const email = syntheticEmailForTest(testInfo);
   await page.request.get("/api/auth/session");
   await page.goto("/register");
   await expect(page.getByTestId("register-screen")).toBeVisible();
@@ -317,6 +373,7 @@ async function registerAndAuthenticateSyntheticPatient(
     timeout: 60_000,
   });
   await acceptConsentIfPresent(page);
+  await completeSyntheticOnboardingGate(page);
 
   const cookies = await page.context().cookies();
   expect(
@@ -491,7 +548,29 @@ async function streamFixtureToLiveTranscription(
 }
 
 async function openMiScribeSetup(page: Page) {
-  await page.goto("/home/miscribe/new?visitLocationState=IL");
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page
+    .getByRole("button", { name: /MiScribe — record your next visit/i })
+    .click();
+  await expect(page.getByTestId("miscribe-history")).toBeVisible({
+    timeout: 60_000,
+  });
+  await page.getByTestId("miscribe-record-cta").click();
+
+  if (
+    await page
+      .getByTestId("miscribe-intro")
+      .isVisible({ timeout: 5_000 })
+      .catch(() => false)
+  ) {
+    await page.getByTestId("miscribe-intro-state").click();
+    await page.getByTestId("miscribe-intro-state-option-IL").click();
+    await expect(page.getByTestId("miscribe-intro-continue")).toBeEnabled({
+      timeout: 30_000,
+    });
+    await page.getByTestId("miscribe-intro-continue").click();
+  }
+
   await expect(page.getByTestId("miscribe-new")).toBeVisible({
     timeout: 60_000,
   });
@@ -535,11 +614,15 @@ test.describe("patient web voice transcription contracts @voice-transcription", 
     await resetBackend(request);
   });
 
+  test.afterEach(async ({ request }) => {
+    await resetBackend(request);
+  });
+
   test("streams the intake story audio fixture over the live transcription service", async ({
     page,
     request,
-  }) => {
-    await registerAndAuthenticateSyntheticPatient(page, request);
+  }, testInfo) => {
+    await registerAndAuthenticateSyntheticPatient(page, request, testInfo);
     const traffic = captureTranscriptionTraffic(page);
     const session = await requestIntakeLiveTranscriptionSession(page);
     expect(session.session_id).toBeTruthy();
@@ -570,8 +653,8 @@ test.describe("patient web voice transcription contracts @voice-transcription", 
   test("uploads MiScribe recording audio through the bulk transcription path", async ({
     page,
     request,
-  }) => {
-    await registerAndAuthenticateSyntheticPatient(page, request);
+  }, testInfo) => {
+    await registerAndAuthenticateSyntheticPatient(page, request, testInfo);
     const traffic = captureTranscriptionTraffic(page);
     await openMiScribeSetup(page);
     await completeMiScribeSetup(page);
