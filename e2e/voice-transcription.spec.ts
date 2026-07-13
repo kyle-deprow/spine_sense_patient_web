@@ -808,6 +808,26 @@ function parseJsonBody(text: string): unknown {
   }
 }
 
+function safeProxyFailureCategory(body: unknown): string {
+  if (!body || typeof body !== "object") return "unclassified";
+  const detail = (body as Record<string, unknown>).detail;
+  if (typeof detail !== "string") return "unclassified";
+  const categories: Readonly<Record<string, string>> = {
+    "LLM provider rejected request": "llm_provider_rejected",
+    "LLM provider unavailable": "llm_provider_unavailable",
+    "LLM provider failed": "llm_provider_failed",
+    "LLM provider timeout": "llm_provider_timeout",
+    "LLM provider rate limit": "llm_provider_rate_limited",
+    "Guardrail 'phi_leakage' blocked response: phi_leak_detected":
+      "llm_phi_guardrail_blocked",
+    "Guardrail 'structured_schema' blocked response: schema_invalid_json":
+      "llm_schema_invalid_json",
+    "Guardrail 'structured_schema' blocked response: schema_validation_failed":
+      "llm_schema_validation_failed",
+  };
+  return categories[detail] ?? "unclassified";
+}
+
 function isMiScribeScanPendingResponse(
   body: unknown,
 ): body is MiScribeScanPendingResponse {
@@ -907,14 +927,12 @@ async function uploadMiScribeFixtureThroughBulkPath(
     );
     recordTraffic(traffic, options.method, url);
     if (response.networkError) {
-      throw new Error(
-        `MiScribe bulk request failed path=${path} reason=network_error`,
-      );
+      throw new Error("MiScribe bulk request failed reason=network_error");
     }
     const body = parseJsonBody(response.text);
     if (!response.ok) {
       throw new ProxyFetchError(
-        `MiScribe bulk request failed path=${path} status=${response.status}`,
+        `MiScribe bulk request failed status=${response.status} category=${safeProxyFailureCategory(body)}`,
         response.status,
         body,
         response.retryAfter,
