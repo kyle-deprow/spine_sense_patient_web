@@ -10,14 +10,17 @@ import {
 
 import { patientClinicalScenario } from "./fixtures/patientClinicalScenario";
 
-const PATIENT_EMAIL = patientClinicalScenario.patient.email;
-const PATIENT_PASSWORD = patientClinicalScenario.patient.password;
 const BACKEND_RESET_URL = process.env.PATIENT_WEB_BACKEND_RESET_URL;
 const BACKEND_RESET_TOKEN = process.env.PATIENT_WEB_BACKEND_RESET_TOKEN;
 const GATEWAY_RESET_URL = process.env.PATIENT_WEB_GATEWAY_RESET_URL;
 const GATEWAY_RESET_TOKEN = process.env.PATIENT_WEB_GATEWAY_RESET_TOKEN;
+const BACKEND_REGISTRATION_CODE_URL =
+  process.env.PATIENT_WEB_BACKEND_REGISTRATION_CODE_URL;
+const TEST_SUPPORT_TOKEN = process.env.PATIENT_WEB_TEST_SUPPORT_TOKEN;
 const EXPECT_SECURE_COOKIES =
   process.env.PATIENT_WEB_EXPECT_SECURE_COOKIES === "true";
+const SIGNUP_PASSWORD =
+  process.env.PATIENT_E2E_SIGNUP_PASSWORD ?? "E2eSignup123!!";
 const INCLUDE_VOICE_TRANSCRIPTION =
   process.env.PATIENT_WEB_INCLUDE_VOICE_TRANSCRIPTION === "true";
 const AUDIO_FIXTURE =
@@ -191,28 +194,129 @@ async function expectNoTokenLeak(responseText: string) {
   expect(responseText.includes("refreshToken")).toBe(false);
 }
 
-async function loginAsSeededPatient(page: Page) {
-  await page.request.get("/api/auth/session");
-  await page.goto("/login");
-  await expect(page.getByTestId("login-screen")).toBeVisible();
+function uniqueSyntheticEmail(): string {
+  const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return `patient-web-voice-${unique}@e2e.example.com`;
+}
 
-  const loginResponse = page.waitForResponse(
+async function clickIfPresent(
+  page: Page,
+  testId: string,
+  timeout = 1000,
+): Promise<boolean> {
+  const locator = page.getByTestId(testId);
+  const visible = await locator.isVisible({ timeout }).catch(() => false);
+  if (!visible) return false;
+  await locator.scrollIntoViewIfNeeded();
+  await locator.click();
+  return true;
+}
+
+async function getRegistrationVerificationCode(
+  request: APIRequestContext,
+  email: string,
+): Promise<string> {
+  if (!BACKEND_REGISTRATION_CODE_URL) {
+    throw new Error(
+      "PATIENT_WEB_BACKEND_REGISTRATION_CODE_URL is required to verify synthetic registration",
+    );
+  }
+  if (!TEST_SUPPORT_TOKEN) {
+    throw new Error(
+      "PATIENT_WEB_TEST_SUPPORT_TOKEN is required for registration-code lookup",
+    );
+  }
+
+  const response = await request.post(BACKEND_REGISTRATION_CODE_URL, {
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${TEST_SUPPORT_TOKEN}`,
+    },
+    data: { email },
+    timeout: 30_000,
+  });
+  expect(
+    response.status(),
+    `registration verification code lookup failed status=${response.status()}`,
+  ).toBe(200);
+  const payload = (await response.json()) as { code?: unknown };
+  if (typeof payload.code !== "string") {
+    throw new Error("registration verification code lookup returned no code");
+  }
+  return payload.code;
+}
+
+async function acceptConsentIfPresent(page: Page) {
+  const consentVisible = await page
+    .getByTestId("consent-screen")
+    .isVisible({ timeout: 5_000 })
+    .catch(() => false);
+  if (!consentVisible) return;
+
+  await clickIfPresent(page, "consent-checkbox-pa-cons-privacy", 5_000);
+  await page.waitForTimeout(250);
+  await clickIfPresent(page, "consent-checkbox-pa-cons-educational", 5_000);
+  await page.waitForTimeout(250);
+  await clickIfPresent(page, "consent-checkbox-pa-cons-ai-analysis", 5_000);
+  await page.waitForTimeout(250);
+
+  const accept = page.getByTestId("consent-accept");
+  await expect(accept).toBeEnabled({ timeout: 30_000 });
+  await accept.click();
+}
+
+async function registerAndAuthenticateSyntheticPatient(
+  page: Page,
+  request: APIRequestContext,
+) {
+  const email = uniqueSyntheticEmail();
+  await page.request.get("/api/auth/session");
+  await page.goto("/register");
+  await expect(page.getByTestId("register-screen")).toBeVisible();
+
+  const registerResponsePromise = page.waitForResponse(
     (response) =>
-      response.url().includes("/api/auth/login") &&
+      response.url().includes("/api/auth/register") &&
       response.request().method() === "POST",
   );
+  await page.getByTestId("register-first-name").fill("Synthetic");
+  await page.getByTestId("register-last-name").fill("Voice");
+  await page.getByTestId("register-email").fill(email);
+  await page.getByTestId("register-password").fill(SIGNUP_PASSWORD);
+  await page.getByTestId("register-confirm-password").fill(SIGNUP_PASSWORD);
+  await clickIfPresent(page, "register-consent-storage");
+  await expect(page.getByTestId("register-submit")).toBeEnabled();
+  await page.getByTestId("register-submit").click();
 
-  await page.getByTestId("login-email-input").fill(PATIENT_EMAIL);
-  await page.getByTestId("login-password-input").fill(PATIENT_PASSWORD);
-  await page.getByTestId("login-submit").click();
+  const registerResponse = await registerResponsePromise;
+  const registerResponseText = await registerResponse.text();
+  expect(
+    registerResponse.ok(),
+    `registration failed status=${registerResponse.status()} body=${sanitizeBrowserDiagnostic(registerResponseText)}`,
+  ).toBeTruthy();
+  await expectNoTokenLeak(registerResponseText);
+  await expect(page.getByTestId("verify-screen")).toBeVisible({
+    timeout: 60_000,
+  });
 
-  const response = await loginResponse;
+  const code = await getRegistrationVerificationCode(request, email);
+  const verifyResponsePromise = page.waitForResponse(
+    (response) =>
+      response.url().includes("/api/auth/verify/registration") &&
+      response.request().method() === "POST",
+  );
+  await page.getByTestId("verify-otp-digit-0").fill(code);
+  await expect(page.getByTestId("verify-submit")).toBeEnabled();
+  await page.getByTestId("verify-submit").click();
+
+  const response = await verifyResponsePromise;
   expect(response.ok()).toBeTruthy();
   await expectNoTokenLeak(await response.text());
 
-  await expect(page.getByTestId("home-screen")).toBeVisible({
+  await expect(page.getByTestId("consent-screen")).toBeVisible({
     timeout: 60_000,
   });
+  await acceptConsentIfPresent(page);
 
   const cookies = await page.context().cookies();
   expect(
@@ -433,8 +537,9 @@ test.describe("patient web voice transcription contracts @voice-transcription", 
 
   test("streams the intake story audio fixture over the live transcription service", async ({
     page,
+    request,
   }) => {
-    await loginAsSeededPatient(page);
+    await registerAndAuthenticateSyntheticPatient(page, request);
     const traffic = captureTranscriptionTraffic(page);
     const session = await requestIntakeLiveTranscriptionSession(page);
     expect(session.session_id).toBeTruthy();
@@ -464,8 +569,9 @@ test.describe("patient web voice transcription contracts @voice-transcription", 
 
   test("uploads MiScribe recording audio through the bulk transcription path", async ({
     page,
+    request,
   }) => {
-    await loginAsSeededPatient(page);
+    await registerAndAuthenticateSyntheticPatient(page, request);
     const traffic = captureTranscriptionTraffic(page);
     await openMiScribeSetup(page);
     await completeMiScribeSetup(page);
