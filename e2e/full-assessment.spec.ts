@@ -10,14 +10,11 @@ import {
 
 import { fullAssessmentScenario } from './fixtures/fullAssessmentScenario'
 
-const BACKEND_RESET_URL = process.env.PATIENT_WEB_BACKEND_RESET_URL
-const BACKEND_RESET_TOKEN = process.env.PATIENT_WEB_BACKEND_RESET_TOKEN
+const BACKEND_CLEANUP_URL = process.env.PATIENT_WEB_BACKEND_E2E_CLEANUP_URL
 const BACKEND_REGISTRATION_CODE_URL = process.env.PATIENT_WEB_BACKEND_REGISTRATION_CODE_URL
-const BACKEND_DOCUMENT_SCAN_RESULT_URL =
-  process.env.PATIENT_WEB_BACKEND_DOCUMENT_SCAN_RESULT_URL ??
-  (BACKEND_RESET_URL ? BACKEND_RESET_URL.replace(/\/reset\/?$/, '/document-scan-result') : undefined)
-const GATEWAY_RESET_URL = process.env.PATIENT_WEB_GATEWAY_RESET_URL
-const GATEWAY_RESET_TOKEN = process.env.PATIENT_WEB_GATEWAY_RESET_TOKEN
+const BACKEND_DOCUMENT_SCAN_RESULT_URL = process.env.PATIENT_WEB_BACKEND_DOCUMENT_SCAN_RESULT_URL
+const GATEWAY_CLEANUP_URL = process.env.PATIENT_WEB_GATEWAY_E2E_CLEANUP_URL
+const TEST_SUPPORT_TOKEN = process.env.PATIENT_WEB_TEST_SUPPORT_TOKEN
 const EXPECT_SECURE_COOKIES = process.env.PATIENT_WEB_EXPECT_SECURE_COOKIES === 'true'
 const ENABLE_FULL_ASSESSMENT_STRESS = process.env.PATIENT_WEB_FULL_ASSESSMENT_STRESS !== 'false'
 const FULL_FLOW_TIMEOUT_MS = 15 * 60 * 1000
@@ -302,12 +299,12 @@ async function completeSyntheticDocumentScan(request: APIRequestContext, documen
   if (!BACKEND_DOCUMENT_SCAN_RESULT_URL) {
     throw new Error('PATIENT_WEB_BACKEND_DOCUMENT_SCAN_RESULT_URL is required for document upload E2E')
   }
-  if (!BACKEND_RESET_TOKEN) {
-    throw new Error('PATIENT_WEB_BACKEND_RESET_TOKEN is required for document upload E2E scan completion')
+  if (!TEST_SUPPORT_TOKEN) {
+    throw new Error('PATIENT_WEB_TEST_SUPPORT_TOKEN is required for document upload E2E scan completion')
   }
   const response = await request.post(BACKEND_DOCUMENT_SCAN_RESULT_URL, {
     headers: {
-      authorization: `Bearer ${BACKEND_RESET_TOKEN}`,
+      authorization: `Bearer ${TEST_SUPPORT_TOKEN}`,
       'content-type': 'application/json',
     },
     data: {
@@ -445,40 +442,36 @@ async function postTestSupport(
   return response
 }
 
-async function resetBackend(request: APIRequestContext) {
-  if (!BACKEND_RESET_URL) {
-    throw new Error('PATIENT_WEB_BACKEND_RESET_URL is required for full assessment E2E')
+async function cleanupE2eState(request: APIRequestContext) {
+  if (!BACKEND_CLEANUP_URL) {
+    throw new Error('PATIENT_WEB_BACKEND_E2E_CLEANUP_URL is required for full assessment E2E')
   }
-  if (!BACKEND_RESET_TOKEN) {
-    throw new Error('PATIENT_WEB_BACKEND_RESET_TOKEN is required for full assessment E2E')
+  if (!GATEWAY_CLEANUP_URL) {
+    throw new Error('PATIENT_WEB_GATEWAY_E2E_CLEANUP_URL is required for full assessment E2E')
   }
-
-  if (GATEWAY_RESET_URL) {
-    if (!GATEWAY_RESET_TOKEN) {
-      throw new Error('PATIENT_WEB_GATEWAY_RESET_TOKEN is required when PATIENT_WEB_GATEWAY_RESET_URL is set')
-    }
-    await postTestSupport(request, GATEWAY_RESET_URL, GATEWAY_RESET_TOKEN, 'patient web gateway reset')
+  if (!TEST_SUPPORT_TOKEN) {
+    throw new Error('PATIENT_WEB_TEST_SUPPORT_TOKEN is required for full assessment E2E')
   }
 
-  await postTestSupport(request, BACKEND_RESET_URL, BACKEND_RESET_TOKEN, 'backend reset')
+  await postTestSupport(request, GATEWAY_CLEANUP_URL, TEST_SUPPORT_TOKEN, 'patient web gateway cleanup')
+  await postTestSupport(request, BACKEND_CLEANUP_URL, TEST_SUPPORT_TOKEN, 'backend synthetic cleanup')
 }
 
 async function getRegistrationVerificationCode(
   request: APIRequestContext,
   email: string,
-  fallbackCode: string,
 ): Promise<string> {
   if (!BACKEND_REGISTRATION_CODE_URL) {
-    if (EXPECT_SECURE_COOKIES || BACKEND_RESET_TOKEN) {
-      throw new Error('PATIENT_WEB_BACKEND_REGISTRATION_CODE_URL is required for deployed full assessment E2E')
-    }
-    return fallbackCode
+    throw new Error('PATIENT_WEB_BACKEND_REGISTRATION_CODE_URL is required for full assessment E2E')
+  }
+  if (!TEST_SUPPORT_TOKEN) {
+    throw new Error('PATIENT_WEB_TEST_SUPPORT_TOKEN is required for registration-code lookup')
   }
 
   const response = await request.post(BACKEND_REGISTRATION_CODE_URL, {
     headers: {
       'content-type': 'application/json',
-      ...(BACKEND_RESET_TOKEN ? { authorization: `Bearer ${BACKEND_RESET_TOKEN}` } : {}),
+      authorization: `Bearer ${TEST_SUPPORT_TOKEN}`,
     },
     data: { email },
     timeout: 30_000,
@@ -1845,7 +1838,7 @@ async function waitForAssessmentEntry(page: Page): Promise<string> {
 
 test.describe('patient web full assessment flow', () => {
   test.beforeEach(async ({ request }) => {
-    await resetBackend(request)
+    await cleanupE2eState(request)
   })
 
   test.beforeEach(async ({ page }) => {
@@ -1917,7 +1910,7 @@ test.describe('patient web full assessment flow', () => {
     logMilestone('verification screen visible; checking browser storage')
     await expectNoBrowserStorage(page)
 
-    const verificationCode = await getRegistrationVerificationCode(request, email, registration.verificationCode)
+    const verificationCode = await getRegistrationVerificationCode(request, email)
     await fillByTestId(page, 'verify-otp-digit-0', verificationCode)
     logMilestone('verification code entered; submitting verification')
     const verifyResponse = await clickAndWaitForResponse({

@@ -224,8 +224,8 @@ describe('auth catch-all route handler', () => {
   })
 
   it.each([
-    ['password-reset', ['password-reset']],
-    ['password-reset/confirm', ['password-reset', 'confirm']],
+    ['password/reset', ['password', 'reset']],
+    ['password/reset/confirm', ['password', 'reset', 'confirm']],
   ])('audits the allowed %s path under the password reset category', async (path, segments) => {
     mockedBackendFetch.mockResolvedValue(Response.json({ accepted: true }, { status: 202 }))
 
@@ -372,8 +372,8 @@ describe('auth catch-all route handler', () => {
     )
 
     const response = await POST(
-      makeAuthRequest('/api/auth/password-reset'),
-      makeContext(['password-reset']),
+      makeAuthRequest('/api/auth/password/reset'),
+      makeContext(['password', 'reset']),
     )
 
     expect(response.status).toBe(422)

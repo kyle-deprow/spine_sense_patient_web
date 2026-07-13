@@ -55,7 +55,7 @@ export const fullAssessmentScenario = {
     reloadAfterScreeningQuestionId: 'A03_Q2',
     backtrackAfterScreeningQuestionId: 'R03',
   },
-  requiredScreeningGoalQuestionIds: ['G01', 'G02', 'G03'],
+  requiredScreeningGoalQuestionIds: ['T01', 'T06_Q1', 'T06_Q2', 'G01', 'G02', 'G03'],
   optionalScreeningGoalQuestionIds: ['G04'],
   finalScreeningQuestionId: 'G04',
   screening: [
@@ -87,6 +87,9 @@ export const fullAssessmentScenario = {
     { id: 'F02_Q1', value: 'lt_10_min' },
     { id: 'F02_Q2', value: '10_30_min' },
     { id: 'F02_Q3', value: 'not_limited' },
+    { id: 'F_CERV_DESK', value: 'not_limited' },
+    { id: 'F_CERV_DRIVE', value: 'not_limited' },
+    { id: 'F_CERV_OVERHEAD', value: 'not_limited' },
     { id: 'T00', value: ['no_imaging'] },
     { id: 'T01', value: ['none'] },
     { id: 'T06_Q1', value: 'no' },

@@ -9,8 +9,16 @@ function isLocalEnvironment(): boolean {
   return process.env.NODE_ENV !== 'production'
 }
 
+function testSupportEnabled(): boolean {
+  return process.env.PATIENT_WEB_TEST_SUPPORT_ENABLED === 'true'
+}
+
+function testSupportToken(): string {
+  return process.env.PATIENT_WEB_TEST_SUPPORT_TOKEN ?? ''
+}
+
 function hasTokenAccess(request: NextRequest): boolean {
-  const expectedToken = process.env.PATIENT_WEB_E2E_TEST_SUPPORT_TOKEN
+  const expectedToken = testSupportToken()
   if (!expectedToken) return false
 
   const authorization = request.headers.get('authorization') ?? ''
@@ -22,17 +30,17 @@ function hasTokenAccess(request: NextRequest): boolean {
   return expected.length === actual.length && timingSafeEqual(expected, actual)
 }
 
-function hasResetAccess(request: NextRequest): boolean {
+function hasCleanupAccess(request: NextRequest): boolean {
   if (isLocalEnvironment()) return true
-  if (process.env.PATIENT_WEB_E2E_TEST_SUPPORT_ENABLED !== 'true') return false
+  if (!testSupportEnabled()) return false
   return hasTokenAccess(request)
 }
 
 export async function POST(request: NextRequest) {
-  if (!hasResetAccess(request)) {
+  if (!hasCleanupAccess(request)) {
     return jsonNoStore({ detail: 'Not found' }, { status: 404 })
   }
 
   clearRateLimitStore()
-  return jsonNoStore({ status: 'reset_complete' })
+  return jsonNoStore({ status: 'cleanup_complete' })
 }

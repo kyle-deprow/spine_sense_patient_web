@@ -24,8 +24,8 @@ type AuthProxyContext = {
 type JsonRecord = Record<string, unknown>
 
 const AUTH_ROUTE_CATEGORIES = new Map<string, string>([
-  ['password-reset', 'auth.password_reset'],
-  ['password-reset/confirm', 'auth.password_reset'],
+  ['password/reset', 'auth.password_reset'],
+  ['password/reset/confirm', 'auth.password_reset'],
   ['verify-email', 'auth.email_verification'],
   ['resend-verification', 'auth.email_verification'],
   ['verify/send', 'auth.email_verification'],
