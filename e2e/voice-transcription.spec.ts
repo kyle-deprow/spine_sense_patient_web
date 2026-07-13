@@ -1,13 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import {
-  expect,
-  test,
-  type APIRequestContext,
-  type Page,
-  type TestInfo,
-} from "@playwright/test";
+import { expect, test, type Page, type TestInfo } from "@playwright/test";
 
 const BACKEND_CLEANUP_URL = process.env.PATIENT_WEB_BACKEND_E2E_CLEANUP_URL;
 const GATEWAY_CLEANUP_URL = process.env.PATIENT_WEB_GATEWAY_E2E_CLEANUP_URL;
@@ -149,7 +143,10 @@ function wavDurationSeconds(audioBytes: Buffer): number {
   return Math.max(1, Math.ceil(dataSize / byteRate));
 }
 
-function transientUploadNetworkErrorCode(error: unknown): string | null {
+function transientNetworkErrorCode(error: unknown): string | null {
+  if (error instanceof DOMException && error.name === "TimeoutError") {
+    return "ETIMEDOUT";
+  }
   if (!(error instanceof TypeError)) return null;
   const cause = (error as TypeError & { cause?: unknown }).cause;
   if (typeof cause !== "object" || cause === null || !("code" in cause)) {
@@ -159,6 +156,56 @@ function transientUploadNetworkErrorCode(error: unknown): string | null {
   return typeof code === "string" && TRANSIENT_UPLOAD_ERROR_CODES.has(code)
     ? code
     : null;
+}
+
+type SafeSupportResponse = {
+  ok: boolean;
+  status: number;
+  text: string;
+};
+
+async function supportPost(
+  label: string,
+  url: string,
+  body?: object,
+): Promise<SafeSupportResponse> {
+  if (!TEST_SUPPORT_TOKEN) {
+    throw new Error(
+      "PATIENT_WEB_TEST_SUPPORT_TOKEN is required for E2E support requests",
+    );
+  }
+  let lastFailure = "network_error";
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${TEST_SUPPORT_TOKEN}`,
+          ...(body === undefined ? {} : { "content-type": "application/json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        signal: AbortSignal.timeout(30_000),
+      });
+      const text = await response.text();
+      if (
+        response.ok ||
+        !TRANSIENT_UPLOAD_HTTP_STATUSES.has(response.status) ||
+        attempt === 3
+      ) {
+        return { ok: response.ok, status: response.status, text };
+      }
+      lastFailure = `status_${response.status}`;
+    } catch (error) {
+      const code = transientNetworkErrorCode(error);
+      if (code === null) {
+        throw new Error(`${label} failed reason=non_transient_network_error`);
+      }
+      lastFailure = code;
+      if (attempt === 3) break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, attempt * 1_000));
+  }
+  throw new Error(`${label} failed after 3 attempts reason=${lastFailure}`);
 }
 
 class ProxyFetchError extends Error {
@@ -173,7 +220,7 @@ class ProxyFetchError extends Error {
   }
 }
 
-async function cleanupE2eState(request: APIRequestContext) {
+async function cleanupE2eState() {
   if (!BACKEND_CLEANUP_URL) {
     throw new Error(
       "PATIENT_WEB_BACKEND_E2E_CLEANUP_URL is required so patient web E2E starts from clean synthetic state",
@@ -184,30 +231,22 @@ async function cleanupE2eState(request: APIRequestContext) {
       "PATIENT_WEB_GATEWAY_E2E_CLEANUP_URL is required so patient web E2E starts from clean synthetic state",
     );
   }
-  if (!TEST_SUPPORT_TOKEN) {
-    throw new Error(
-      "PATIENT_WEB_TEST_SUPPORT_TOKEN is required so patient web E2E starts from clean synthetic state",
-    );
-  }
-
-  const gatewayResponse = await request.post(GATEWAY_CLEANUP_URL, {
-    headers: { authorization: `Bearer ${TEST_SUPPORT_TOKEN}` },
-  });
+  const gatewayResponse = await supportPost(
+    "gateway cleanup",
+    GATEWAY_CLEANUP_URL,
+  );
   expect(
-    gatewayResponse.ok(),
-    `PATIENT_WEB_GATEWAY_E2E_CLEANUP_URL must clear gateway E2E state status=${gatewayResponse.status()}`,
+    gatewayResponse.ok,
+    `PATIENT_WEB_GATEWAY_E2E_CLEANUP_URL must clear gateway E2E state status=${gatewayResponse.status}`,
   ).toBeTruthy();
 
-  const response = await request.post(BACKEND_CLEANUP_URL, {
-    headers: { authorization: `Bearer ${TEST_SUPPORT_TOKEN}` },
-  });
-  const responseText = await response.text();
+  const response = await supportPost("backend cleanup", BACKEND_CLEANUP_URL);
   expect(
-    response.ok(),
+    response.ok,
     [
       "PATIENT_WEB_BACKEND_E2E_CLEANUP_URL must clean synthetic E2E state",
-      `status=${response.status()}`,
-      `body=${sanitizeBrowserDiagnostic(responseText)}`,
+      `status=${response.status}`,
+      `body=${sanitizeBrowserDiagnostic(response.text)}`,
     ].join(" "),
   ).toBeTruthy();
 }
@@ -332,34 +371,22 @@ async function clickIfPresent(
   return true;
 }
 
-async function getRegistrationVerificationCode(
-  request: APIRequestContext,
-  email: string,
-): Promise<string> {
+async function getRegistrationVerificationCode(email: string): Promise<string> {
   if (!BACKEND_REGISTRATION_CODE_URL) {
     throw new Error(
       "PATIENT_WEB_BACKEND_REGISTRATION_CODE_URL is required to verify synthetic registration",
     );
   }
-  if (!TEST_SUPPORT_TOKEN) {
-    throw new Error(
-      "PATIENT_WEB_TEST_SUPPORT_TOKEN is required for registration-code lookup",
-    );
-  }
-
-  const response = await request.post(BACKEND_REGISTRATION_CODE_URL, {
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${TEST_SUPPORT_TOKEN}`,
-    },
-    data: { email },
-    timeout: 30_000,
-  });
+  const response = await supportPost(
+    "registration verification code lookup",
+    BACKEND_REGISTRATION_CODE_URL,
+    { email },
+  );
   expect(
-    response.status(),
-    `registration verification code lookup failed status=${response.status()}`,
+    response.status,
+    `registration verification code lookup failed status=${response.status}`,
   ).toBe(200);
-  const payload = (await response.json()) as { code?: unknown };
+  const payload = parseJsonBody(response.text) as { code?: unknown };
   if (typeof payload.code !== "string") {
     throw new Error("registration verification code lookup returned no code");
   }
@@ -449,7 +476,6 @@ async function completeSyntheticOnboardingGate(page: Page) {
 
 async function registerAndAuthenticateSyntheticPatient(
   page: Page,
-  request: APIRequestContext,
   testInfo: TestInfo,
 ) {
   const email = syntheticEmailForTest(testInfo);
@@ -482,7 +508,7 @@ async function registerAndAuthenticateSyntheticPatient(
     timeout: 60_000,
   });
 
-  const code = await getRegistrationVerificationCode(request, email);
+  const code = await getRegistrationVerificationCode(email);
   const verifyResponsePromise = page.waitForResponse(
     (response) =>
       response.url().includes("/api/auth/verify/registration") &&
@@ -836,20 +862,62 @@ async function uploadMiScribeFixtureThroughBulkPath(
       headers["content-type"] = "application/json";
       headers["x-csrf-token"] = await csrfTokenForApiPath(page, path);
     }
-    const response = await page.context().request.fetch(url, {
-      method: options.method,
-      headers,
-      data: options.body,
-    });
+    const csrfToken = headers["x-csrf-token"] ?? null;
+    const response = await page.evaluate(
+      async ({ requestPath, method, requestBody, csrf }) => {
+        try {
+          const browserResponse = await fetch(requestPath, {
+            method,
+            credentials: "include",
+            ...(method === "GET" || method === "HEAD"
+              ? {}
+              : {
+                  headers: {
+                    "content-type": "application/json",
+                    "x-csrf-token": csrf ?? "",
+                  },
+                }),
+            ...(requestBody === undefined
+              ? {}
+              : { body: JSON.stringify(requestBody) }),
+          });
+          return {
+            networkError: false,
+            ok: browserResponse.ok,
+            status: browserResponse.status,
+            text: await browserResponse.text(),
+            retryAfter: browserResponse.headers.get("retry-after"),
+          };
+        } catch {
+          return {
+            networkError: true,
+            ok: false,
+            status: 0,
+            text: "",
+            retryAfter: null,
+          };
+        }
+      },
+      {
+        requestPath: path,
+        method: options.method,
+        requestBody: options.body,
+        csrf: csrfToken,
+      },
+    );
     recordTraffic(traffic, options.method, url);
-    const text = await response.text();
-    const body = parseJsonBody(text);
-    if (!response.ok()) {
+    if (response.networkError) {
+      throw new Error(
+        `MiScribe bulk request failed path=${path} reason=network_error`,
+      );
+    }
+    const body = parseJsonBody(response.text);
+    if (!response.ok) {
       throw new ProxyFetchError(
-        `MiScribe bulk request failed path=${path} status=${response.status()}`,
-        response.status(),
+        `MiScribe bulk request failed path=${path} status=${response.status}`,
+        response.status,
         body,
-        response.headers()["retry-after"] ?? null,
+        response.retryAfter,
       );
     }
     return body as T;
@@ -929,7 +997,7 @@ async function uploadMiScribeFixtureThroughBulkPath(
         break;
       }
     } catch (error) {
-      const transientCode = transientUploadNetworkErrorCode(error);
+      const transientCode = transientNetworkErrorCode(error);
       lastUploadFailure = transientCode ?? "non_transient_network_error";
       if (transientCode === null) break;
     }
@@ -1016,24 +1084,23 @@ test.describe("patient web voice transcription contracts @voice-transcription", 
     "Set PATIENT_WEB_INCLUDE_VOICE_TRANSCRIPTION=true to run PHI-capable voice transcription E2E.",
   );
 
-  test.beforeEach(async ({ page, request }) => {
+  test.beforeEach(async ({ page }) => {
     test.skip(
       !fs.existsSync(AUDIO_FIXTURE),
       `Missing audio fixture: ${AUDIO_FIXTURE}`,
     );
     installPhiSafeDiagnostics(page);
-    await cleanupE2eState(request);
+    await cleanupE2eState();
   });
 
-  test.afterEach(async ({ request }) => {
-    await cleanupE2eState(request);
+  test.afterEach(async () => {
+    await cleanupE2eState();
   });
 
   test("streams the intake story audio fixture over the live transcription service", async ({
     page,
-    request,
   }, testInfo) => {
-    await registerAndAuthenticateSyntheticPatient(page, request, testInfo);
+    await registerAndAuthenticateSyntheticPatient(page, testInfo);
     const traffic = captureTranscriptionTraffic(page);
     const session = await requestIntakeLiveTranscriptionSession(page);
     expect(session.session_id).toBeTruthy();
@@ -1069,10 +1136,9 @@ test.describe("patient web voice transcription contracts @voice-transcription", 
 
   test("uploads MiScribe recording audio through the bulk transcription path", async ({
     page,
-    request,
   }, testInfo) => {
     test.setTimeout(240_000);
-    await registerAndAuthenticateSyntheticPatient(page, request, testInfo);
+    await registerAndAuthenticateSyntheticPatient(page, testInfo);
     const traffic = captureTranscriptionTraffic(page);
     const result = await uploadMiScribeFixtureThroughBulkPath(
       page,
