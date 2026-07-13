@@ -9,12 +9,8 @@ import {
   type TestInfo,
 } from "@playwright/test";
 
-import { patientClinicalScenario } from "./fixtures/patientClinicalScenario";
-
-const BACKEND_RESET_URL = process.env.PATIENT_WEB_BACKEND_RESET_URL;
-const BACKEND_RESET_TOKEN = process.env.PATIENT_WEB_BACKEND_RESET_TOKEN;
-const GATEWAY_RESET_URL = process.env.PATIENT_WEB_GATEWAY_RESET_URL;
-const GATEWAY_RESET_TOKEN = process.env.PATIENT_WEB_GATEWAY_RESET_TOKEN;
+const BACKEND_CLEANUP_URL = process.env.PATIENT_WEB_BACKEND_E2E_CLEANUP_URL;
+const GATEWAY_CLEANUP_URL = process.env.PATIENT_WEB_GATEWAY_E2E_CLEANUP_URL;
 const BACKEND_REGISTRATION_CODE_URL =
   process.env.PATIENT_WEB_BACKEND_REGISTRATION_CODE_URL;
 const TEST_SUPPORT_TOKEN = process.env.PATIENT_WEB_TEST_SUPPORT_TOKEN;
@@ -83,41 +79,73 @@ type MiScribeUploadUrl = {
   max_bytes: number;
 };
 
-async function resetBackend(request: APIRequestContext) {
-  if (!BACKEND_RESET_URL) {
+type MiScribeSummaryResponse = {
+  id: string;
+  recording_id: string;
+  raw_transcript: string;
+};
+
+type MiScribeScanPendingResponse = {
+  error_code: "miscribe_audio_scan_pending";
+  retry_after_seconds: number;
+};
+
+type BulkTranscriptionResult = {
+  recording_id: string;
+  summary_id: string;
+  raw_transcript_length: number;
+};
+
+type LiveTranscriptionResult = {
+  partialTranscript: string;
+  finalTranscript: string;
+};
+
+class ProxyFetchError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly body: unknown,
+    readonly retryAfter: string | null,
+  ) {
+    super(message);
+    this.name = "ProxyFetchError";
+  }
+}
+
+async function cleanupE2eState(request: APIRequestContext) {
+  if (!BACKEND_CLEANUP_URL) {
     throw new Error(
-      "PATIENT_WEB_BACKEND_RESET_URL is required so patient web E2E starts from seeded state",
+      "PATIENT_WEB_BACKEND_E2E_CLEANUP_URL is required so patient web E2E starts from clean synthetic state",
     );
   }
-  if (!BACKEND_RESET_TOKEN) {
+  if (!GATEWAY_CLEANUP_URL) {
     throw new Error(
-      "PATIENT_WEB_BACKEND_RESET_TOKEN is required so patient web E2E starts from seeded state",
+      "PATIENT_WEB_GATEWAY_E2E_CLEANUP_URL is required so patient web E2E starts from clean synthetic state",
+    );
+  }
+  if (!TEST_SUPPORT_TOKEN) {
+    throw new Error(
+      "PATIENT_WEB_TEST_SUPPORT_TOKEN is required so patient web E2E starts from clean synthetic state",
     );
   }
 
-  if (GATEWAY_RESET_URL) {
-    if (!GATEWAY_RESET_TOKEN) {
-      throw new Error(
-        "PATIENT_WEB_GATEWAY_RESET_TOKEN is required when PATIENT_WEB_GATEWAY_RESET_URL is set",
-      );
-    }
-    const gatewayResponse = await request.post(GATEWAY_RESET_URL, {
-      headers: { authorization: `Bearer ${GATEWAY_RESET_TOKEN}` },
-    });
-    expect(
-      gatewayResponse.ok(),
-      `PATIENT_WEB_GATEWAY_RESET_URL must clear gateway E2E state status=${gatewayResponse.status()}`,
-    ).toBeTruthy();
-  }
+  const gatewayResponse = await request.post(GATEWAY_CLEANUP_URL, {
+    headers: { authorization: `Bearer ${TEST_SUPPORT_TOKEN}` },
+  });
+  expect(
+    gatewayResponse.ok(),
+    `PATIENT_WEB_GATEWAY_E2E_CLEANUP_URL must clear gateway E2E state status=${gatewayResponse.status()}`,
+  ).toBeTruthy();
 
-  const response = await request.post(BACKEND_RESET_URL, {
-    headers: { authorization: `Bearer ${BACKEND_RESET_TOKEN}` },
+  const response = await request.post(BACKEND_CLEANUP_URL, {
+    headers: { authorization: `Bearer ${TEST_SUPPORT_TOKEN}` },
   });
   const responseText = await response.text();
   expect(
     response.ok(),
     [
-      `PATIENT_WEB_BACKEND_RESET_URL must reset and seed ${patientClinicalScenario.seedKey}`,
+      "PATIENT_WEB_BACKEND_E2E_CLEANUP_URL must clean synthetic E2E state",
       `status=${response.status()}`,
       `body=${sanitizeBrowserDiagnostic(responseText)}`,
     ].join(" "),
@@ -516,8 +544,14 @@ async function requestIntakeLiveTranscriptionSession(
     );
     const text = await response.text();
     if (!response.ok) {
+      const diagnostic = text
+        .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [token]")
+        .replace(/"[^"]*token[^"]*"\s*:\s*"[^"]+"/gi, (match) =>
+          match.replace(/:\s*"[^"]+"/, ':"[token]"'),
+        )
+        .slice(0, 160);
       throw new Error(
-        `live transcription session failed status=${response.status} body=${text.slice(0, 160)}`,
+        `live transcription session failed status=${response.status} body=${diagnostic}`,
       );
     }
     return JSON.parse(text) as LiveTranscriptionSession;
@@ -528,8 +562,8 @@ async function streamFixtureToLiveTranscription(
   page: Page,
   session: LiveTranscriptionSession,
   audioBytes: number[],
-) {
-  await page.evaluate(
+): Promise<LiveTranscriptionResult> {
+  return page.evaluate(
     async ({ session: liveSession, audioBytes: wavBytes, wsOrigin }) => {
       if (!liveSession.websocket_path.startsWith("/ws/")) {
         throw new Error(
@@ -542,14 +576,32 @@ async function streamFixtureToLiveTranscription(
         wsOrigin ?? window.location.origin,
       );
       url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-      url.searchParams.set("token", liveSession.token);
+      if (
+        Array.from(url.searchParams.keys()).some(
+          (name) => name.toLowerCase() === "token",
+        )
+      ) {
+        throw new Error(
+          "Live transcription WebSocket URL must not contain a token.",
+        );
+      }
+      const wsUrl = url.toString();
+      if (wsUrl.includes(liveSession.token)) {
+        throw new Error(
+          "Live transcription token must not be present in the WebSocket URL.",
+        );
+      }
 
-      await new Promise<void>((resolve, reject) => {
-        const socket = new WebSocket(url.toString());
+      return new Promise<LiveTranscriptionResult>((resolve, reject) => {
+        const socket = new WebSocket(wsUrl);
         const timeout = window.setTimeout(() => {
           socket.close();
           reject(new Error("live transcription websocket timed out"));
         }, 30_000);
+        let ready = false;
+        let audioSent = false;
+        const partialTexts: string[] = [];
+        const finalTexts: string[] = [];
 
         socket.binaryType = "arraybuffer";
         socket.onerror = () => {
@@ -559,14 +611,74 @@ async function streamFixtureToLiveTranscription(
         socket.onmessage = (event) => {
           if (typeof event.data !== "string") return;
           try {
-            const parsed = JSON.parse(event.data) as { type?: unknown };
+            const parsed = JSON.parse(event.data) as {
+              type?: unknown;
+              text?: unknown;
+            };
+            if (parsed.type === "ready") {
+              if (audioSent) {
+                window.clearTimeout(timeout);
+                reject(
+                  new Error(
+                    "live transcription audio was sent before ready.",
+                  ),
+                );
+                socket.close();
+                return;
+              }
+              ready = true;
+              const bytes = new Uint8Array(wavBytes);
+              const chunkSize = 16_000;
+              for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+                socket.send(bytes.slice(offset, offset + chunkSize));
+              }
+              socket.send(JSON.stringify({ type: "finish" }));
+              audioSent = true;
+              return;
+            }
+            if (parsed.type === "partial" && typeof parsed.text === "string") {
+              const partialText = parsed.text.trim();
+              if (partialText) partialTexts.push(partialText);
+              return;
+            }
+            if (parsed.type === "final" && typeof parsed.text === "string") {
+              const finalText = parsed.text.trim();
+              if (finalText) finalTexts.push(finalText);
+              return;
+            }
             if (parsed.type === "error") {
               window.clearTimeout(timeout);
               reject(new Error("live transcription websocket returned error"));
+              socket.close();
+              return;
             }
             if (parsed.type === "done") {
+              if (!ready || !audioSent) {
+                window.clearTimeout(timeout);
+                reject(
+                  new Error(
+                    "live transcription completed before ready audio send.",
+                  ),
+                );
+                socket.close();
+                return;
+              }
+              const finalTranscript = finalTexts.join(" ").trim();
+              if (!finalTranscript) {
+                window.clearTimeout(timeout);
+                reject(
+                  new Error(
+                    "live transcription completed without a final transcript.",
+                  ),
+                );
+                socket.close();
+                return;
+              }
               window.clearTimeout(timeout);
-              resolve();
+              resolve({
+                partialTranscript: partialTexts.join(" ").trim(),
+                finalTranscript,
+              });
               socket.close();
             }
           } catch {
@@ -574,12 +686,9 @@ async function streamFixtureToLiveTranscription(
           }
         };
         socket.onopen = () => {
-          const bytes = new Uint8Array(wavBytes);
-          const chunkSize = 16_000;
-          for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-            socket.send(bytes.slice(offset, offset + chunkSize));
-          }
-          socket.send(JSON.stringify({ type: "finish" }));
+          socket.send(
+            JSON.stringify({ type: "authenticate", token: liveSession.token }),
+          );
         };
       });
     },
@@ -587,11 +696,57 @@ async function streamFixtureToLiveTranscription(
   );
 }
 
+function parseJsonBody(text: string): unknown {
+  if (!text) return {};
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return { unparseable: true };
+  }
+}
+
+function isMiScribeScanPendingResponse(
+  body: unknown,
+): body is MiScribeScanPendingResponse {
+  if (!body || typeof body !== "object") return false;
+  const candidate = body as Record<string, unknown>;
+  return (
+    candidate.error_code === "miscribe_audio_scan_pending" &&
+    typeof candidate.retry_after_seconds === "number" &&
+    Number.isFinite(candidate.retry_after_seconds) &&
+    candidate.retry_after_seconds > 0
+  );
+}
+
+function parseRetryAfterSeconds(
+  value: string | null,
+): { seconds: number; source: "delay-seconds" | "http-date" } | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (/^[1-9]\d*$/.test(trimmed)) {
+    return { seconds: Number(trimmed), source: "delay-seconds" };
+  }
+  const retryAt = Date.parse(trimmed);
+  if (!Number.isFinite(retryAt)) return null;
+  const seconds = Math.ceil((retryAt - Date.now()) / 1000);
+  return seconds > 0 ? { seconds, source: "http-date" } : null;
+}
+
+function retryAfterMatchesBody(
+  header: { seconds: number; source: "delay-seconds" | "http-date" },
+  bodySeconds: number,
+): boolean {
+  if (header.source === "delay-seconds") {
+    return header.seconds === bodySeconds;
+  }
+  return Math.abs(header.seconds - bodySeconds) <= 1;
+}
+
 async function uploadMiScribeFixtureThroughBulkPath(
   page: Page,
   audioBytes: number[],
   traffic: TrafficCapture,
-) {
+): Promise<BulkTranscriptionResult> {
   const proxyFetch = async <T>(
     path: string,
     options: { method: string; body?: object } = { method: "GET" },
@@ -611,12 +766,16 @@ async function uploadMiScribeFixtureThroughBulkPath(
     });
     recordTraffic(traffic, options.method, url);
     const text = await response.text();
+    const body = parseJsonBody(text);
     if (!response.ok()) {
-      throw new Error(
-        `MiScribe bulk request failed path=${path} status=${response.status()} body=${text.slice(0, 160)}`,
+      throw new ProxyFetchError(
+        `MiScribe bulk request failed path=${path} status=${response.status()}`,
+        response.status(),
+        body,
+        response.headers()["retry-after"] ?? null,
       );
     }
-    return (text ? JSON.parse(text) : {}) as T;
+    return body as T;
   };
 
   const policy = await proxyFetch<MiScribeRecordingPolicy>(
@@ -625,25 +784,24 @@ async function uploadMiScribeFixtureThroughBulkPath(
   await proxyFetch<unknown>("/api/proxy/api/v1/patients/me/consents", {
     method: "POST",
     body: {
-        consent_type: "miscribe_recording",
-        consent_version: policy.consent_text_version,
-        acknowledged_at: new Date().toISOString(),
-      },
+      consent_type: "miscribe_recording",
+      consent_version: policy.consent_text_version,
+      acknowledged_at: new Date().toISOString(),
+    },
   });
   const recording = await proxyFetch<MiScribeRecording>(
     "/api/proxy/api/v1/patients/me/miscribe/recordings/setup",
     {
       method: "POST",
       body: {
-          provider_name: "Synthetic Provider",
-          provider_type: "physician",
-          visit_reason: "follow_up",
-          visit_reason_note: null,
-          visit_location_state: "IL",
-          all_parties_consent_attested:
-            policy.requires_all_party_attestation,
-          recording_consent_policy_version: policy.policy_version,
-          recording_consent_text_version: policy.consent_text_version,
+        provider_name: "Synthetic Provider",
+        provider_type: "physician",
+        visit_reason: "follow_up",
+        visit_reason_note: null,
+        visit_location_state: "IL",
+        all_parties_consent_attested: policy.requires_all_party_attestation,
+        recording_consent_policy_version: policy.policy_version,
+        recording_consent_text_version: policy.consent_text_version,
       },
     },
   );
@@ -693,12 +851,60 @@ async function uploadMiScribeFixtureThroughBulkPath(
       },
     },
   );
-  await proxyFetch<unknown>(
-    `/api/proxy/api/v1/patients/me/miscribe/recordings/${recording.id}/process`,
-    { method: "POST", body: {} },
-  );
+  const processPath =
+    `/api/proxy/api/v1/patients/me/miscribe/recordings/${recording.id}/process`;
+  const scanDeadline = Date.now() + 90_000;
+  let summary: MiScribeSummaryResponse | null = null;
+  for (;;) {
+    try {
+      summary = await proxyFetch<MiScribeSummaryResponse>(processPath, {
+        method: "POST",
+        body: {},
+      });
+      break;
+    } catch (error) {
+      if (
+        !(error instanceof ProxyFetchError) ||
+        error.status !== 409 ||
+        !isMiScribeScanPendingResponse(error.body)
+      ) {
+        throw error;
+      }
+      const retryAfter = parseRetryAfterSeconds(error.retryAfter);
+      if (
+        retryAfter === null ||
+        !retryAfterMatchesBody(retryAfter, error.body.retry_after_seconds)
+      ) {
+        throw new Error(
+          "MiScribe scan-pending response must include matching positive Retry-After semantics.",
+        );
+      }
+      const remainingMs = scanDeadline - Date.now();
+      if (remainingMs <= 0) {
+        throw new Error(
+          "MiScribe audio scan did not finish before the E2E retry deadline.",
+        );
+      }
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(retryAfter.seconds * 1000, remainingMs)),
+      );
+    }
+  }
 
-  return { recording_id: recording.id };
+  if (!summary) {
+    throw new Error("MiScribe processing returned no summary.");
+  }
+  expect(summary.recording_id).toBe(recording.id);
+  expect(
+    summary.raw_transcript.trim().length,
+    "MiScribe summary must include the raw transcript from bulk processing",
+  ).toBeGreaterThan(0);
+
+  return {
+    recording_id: recording.id,
+    summary_id: summary.id,
+    raw_transcript_length: summary.raw_transcript.trim().length,
+  };
 }
 
 test.describe("patient web voice transcription contracts @voice-transcription", () => {
@@ -713,11 +919,11 @@ test.describe("patient web voice transcription contracts @voice-transcription", 
       `Missing audio fixture: ${AUDIO_FIXTURE}`,
     );
     installPhiSafeDiagnostics(page);
-    await resetBackend(request);
+    await cleanupE2eState(request);
   });
 
   test.afterEach(async ({ request }) => {
-    await resetBackend(request);
+    await cleanupE2eState(request);
   });
 
   test("streams the intake story audio fixture over the live transcription service", async ({
@@ -731,11 +937,16 @@ test.describe("patient web voice transcription contracts @voice-transcription", 
     expect(session.websocket_path).toMatch(/^\/ws\//);
     expect(session.expires_in_seconds).toBeGreaterThan(0);
 
-    await streamFixtureToLiveTranscription(
+    const transcription = await streamFixtureToLiveTranscription(
       page,
       session,
       Array.from(fs.readFileSync(AUDIO_FIXTURE)),
     );
+    expect(
+      transcription.finalTranscript.length,
+      "streaming must produce a non-empty final transcription before done",
+    ).toBeGreaterThan(0);
+    expect(typeof transcription.partialTranscript).toBe("string");
 
     expect(
       hasRequest(
@@ -756,6 +967,7 @@ test.describe("patient web voice transcription contracts @voice-transcription", 
     page,
     request,
   }, testInfo) => {
+    test.setTimeout(240_000);
     await registerAndAuthenticateSyntheticPatient(page, request, testInfo);
     const traffic = captureTranscriptionTraffic(page);
     const result = await uploadMiScribeFixtureThroughBulkPath(
@@ -766,6 +978,13 @@ test.describe("patient web voice transcription contracts @voice-transcription", 
     expect(result.recording_id).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
     );
+    expect(result.summary_id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+    expect(
+      result.raw_transcript_length,
+      "MiScribe bulk processing must return a non-empty raw transcript",
+    ).toBeGreaterThan(0);
 
     await expect
       .poll(
