@@ -24,6 +24,15 @@ const AUDIO_FIXTURE = path.resolve(__dirname, "fixtures/synthetic-voice.wav");
 const LIVE_TRANSCRIPTION_WS_ORIGIN =
   process.env.PATIENT_WEB_LIVE_TRANSCRIPTION_WS_ORIGIN ?? null;
 const SYNTHETIC_ONBOARDING_DOB = "1985-01-15";
+const BULK_UPLOAD_MAX_ATTEMPTS = 3;
+const TRANSIENT_UPLOAD_ERROR_CODES = new Set([
+  "ECONNRESET",
+  "EAI_AGAIN",
+  "ENETUNREACH",
+  "ETIMEDOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
+const TRANSIENT_UPLOAD_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 const SYNTHETIC_RUN_NAMESPACE = (process.env.PATIENT_WEB_E2E_RUN_ID ?? "local")
   .toLowerCase()
   .replace(/[^a-z0-9]+/g, "-")
@@ -138,6 +147,18 @@ function wavDurationSeconds(audioBytes: Buffer): number {
     throw new Error("voice fixture is missing WAV format or audio data");
   }
   return Math.max(1, Math.ceil(dataSize / byteRate));
+}
+
+function transientUploadNetworkErrorCode(error: unknown): string | null {
+  if (!(error instanceof TypeError)) return null;
+  const cause = (error as TypeError & { cause?: unknown }).cause;
+  if (typeof cause !== "object" || cause === null || !("code" in cause)) {
+    return null;
+  }
+  const code = (cause as { code?: unknown }).code;
+  return typeof code === "string" && TRANSIENT_UPLOAD_ERROR_CODES.has(code)
+    ? code
+    : null;
 }
 
 class ProxyFetchError extends Error {
@@ -658,6 +679,7 @@ async function streamFixtureToLiveTranscription(
             const parsed = JSON.parse(event.data) as {
               type?: unknown;
               text?: unknown;
+              code?: unknown;
             };
             if (parsed.type === "ready") {
               if (audioSent) {
@@ -690,7 +712,20 @@ async function streamFixtureToLiveTranscription(
             }
             if (parsed.type === "error") {
               window.clearTimeout(timeout);
-              reject(new Error("live transcription websocket returned error"));
+              const safeCode =
+                typeof parsed.code === "string" &&
+                [
+                  "streaming_failed",
+                  "streaming_not_supported",
+                  "streaming_timeout",
+                ].includes(parsed.code)
+                  ? parsed.code
+                  : "unknown";
+              reject(
+                new Error(
+                  `live transcription websocket returned error code=${safeCode}`,
+                ),
+              );
               socket.close();
               return;
             }
@@ -869,16 +904,42 @@ async function uploadMiScribeFixtureThroughBulkPath(
     throw new Error("audio fixture exceeds MiScribe upload grant max_bytes");
   }
 
-  const uploadResponse = await fetch(uploadGrant.upload_url, {
-    method: uploadGrant.method || "PUT",
-    headers: uploadGrant.required_headers,
-    body: new Uint8Array(audioBytes),
-  });
-  recordTraffic(traffic, uploadGrant.method || "PUT", uploadGrant.upload_url);
-  const uploadResponseText = await uploadResponse.text();
-  if (!uploadResponse.ok) {
+  const uploadMethod = uploadGrant.method || "PUT";
+  if (uploadMethod !== "PUT") {
+    throw new Error("MiScribe bulk upload grant must use PUT");
+  }
+  let uploadCompleted = false;
+  let lastUploadFailure = "unknown";
+  let uploadAttempts = 0;
+  for (let attempt = 1; attempt <= BULK_UPLOAD_MAX_ATTEMPTS; attempt += 1) {
+    uploadAttempts = attempt;
+    recordTraffic(traffic, uploadMethod, uploadGrant.upload_url);
+    try {
+      const uploadResponse = await fetch(uploadGrant.upload_url, {
+        method: uploadMethod,
+        headers: uploadGrant.required_headers,
+        body: new Uint8Array(audioBytes),
+      });
+      if (uploadResponse.ok) {
+        uploadCompleted = true;
+        break;
+      }
+      lastUploadFailure = `status=${uploadResponse.status}`;
+      if (!TRANSIENT_UPLOAD_HTTP_STATUSES.has(uploadResponse.status)) {
+        break;
+      }
+    } catch (error) {
+      const transientCode = transientUploadNetworkErrorCode(error);
+      lastUploadFailure = transientCode ?? "non_transient_network_error";
+      if (transientCode === null) break;
+    }
+    if (attempt < BULK_UPLOAD_MAX_ATTEMPTS) {
+      await new Promise((resolve) => setTimeout(resolve, attempt * 1_000));
+    }
+  }
+  if (!uploadCompleted) {
     throw new Error(
-      `MiScribe bulk audio upload failed status=${uploadResponse.status} body=${uploadResponseText.slice(0, 160)}`,
+      `MiScribe bulk audio upload failed after ${uploadAttempts} attempts: ${lastUploadFailure}`,
     );
   }
 
