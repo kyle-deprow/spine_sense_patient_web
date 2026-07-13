@@ -455,6 +455,15 @@ function captureTranscriptionTraffic(page: Page): TrafficCapture {
   return traffic;
 }
 
+function recordTraffic(traffic: TrafficCapture, method: string, url: string) {
+  const parsed = new URL(url);
+  traffic.requests.push({
+    method,
+    path: parsed.pathname,
+    isBulkUpload: isBulkUploadRequest(method, parsed),
+  });
+}
+
 function hasRequest(
   traffic: TrafficCapture,
   method: string,
@@ -581,48 +590,49 @@ async function streamFixtureToLiveTranscription(
 async function uploadMiScribeFixtureThroughBulkPath(
   page: Page,
   audioBytes: number[],
+  traffic: TrafficCapture,
 ) {
-  const csrfToken = await csrfTokenForApiPath(
-    page,
-    "/api/proxy/api/v1/patients/me/miscribe/recordings/setup",
-  );
-  return page.evaluate(async ({ csrfToken, wavBytes }) => {
-    const proxyFetch = async <T>(path: string, init: RequestInit): Promise<T> => {
-      const response = await fetch(path, {
-        ...init,
-        credentials: "include",
-        headers: {
-          "content-type": "application/json",
-          "x-csrf-token": csrfToken,
-          ...(init.headers ?? {}),
-        },
-      });
-      const text = await response.text();
-      if (!response.ok) {
-        throw new Error(
-          `MiScribe bulk request failed path=${path} status=${response.status} body=${text.slice(0, 160)}`,
-        );
-      }
-      return (text ? JSON.parse(text) : {}) as T;
-    };
+  const proxyFetch = async <T>(
+    path: string,
+    options: { method: string; body?: object } = { method: "GET" },
+  ): Promise<T> => {
+    const url = new URL(path, page.url()).toString();
+    const headers: Record<string, string> = {};
+    if (options.method !== "GET" && options.method !== "HEAD") {
+      headers["content-type"] = "application/json";
+      headers["x-csrf-token"] = await csrfTokenForApiPath(page, path);
+    }
+    const response = await page.context().request.fetch(url, {
+      method: options.method,
+      headers,
+      data: options.body,
+    });
+    recordTraffic(traffic, options.method, url);
+    const text = await response.text();
+    if (!response.ok()) {
+      throw new Error(
+        `MiScribe bulk request failed path=${path} status=${response.status()} body=${text.slice(0, 160)}`,
+      );
+    }
+    return (text ? JSON.parse(text) : {}) as T;
+  };
 
-    const policy = await proxyFetch<MiScribeRecordingPolicy>(
-      "/api/proxy/api/v1/patients/me/miscribe/recording-policy?visit_location_state=IL",
-      { method: "GET" },
-    );
-    await proxyFetch<unknown>("/api/proxy/api/v1/patients/me/consents", {
-      method: "POST",
-      body: JSON.stringify({
+  const policy = await proxyFetch<MiScribeRecordingPolicy>(
+    "/api/proxy/api/v1/patients/me/miscribe/recording-policy?visit_location_state=IL",
+  );
+  await proxyFetch<unknown>("/api/proxy/api/v1/patients/me/consents", {
+    method: "POST",
+    body: {
         consent_type: "miscribe_recording",
         consent_version: policy.consent_text_version,
         acknowledged_at: new Date().toISOString(),
-      }),
-    });
-    const recording = await proxyFetch<MiScribeRecording>(
-      "/api/proxy/api/v1/patients/me/miscribe/recordings/setup",
-      {
-        method: "POST",
-        body: JSON.stringify({
+      },
+  });
+  const recording = await proxyFetch<MiScribeRecording>(
+    "/api/proxy/api/v1/patients/me/miscribe/recordings/setup",
+    {
+      method: "POST",
+      body: {
           provider_name: "Synthetic Provider",
           provider_type: "physician",
           visit_reason: "follow_up",
@@ -632,61 +642,61 @@ async function uploadMiScribeFixtureThroughBulkPath(
             policy.requires_all_party_attestation,
           recording_consent_policy_version: policy.policy_version,
           recording_consent_text_version: policy.consent_text_version,
-        }),
       },
-    );
-    if (policy.requires_all_party_attestation) {
-      await proxyFetch<MiScribeRecording>(
-        `/api/proxy/api/v1/patients/me/miscribe/recordings/${recording.id}/all-party-attestation`,
-        { method: "POST", body: "{}" },
-      );
-    }
+    },
+  );
+  if (policy.requires_all_party_attestation) {
     await proxyFetch<MiScribeRecording>(
-      `/api/proxy/api/v1/patients/me/miscribe/recordings/${recording.id}/begin`,
-      { method: "POST", body: "{}" },
+      `/api/proxy/api/v1/patients/me/miscribe/recordings/${recording.id}/all-party-attestation`,
+      { method: "POST", body: {} },
     );
+  }
+  await proxyFetch<MiScribeRecording>(
+    `/api/proxy/api/v1/patients/me/miscribe/recordings/${recording.id}/begin`,
+    { method: "POST", body: {} },
+  );
 
-    const uploadGrant = await proxyFetch<MiScribeUploadUrl>(
-      `/api/proxy/api/v1/patients/me/miscribe/recordings/${recording.id}/upload-url`,
-      {
-        method: "POST",
-        body: JSON.stringify({ content_type: "audio/wav" }),
+  const uploadGrant = await proxyFetch<MiScribeUploadUrl>(
+    `/api/proxy/api/v1/patients/me/miscribe/recordings/${recording.id}/upload-url`,
+    {
+      method: "POST",
+      body: { content_type: "audio/wav" },
+    },
+  );
+  if (audioBytes.length > uploadGrant.max_bytes) {
+    throw new Error("audio fixture exceeds MiScribe upload grant max_bytes");
+  }
+
+  const uploadResponse = await fetch(uploadGrant.upload_url, {
+    method: uploadGrant.method || "PUT",
+    headers: uploadGrant.required_headers,
+    body: new Uint8Array(audioBytes),
+  });
+  recordTraffic(traffic, uploadGrant.method || "PUT", uploadGrant.upload_url);
+  const uploadResponseText = await uploadResponse.text();
+  if (!uploadResponse.ok) {
+    throw new Error(
+      `MiScribe bulk audio upload failed status=${uploadResponse.status} body=${uploadResponseText.slice(0, 160)}`,
+    );
+  }
+
+  await proxyFetch<MiScribeRecording>(
+    `/api/proxy/api/v1/patients/me/miscribe/recordings/${recording.id}/upload-complete`,
+    {
+      method: "POST",
+      body: {
+        duration_seconds: 3,
+        content_type: uploadGrant.content_type || "audio/wav",
+        size_bytes: audioBytes.length,
       },
-    );
-    if (wavBytes.length > uploadGrant.max_bytes) {
-      throw new Error("audio fixture exceeds MiScribe upload grant max_bytes");
-    }
+    },
+  );
+  await proxyFetch<unknown>(
+    `/api/proxy/api/v1/patients/me/miscribe/recordings/${recording.id}/process`,
+    { method: "POST", body: {} },
+  );
 
-    const uploadResponse = await fetch(uploadGrant.upload_url, {
-      method: uploadGrant.method || "PUT",
-      headers: uploadGrant.required_headers,
-      body: new Uint8Array(wavBytes),
-    });
-    const uploadResponseText = await uploadResponse.text();
-    if (!uploadResponse.ok) {
-      throw new Error(
-        `MiScribe bulk audio upload failed status=${uploadResponse.status} body=${uploadResponseText.slice(0, 160)}`,
-      );
-    }
-
-    await proxyFetch<MiScribeRecording>(
-      `/api/proxy/api/v1/patients/me/miscribe/recordings/${recording.id}/upload-complete`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          duration_seconds: 3,
-          content_type: uploadGrant.content_type || "audio/wav",
-          size_bytes: wavBytes.length,
-        }),
-      },
-    );
-    await proxyFetch<unknown>(
-      `/api/proxy/api/v1/patients/me/miscribe/recordings/${recording.id}/process`,
-      { method: "POST", body: "{}" },
-    );
-
-    return { recording_id: recording.id };
-  }, { csrfToken, wavBytes: audioBytes });
+  return { recording_id: recording.id };
 }
 
 test.describe("patient web voice transcription contracts @voice-transcription", () => {
@@ -749,6 +759,7 @@ test.describe("patient web voice transcription contracts @voice-transcription", 
     const result = await uploadMiScribeFixtureThroughBulkPath(
       page,
       Array.from(fs.readFileSync(AUDIO_FIXTURE)),
+      traffic,
     );
     expect(result.recording_id).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
