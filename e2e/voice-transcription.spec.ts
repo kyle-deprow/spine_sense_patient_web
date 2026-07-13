@@ -599,6 +599,8 @@ async function uploadMiScribeFixtureThroughBulkPath(
     const url = new URL(path, page.url()).toString();
     const headers: Record<string, string> = {};
     if (options.method !== "GET" && options.method !== "HEAD") {
+      headers.origin = new URL(page.url()).origin;
+      headers.referer = page.url();
       headers["content-type"] = "application/json";
       headers["x-csrf-token"] = await csrfTokenForApiPath(page, path);
     }
