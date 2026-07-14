@@ -22,27 +22,46 @@ describe('proxy allowlist', () => {
     ).toEqual({ ok: false, status: 404, code: 'proxy_path_not_allowed' })
   })
 
-  it('allows assessment story live transcription session token minting', () => {
+  it('allows canonical assessment question-note live transcription session token minting', () => {
     const assessmentId = '10000000-0000-4000-8000-000000000001'
+    const questionId = 'R_NEURO-2'
 
     expect(
       validateProxyTarget(
-        ['api', 'v1', 'patients', 'me', 'assessments', assessmentId, 'story', 'live-transcription-session'],
+        [
+          'api',
+          'v1',
+          'patients',
+          'me',
+          'assessments',
+          assessmentId,
+          'questions',
+          questionId,
+          'note',
+          'live-transcription-session',
+        ],
         'POST',
-        `/api/proxy/api/v1/patients/me/assessments/${assessmentId}/story/live-transcription-session`,
+        `/api/proxy/api/v1/patients/me/assessments/${assessmentId}/questions/${questionId}/note/live-transcription-session`,
       ),
     ).toEqual({
       ok: true,
-      targetPath: `/api/v1/patients/me/assessments/${assessmentId}/story/live-transcription-session`,
+      targetPath: `/api/v1/patients/me/assessments/${assessmentId}/questions/${questionId}/note/live-transcription-session`,
     })
   })
 
-  it('blocks arbitrary assessment story live transcription child routes', () => {
+  it('blocks retired story voice aliases and arbitrary question-note live transcription child routes', () => {
     const assessmentId = '10000000-0000-4000-8000-000000000001'
     const cases = [
       `/api/v1/patients/me/assessments/${assessmentId}/story/live-transcription`,
-      `/api/v1/patients/me/assessments/${assessmentId}/story/live-transcription/connect`,
+      `/api/v1/patients/me/assessments/${assessmentId}/story/live-transcription-session`,
       `/api/v1/patients/me/assessments/${assessmentId}/story/live-transcription-session/extra`,
+      `/api/v1/patients/me/assessments/${assessmentId}/story/voice-upload-url`,
+      `/api/v1/patients/me/assessments/${assessmentId}/story/transcribe`,
+      `/api/v1/patients/me/assessments/${assessmentId}/question-notes/live-transcription`,
+      `/api/v1/patients/me/assessments/${assessmentId}/question-notes/live-transcription-session/extra`,
+      `/api/v1/patients/me/assessments/${assessmentId}/questions/R01/note/live-transcription`,
+      `/api/v1/patients/me/assessments/${assessmentId}/questions/R01/note/live-transcription-session/extra`,
+      `/api/v1/patients/me/assessments/${assessmentId}/questions/not.valid/note/live-transcription-session`,
     ] as const
 
     for (const targetPath of cases) {
@@ -64,24 +83,31 @@ describe('proxy allowlist', () => {
     })
   })
 
-  it('allows intake story live transcription session token minting', () => {
-    expect(
-      validateProxyTarget(
-        ['api', 'v1', 'patients', 'me', 'intake', 'story', 'live-transcription-session'],
-        'POST',
-        '/api/proxy/api/v1/patients/me/intake/story/live-transcription-session',
-      ),
-    ).toEqual({
-      ok: true,
-      targetPath: '/api/v1/patients/me/intake/story/live-transcription-session',
-    })
+  it('allows only canonical completed-file onboarding story audio routes', () => {
+    const cases = [
+      '/api/v1/patients/me/intake/story/audio-uploads',
+      '/api/v1/patients/me/intake/story/transcriptions',
+    ] as const
+
+    for (const targetPath of cases) {
+      expect(validateProxyTarget(targetPath.slice(1).split('/'), 'POST', `/api/proxy${targetPath}`)).toEqual({
+        ok: true,
+        targetPath,
+      })
+    }
   })
 
-  it('blocks arbitrary intake live transcription child routes', () => {
+  it('blocks retired intake voice aliases and malformed story recording routes', () => {
     const cases = [
+      '/api/v1/patients/me/intake/voice-upload-url',
+      '/api/v1/patients/me/intake/transcribe',
       '/api/v1/patients/me/intake/story/live-transcription',
-      '/api/v1/patients/me/intake/story/live-transcription/connect',
-      '/api/v1/patients/me/intake/story/live-transcription-session/extra',
+      '/api/v1/patients/me/intake/story/live-transcription-session',
+      '/api/v1/patients/me/intake/story/recordings',
+      '/api/v1/patients/me/intake/story/recordings/not-a-uuid/transcription',
+      '/api/v1/patients/me/intake/story/recordings/10000000-0000-4000-8000-000000000001/transcription/extra',
+      '/api/v1/patients/me/intake/story/audio-uploads/extra',
+      '/api/v1/patients/me/intake/story/transcriptions/extra',
     ] as const
 
     for (const targetPath of cases) {
@@ -89,6 +115,21 @@ describe('proxy allowlist', () => {
         ok: false,
         status: 404,
         code: 'proxy_path_not_allowed',
+      })
+    }
+  })
+
+  it('blocks method mismatches on canonical onboarding story audio routes', () => {
+    const cases = [
+      ['GET', '/api/v1/patients/me/intake/story/audio-uploads'],
+      ['GET', '/api/v1/patients/me/intake/story/transcriptions'],
+    ] as const
+
+    for (const [method, targetPath] of cases) {
+      expect(validateProxyTarget(targetPath.slice(1).split('/'), method, `/api/proxy${targetPath}`)).toEqual({
+        ok: false,
+        status: 405,
+        code: 'proxy_method_not_allowed',
       })
     }
   })
@@ -112,7 +153,10 @@ describe('proxy allowlist', () => {
         'GET',
         '/api/proxy/api/v1/patients/me/tracked-symptoms',
       ),
-    ).toEqual({ ok: true, targetPath: '/api/v1/patients/me/tracked-symptoms/' })
+    ).toEqual({
+      ok: true,
+      targetPath: '/api/v1/patients/me/tracked-symptoms/',
+    })
 
     expect(
       validateProxyTarget(
@@ -120,7 +164,10 @@ describe('proxy allowlist', () => {
         'POST',
         '/api/proxy/api/v1/patients/me/tracked-symptoms/checkin',
       ),
-    ).toEqual({ ok: true, targetPath: '/api/v1/patients/me/tracked-symptoms/checkin' })
+    ).toEqual({
+      ok: true,
+      targetPath: '/api/v1/patients/me/tracked-symptoms/checkin',
+    })
 
     expect(
       validateProxyTarget(
@@ -299,7 +346,10 @@ describe('proxy allowlist', () => {
         'PUT',
         '/api/proxy/api/v1/patients/me/intake/steps/profile',
       ),
-    ).toEqual({ ok: true, targetPath: '/api/v1/patients/me/intake/steps/profile' })
+    ).toEqual({
+      ok: true,
+      targetPath: '/api/v1/patients/me/intake/steps/profile',
+    })
 
     expect(
       validateProxyTarget(
@@ -315,7 +365,10 @@ describe('proxy allowlist', () => {
         'POST',
         '/api/proxy/api/v1/patients/me/intake/progress/complete',
       ),
-    ).toEqual({ ok: true, targetPath: '/api/v1/patients/me/intake/progress/complete' })
+    ).toEqual({
+      ok: true,
+      targetPath: '/api/v1/patients/me/intake/progress/complete',
+    })
   })
 
   it('allows only the implemented MyScribe route and method combinations', () => {

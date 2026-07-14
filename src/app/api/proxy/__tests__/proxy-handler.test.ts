@@ -326,6 +326,9 @@ describe('proxy route handler', () => {
     expect(isLongRunningBackendCall('/api/v1/patients/me/assessments/assessment-123/analysis/run')).toBe(true)
     expect(isLongRunningBackendCall('/api/v1/patients/me/assessments/assessment-123/analysis')).toBe(false)
     expect(isLongRunningBackendCall('/api/v1/patients/me/assessments')).toBe(false)
+    expect(isLongRunningBackendCall('/api/v1/patients/me/intake/story/transcriptions')).toBe(true)
+    expect(isLongRunningBackendCall('/api/v1/patients/me/intake/story/audio-uploads')).toBe(false)
+    expect(isLongRunningBackendCall('/api/v1/patients/me/intake/story/transcriptions/extra')).toBe(false)
     expect(
       isLongRunningBackendCall('/api/v1/patients/me/miscribe/recordings/10000000-0000-4000-8000-00000000000A/process'),
     ).toBe(true)

@@ -1,42 +1,14 @@
-/**
- * Build the patient-web Permissions-Policy from the shared web voice gate.
- * The microphone is enabled by default in deployed patient-web environments
- * and remains explicit for local/test/e2e builds.
- * This gate covers assessment voice capture and MyScribe web recording.
- */
-const LOCAL_WEB_VOICE_ENVIRONMENTS = new Set(['development', 'test', 'e2e'])
-const DEPLOYED_WEB_VOICE_ENVIRONMENTS = new Set(['staging', 'production'])
-const PATIENT_APP_ENVIRONMENTS = new Set([
-  ...LOCAL_WEB_VOICE_ENVIRONMENTS,
-  ...DEPLOYED_WEB_VOICE_ENVIRONMENTS,
-])
-
-export function isWebVoiceEnabled(
-  flag = process.env.EXPO_PUBLIC_ENABLE_WEB_VOICE,
-  patientAppEnvironment = process.env.PATIENT_APP_ENVIRONMENT,
-): boolean {
-  if (!patientAppEnvironment || !PATIENT_APP_ENVIRONMENTS.has(patientAppEnvironment)) {
-    if (flag === 'true') {
-      throw new Error(
-        'EXPO_PUBLIC_ENABLE_WEB_VOICE=true requires PATIENT_APP_ENVIRONMENT to be development, test, e2e, staging, or production',
-      )
-    }
-    return false
-  }
-  if (DEPLOYED_WEB_VOICE_ENVIRONMENTS.has(patientAppEnvironment)) return true
-  return flag === 'true'
-}
+/** Browser voice support is capability-detected by the deployed patient app. */
+const LOCAL_PATIENT_WEB_ENVIRONMENTS = new Set(['development', 'test', 'e2e'])
 
 export function buildPermissionsPolicyHeader(): string {
-  const microphone = isWebVoiceEnabled() ? 'microphone=(self)' : 'microphone=()'
-  return `camera=(), ${microphone}, geolocation=(), payment=(), usb=(), browsing-topics=()`
+  return 'camera=(), microphone=(self), geolocation=(), payment=(), usb=(), browsing-topics=()'
 }
 
 export function getStorageConnectOrigins(
   value = process.env.NEXT_PUBLIC_STORAGE_DOMAINS,
   patientAppEnvironment = process.env.PATIENT_APP_ENVIRONMENT,
   localMinioPublicOrigin = process.env.PATIENT_WEB_LOCAL_MINIO_PUBLIC_ORIGIN,
-  voiceFlag = process.env.EXPO_PUBLIC_ENABLE_WEB_VOICE,
 ): string[] {
   const environment = patientAppEnvironment ?? ''
   if (!value?.trim()) {
@@ -46,19 +18,15 @@ export function getStorageConnectOrigins(
   const origins = value.split(/[\s,]+/).filter(Boolean)
   for (const origin of origins) validateConnectOrigin(origin, environment)
 
-  const voiceEnabled = isWebVoiceEnabled(voiceFlag, environment)
-
-  if (voiceEnabled && LOCAL_WEB_VOICE_ENVIRONMENTS.has(environment)) {
+  if (LOCAL_PATIENT_WEB_ENVIRONMENTS.has(environment)) {
     if (!localMinioPublicOrigin) {
-      throw new Error(
-        'PATIENT_WEB_LOCAL_MINIO_PUBLIC_ORIGIN is required when patient web voice is enabled',
-      )
+      throw new Error('PATIENT_WEB_LOCAL_MINIO_PUBLIC_ORIGIN is required for local patient web audio uploads')
     }
     const normalizedMinioOrigin = exactOrigin(localMinioPublicOrigin)
     validateConnectOrigin(normalizedMinioOrigin, environment)
     if (!origins.includes(normalizedMinioOrigin)) {
       throw new Error(
-        'NEXT_PUBLIC_STORAGE_DOMAINS must include PATIENT_WEB_LOCAL_MINIO_PUBLIC_ORIGIN when patient web voice is enabled',
+        'NEXT_PUBLIC_STORAGE_DOMAINS must include PATIENT_WEB_LOCAL_MINIO_PUBLIC_ORIGIN for local patient web audio uploads',
       )
     }
   }
@@ -67,7 +35,6 @@ export function getStorageConnectOrigins(
 }
 
 export function validateSecurityPolicyConfiguration(): void {
-  isWebVoiceEnabled()
   getStorageConnectOrigins()
 }
 
@@ -87,9 +54,10 @@ function validateConnectOrigin(origin: string, environment: string): void {
   if (parsed.protocol === 'https:') return
   if (
     parsed.protocol === 'http:' &&
-    LOCAL_WEB_VOICE_ENVIRONMENTS.has(environment) &&
+    LOCAL_PATIENT_WEB_ENVIRONMENTS.has(environment) &&
     ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname)
-  ) return
+  )
+    return
   throw new Error(`Insecure patient web storage connect origin is not allowed: ${origin}`)
 }
 

@@ -18,6 +18,7 @@ describe('middleware CSP', () => {
   })
 
   it('uses exact storage connect sources from NEXT_PUBLIC_STORAGE_DOMAINS', () => {
+    vi.stubEnv('PATIENT_APP_ENVIRONMENT', 'production')
     vi.stubEnv('NEXT_PUBLIC_STORAGE_DOMAINS', 'https://storage.example.test https://cdn.example.test:8443')
 
     const csp = buildCspHeader('nonce-value')
@@ -34,17 +35,11 @@ describe('middleware CSP', () => {
   })
 
   it('does not require Trusted Types on Expo app shell routes', () => {
-    expect(buildCspHeaderForPath('nonce-value', '/login')).not.toContain(
-      "require-trusted-types-for 'script'",
-    )
-    expect(buildCspHeaderForPath('nonce-value', '/login.html')).not.toContain(
-      "require-trusted-types-for 'script'",
-    )
+    expect(buildCspHeaderForPath('nonce-value', '/login')).not.toContain("require-trusted-types-for 'script'")
+    expect(buildCspHeaderForPath('nonce-value', '/login.html')).not.toContain("require-trusted-types-for 'script'")
   })
 
   it('retains Trusted Types on API routes', () => {
-    expect(buildCspHeaderForPath('nonce-value', '/api/health')).toContain(
-      "require-trusted-types-for 'script'",
-    )
+    expect(buildCspHeaderForPath('nonce-value', '/api/health')).toContain("require-trusted-types-for 'script'")
   })
 })

@@ -1,6 +1,6 @@
 import { auditLog } from '@/lib/server/audit'
 import { getPatientWebConfig } from '@/lib/server/config'
-import { isWebVoiceEnabled, validateSecurityPolicyConfiguration } from '@/lib/server/securityPolicy'
+import { validateSecurityPolicyConfiguration } from '@/lib/server/securityPolicy'
 
 let voicePolicyAudited = false
 
@@ -13,6 +13,6 @@ export function auditWebVoicePolicyAtStartup(): void {
   auditLog({
     ts: new Date().toISOString(),
     event: 'security.web_voice.policy',
-    reason: isWebVoiceEnabled() ? 'enabled' : 'disabled',
+    reason: 'enabled',
   })
 }

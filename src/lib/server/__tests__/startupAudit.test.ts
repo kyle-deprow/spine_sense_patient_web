@@ -15,23 +15,13 @@ describe('web voice startup audit', () => {
     vi.unstubAllEnvs()
     vi.stubEnv('PATIENT_WEB_CSRF_SECRET', 'startup-audit-test-csrf-secret')
     vi.stubEnv('PATIENT_WEB_AUDIT_ACTOR_SIGNING_CURRENT_KEY_ID', 'startup-current')
-    vi.stubEnv(
-      'PATIENT_WEB_AUDIT_ACTOR_SIGNING_CURRENT_KEY',
-      'startup-audit-actor-signing-key-at-least-32-bytes',
-    )
-    vi.stubEnv(
-      'NEXT_PUBLIC_STORAGE_DOMAINS',
-      'https://patient-documents.example.test http://127.0.0.1:9000',
-    )
+    vi.stubEnv('PATIENT_WEB_AUDIT_ACTOR_SIGNING_CURRENT_KEY', 'startup-audit-actor-signing-key-at-least-32-bytes')
+    vi.stubEnv('NEXT_PUBLIC_STORAGE_DOMAINS', 'https://patient-documents.example.test http://127.0.0.1:9000')
     vi.stubEnv('PATIENT_WEB_LOCAL_MINIO_PUBLIC_ORIGIN', 'http://127.0.0.1:9000')
     mockedAuditLog.mockReset()
   })
 
-  it.each([
-    ['true', 'enabled'],
-    ['', 'disabled'],
-  ])('logs the %s policy once per process module lifecycle', async (flag, reason) => {
-    vi.stubEnv('EXPO_PUBLIC_ENABLE_WEB_VOICE', flag)
+  it('logs the enabled policy once per process module lifecycle', async () => {
     vi.stubEnv('PATIENT_APP_ENVIRONMENT', 'test')
     const { auditWebVoicePolicyAtStartup } = await import('@/lib/server/startupAudit')
 
@@ -42,13 +32,12 @@ describe('web voice startup audit', () => {
     expect(mockedAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({
         event: 'security.web_voice.policy',
-        reason,
+        reason: 'enabled',
       }),
     )
   })
 
   it('enables and audits the production voice policy', async () => {
-    vi.stubEnv('EXPO_PUBLIC_ENABLE_WEB_VOICE', '')
     vi.stubEnv('PATIENT_APP_ENVIRONMENT', 'production')
     vi.stubEnv('NEXT_PUBLIC_STORAGE_DOMAINS', 'https://patient-documents.example.test')
     vi.stubEnv('PATIENT_WEB_LOCAL_MINIO_PUBLIC_ORIGIN', '')

@@ -8,8 +8,6 @@ const outputDir =
   "/tmp/spine-sense-patient-web-test-results";
 const includeFullAssessment =
   process.env.PATIENT_WEB_INCLUDE_FULL_ASSESSMENT === "true";
-const includeVoiceTranscription =
-  process.env.PATIENT_WEB_INCLUDE_VOICE_TRANSCRIPTION === "true";
 const fakeAudioFile = path.resolve(
   __dirname,
   "e2e/fixtures/synthetic-voice.wav",
@@ -41,24 +39,20 @@ export default defineConfig({
       grepInvert: baseProjectGrepInvert,
       use: { ...devices["Desktop Chrome"] },
     },
-    ...(includeVoiceTranscription
-      ? [
-          {
-            name: "chromium-voice",
-            grep: /@voice-transcription/,
-            use: {
-              ...devices["Desktop Chrome"],
-              permissions: ["microphone"],
-              launchOptions: {
-                args: [
-                  "--use-fake-device-for-media-stream",
-                  "--use-fake-ui-for-media-stream",
-                  `--use-file-for-fake-audio-capture=${fakeAudioFile}`,
-                ],
-              },
-            },
-          },
-        ]
-      : []),
+    {
+      name: "chromium-voice",
+      grep: /@voice-transcription/,
+      use: {
+        ...devices["Desktop Chrome"],
+        permissions: ["microphone"],
+        launchOptions: {
+          args: [
+            "--use-fake-device-for-media-stream",
+            "--use-fake-ui-for-media-stream",
+            `--use-file-for-fake-audio-capture=${fakeAudioFile}`,
+          ],
+        },
+      },
+    },
   ],
 });

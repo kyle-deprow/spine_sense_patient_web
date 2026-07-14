@@ -1,23 +1,31 @@
 # Patient Web Playwright Gates
 
-The patient web package has a local Playwright suite for the exported patient app served by the BFF.
-
-Run it through the root Make targets:
+The patient web package has local Playwright suites for the exported patient
+app served by the BFF. Run them through the root Make targets:
 
 - `make patient-web-up`
 - `make patient-web-test`
 - `make patient-web-e2e`
-- `PATIENT_WEB_INCLUDE_VOICE_TRANSCRIPTION=true pnpm test:e2e:voice`
 - `make patient-web-test-full-assessment`
 - `make patient-web-e2e-full-assessment`
 
-The opt-in voice transcription suite is tagged `@voice-transcription`. It uses
+The voice transcription suite is production-only by policy. From the
+orchestration repo, use the focused target or the complete production run:
+
+- `make patient-web-test-prod-voice CONFIRM_PROD_E2E=run-prod-e2e`
+- `make patient-web-e2e-prod CONFIRM_PROD_E2E=run-prod-e2e`
+
+Do not treat the package-level `pnpm test:e2e:voice` script as a supported local
+MinIO HTTP contract. The suite requires deployed production and asserts that
+Azure issues an HTTPS object-upload URL; keep that assertion strict.
+
+The suite is tagged `@voice-transcription`. It uses
 `e2e/fixtures/synthetic-voice.wav` as a deterministic, non-PHI browser
-microphone source and verifies both live story transcription and MiScribe bulk
-upload contracts. Deployed environments should route the returned `/ws/...`
-live-transcription path through the same patient web origin; local runs that do
-not proxy WebSockets through the BFF can set
-`PATIENT_WEB_LIVE_TRANSCRIPTION_WS_ORIGIN` to the API origin.
+microphone source and verifies both onboarding My Story completed-file
+upload/transcription and assessment question-note live streaming. Production
+routes the returned
+`/ws/patients/me/assessments/{assessmentId}/questions/{questionId}/note/live-transcription`
+path through the same patient web origin.
 
 The opt-in full assessment suite runs with deterministic stress enabled by
 default. It reloads mid-screening, backtracks across an already-saved screening
