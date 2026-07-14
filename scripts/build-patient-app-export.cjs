@@ -133,12 +133,24 @@ function resolveExportTarget(requestPath) {
 }
 
 function validateWebVoicePolicy() {
-  if (process.env.EXPO_PUBLIC_ENABLE_WEB_VOICE !== 'true') return;
-
-  const allowedEnvironments = new Set(['development', 'test', 'e2e', 'staging', 'production']);
-  if (!allowedEnvironments.has(process.env.PATIENT_APP_ENVIRONMENT ?? '')) {
+  const patientAppEnvironment = process.env.PATIENT_APP_ENVIRONMENT ?? 'production';
+  const localEnvironments = new Set(['development', 'test', 'e2e']);
+  const deployedEnvironments = new Set(['staging', 'production']);
+  const allowedEnvironments = new Set([...localEnvironments, ...deployedEnvironments]);
+  const voiceForcedOn = process.env.EXPO_PUBLIC_ENABLE_WEB_VOICE === 'true';
+  if (!allowedEnvironments.has(patientAppEnvironment)) {
+    if (!voiceForcedOn) return;
     console.error(
       'EXPO_PUBLIC_ENABLE_WEB_VOICE=true requires PATIENT_APP_ENVIRONMENT to be development, test, e2e, staging, or production',
+    );
+    process.exit(1);
+  }
+  if (
+    voiceForcedOn &&
+    !localEnvironments.has(patientAppEnvironment)
+  ) {
+    console.error(
+      'EXPO_PUBLIC_ENABLE_WEB_VOICE=true is only supported for local patient web builds; staging and production enable voice by PATIENT_APP_ENVIRONMENT',
     );
     process.exit(1);
   }

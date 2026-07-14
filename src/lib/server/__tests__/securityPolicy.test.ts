@@ -48,6 +48,16 @@ describe('patient web Permissions-Policy', () => {
     expect(() => buildPermissionsPolicyHeader()).toThrow()
   })
 
+  it.each(['preview', ''])('fails closed without throwing when voice is not enabled in %j', (environment) => {
+    vi.stubEnv('EXPO_PUBLIC_ENABLE_WEB_VOICE', '')
+    vi.stubEnv('PATIENT_APP_ENVIRONMENT', environment)
+    vi.stubEnv('NEXT_PUBLIC_STORAGE_DOMAINS', 'https://storage.example.test')
+
+    expect(isWebVoiceEnabled()).toBe(false)
+    expect(buildPermissionsPolicyHeader()).toContain('microphone=()')
+    expect(getStorageConnectOrigins()).toEqual(['https://storage.example.test'])
+  })
+
   it.each(['development', 'test', 'e2e'])(
     'requires explicit voice opt-in in %s builds',
     (environment) => {

@@ -38,26 +38,24 @@ export function getStorageConnectOrigins(
   localMinioPublicOrigin = process.env.PATIENT_WEB_LOCAL_MINIO_PUBLIC_ORIGIN,
   voiceFlag = process.env.EXPO_PUBLIC_ENABLE_WEB_VOICE,
 ): string[] {
-  if (!patientAppEnvironment || !PATIENT_APP_ENVIRONMENTS.has(patientAppEnvironment)) {
-    throw new Error('PATIENT_APP_ENVIRONMENT must be explicitly set to development, test, e2e, staging, or production')
-  }
+  const environment = patientAppEnvironment ?? ''
   if (!value?.trim()) {
     throw new Error('NEXT_PUBLIC_STORAGE_DOMAINS must explicitly configure patient web storage connect origins')
   }
 
   const origins = value.split(/[\s,]+/).filter(Boolean)
-  for (const origin of origins) validateConnectOrigin(origin, patientAppEnvironment)
+  for (const origin of origins) validateConnectOrigin(origin, environment)
 
-  const voiceEnabled = isWebVoiceEnabled(voiceFlag, patientAppEnvironment)
+  const voiceEnabled = isWebVoiceEnabled(voiceFlag, environment)
 
-  if (voiceEnabled && LOCAL_WEB_VOICE_ENVIRONMENTS.has(patientAppEnvironment)) {
+  if (voiceEnabled && LOCAL_WEB_VOICE_ENVIRONMENTS.has(environment)) {
     if (!localMinioPublicOrigin) {
       throw new Error(
         'PATIENT_WEB_LOCAL_MINIO_PUBLIC_ORIGIN is required when patient web voice is enabled',
       )
     }
     const normalizedMinioOrigin = exactOrigin(localMinioPublicOrigin)
-    validateConnectOrigin(normalizedMinioOrigin, patientAppEnvironment)
+    validateConnectOrigin(normalizedMinioOrigin, environment)
     if (!origins.includes(normalizedMinioOrigin)) {
       throw new Error(
         'NEXT_PUBLIC_STORAGE_DOMAINS must include PATIENT_WEB_LOCAL_MINIO_PUBLIC_ORIGIN when patient web voice is enabled',
