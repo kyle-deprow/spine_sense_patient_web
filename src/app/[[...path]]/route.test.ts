@@ -69,6 +69,7 @@ describe('patient app export route', () => {
     expect(html).toContain('<style nonce="test-nonce" data-patient-web-compat>')
     expect(html).not.toContain("font-family: 'Ionicons'")
     expect(html).not.toContain('@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts')
+    expect(html).toContain('[class*="r-1my5303"]')
     expect(html).toContain('[data-testid="sticky-tab-wrapper"]')
     expect(html).toContain('<script data-patient-web-style-nonce nonce="test-nonce">')
     expect(html).toContain('d.createElement=function')

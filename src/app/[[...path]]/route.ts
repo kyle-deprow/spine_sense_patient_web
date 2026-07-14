@@ -140,7 +140,8 @@ const WEB_COMPATIBILITY_STYLES = `<style data-patient-web-compat>
   font-family: ${SYSTEM_FONT_STACK} !important;
   font-weight: 500;
 }
-[style*="font-family"][style*="Satoshi-Bold"] {
+[style*="font-family"][style*="Satoshi-Bold"],
+[class*="r-1my5303"] {
   font-family: ${SYSTEM_FONT_STACK} !important;
   font-weight: 700;
 }
