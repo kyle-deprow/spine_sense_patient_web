@@ -48,7 +48,7 @@ describe('web voice startup audit', () => {
   })
 
   it('enables and audits the production voice policy', async () => {
-    vi.stubEnv('EXPO_PUBLIC_ENABLE_WEB_VOICE', 'true')
+    vi.stubEnv('EXPO_PUBLIC_ENABLE_WEB_VOICE', '')
     vi.stubEnv('PATIENT_APP_ENVIRONMENT', 'production')
     vi.stubEnv('NEXT_PUBLIC_STORAGE_DOMAINS', 'https://patient-documents.example.test')
     vi.stubEnv('PATIENT_WEB_LOCAL_MINIO_PUBLIC_ORIGIN', '')

@@ -1,23 +1,30 @@
 /**
  * Build the patient-web Permissions-Policy from the shared web voice gate.
- * The microphone remains disabled unless the flag value is exactly "true"
- * and the exported patient app has an explicit supported environment.
+ * The microphone is enabled by default in deployed patient-web environments
+ * and remains explicit for local/test/e2e builds.
  * This gate covers assessment voice capture and MyScribe web recording.
  */
 const LOCAL_WEB_VOICE_ENVIRONMENTS = new Set(['development', 'test', 'e2e'])
-const PATIENT_APP_ENVIRONMENTS = new Set([...LOCAL_WEB_VOICE_ENVIRONMENTS, 'staging', 'production'])
+const DEPLOYED_WEB_VOICE_ENVIRONMENTS = new Set(['staging', 'production'])
+const PATIENT_APP_ENVIRONMENTS = new Set([
+  ...LOCAL_WEB_VOICE_ENVIRONMENTS,
+  ...DEPLOYED_WEB_VOICE_ENVIRONMENTS,
+])
 
 export function isWebVoiceEnabled(
   flag = process.env.EXPO_PUBLIC_ENABLE_WEB_VOICE,
   patientAppEnvironment = process.env.PATIENT_APP_ENVIRONMENT,
 ): boolean {
-  if (flag !== 'true') return false
   if (!patientAppEnvironment || !PATIENT_APP_ENVIRONMENTS.has(patientAppEnvironment)) {
-    throw new Error(
-      'EXPO_PUBLIC_ENABLE_WEB_VOICE=true requires PATIENT_APP_ENVIRONMENT to be development, test, e2e, staging, or production',
-    )
+    if (flag === 'true') {
+      throw new Error(
+        'EXPO_PUBLIC_ENABLE_WEB_VOICE=true requires PATIENT_APP_ENVIRONMENT to be development, test, e2e, staging, or production',
+      )
+    }
+    return false
   }
-  return true
+  if (DEPLOYED_WEB_VOICE_ENVIRONMENTS.has(patientAppEnvironment)) return true
+  return flag === 'true'
 }
 
 export function buildPermissionsPolicyHeader(): string {
@@ -41,11 +48,9 @@ export function getStorageConnectOrigins(
   const origins = value.split(/[\s,]+/).filter(Boolean)
   for (const origin of origins) validateConnectOrigin(origin, patientAppEnvironment)
 
-  if (voiceFlag === 'true') {
-    isWebVoiceEnabled(voiceFlag, patientAppEnvironment)
-  }
+  const voiceEnabled = isWebVoiceEnabled(voiceFlag, patientAppEnvironment)
 
-  if (voiceFlag === 'true' && LOCAL_WEB_VOICE_ENVIRONMENTS.has(patientAppEnvironment)) {
+  if (voiceEnabled && LOCAL_WEB_VOICE_ENVIRONMENTS.has(patientAppEnvironment)) {
     if (!localMinioPublicOrigin) {
       throw new Error(
         'PATIENT_WEB_LOCAL_MINIO_PUBLIC_ORIGIN is required when patient web voice is enabled',

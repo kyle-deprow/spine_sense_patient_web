@@ -19,15 +19,16 @@ describe('patient web Permissions-Policy', () => {
     vi.unstubAllEnvs()
   })
 
-  it.each(['', 'false', 'TRUE', ' true '])('disables the microphone when the flag is %j', (value) => {
+  it.each(['', 'false', 'TRUE', ' true '])('disables local microphone when the flag is %j', (value) => {
     vi.stubEnv('EXPO_PUBLIC_ENABLE_WEB_VOICE', value)
+    vi.stubEnv('PATIENT_APP_ENVIRONMENT', 'test')
 
     expect(isWebVoiceEnabled()).toBe(false)
     expect(buildPermissionsPolicyHeader()).toContain('microphone=()')
     expect(buildPermissionsPolicyHeader()).not.toContain('microphone=(self)')
   })
 
-  it('enables only the microphone for same-origin use when the flag is exactly true', () => {
+  it('enables only the microphone for same-origin use locally when the flag is exactly true', () => {
     vi.stubEnv('EXPO_PUBLIC_ENABLE_WEB_VOICE', 'true')
     vi.stubEnv('PATIENT_APP_ENVIRONMENT', 'development')
 
@@ -47,15 +48,26 @@ describe('patient web Permissions-Policy', () => {
     expect(() => buildPermissionsPolicyHeader()).toThrow()
   })
 
-  it.each(['development', 'test', 'e2e', 'staging', 'production'])(
-    'allows voice in explicit %s builds',
+  it.each(['development', 'test', 'e2e'])(
+    'requires explicit voice opt-in in %s builds',
     (environment) => {
       expect(isWebVoiceEnabled('true', environment)).toBe(true)
+      expect(isWebVoiceEnabled('', environment)).toBe(false)
     },
   )
 
-  it('allows same-origin microphone access in production when voice is enabled', () => {
-    vi.stubEnv('EXPO_PUBLIC_ENABLE_WEB_VOICE', 'true')
+  it.each(['staging', 'production'])('enables same-origin microphone access by default in %s', (environment) => {
+    vi.stubEnv('EXPO_PUBLIC_ENABLE_WEB_VOICE', '')
+    vi.stubEnv('PATIENT_APP_ENVIRONMENT', environment)
+
+    expect(isWebVoiceEnabled()).toBe(true)
+    expect(buildPermissionsPolicyHeader()).toBe(
+      'camera=(), microphone=(self), geolocation=(), payment=(), usb=(), browsing-topics=()',
+    )
+  })
+
+  it('allows same-origin microphone access in production even when the legacy flag is false', () => {
+    vi.stubEnv('EXPO_PUBLIC_ENABLE_WEB_VOICE', 'false')
     vi.stubEnv('PATIENT_APP_ENVIRONMENT', 'production')
 
     expect(buildPermissionsPolicyHeader()).toBe(
@@ -64,11 +76,16 @@ describe('patient web Permissions-Policy', () => {
   })
 
   it.each([
-    ['', 'microphone=()'],
-    ['true', 'microphone=(self)'],
-  ])('wires the %j gate into static and runtime headers', async (value, expected) => {
+    ['test', '', 'microphone=()'],
+    ['test', 'true', 'microphone=(self)'],
+    ['production', '', 'microphone=(self)'],
+  ])('wires %s/%j into static and runtime headers', async (environment, value, expected) => {
     vi.stubEnv('EXPO_PUBLIC_ENABLE_WEB_VOICE', value)
-    vi.stubEnv('PATIENT_APP_ENVIRONMENT', 'test')
+    vi.stubEnv('PATIENT_APP_ENVIRONMENT', environment)
+    vi.stubEnv(
+      'NEXT_PUBLIC_STORAGE_DOMAINS',
+      environment === 'production' ? 'https://storage.example.test' : 'http://127.0.0.1:9000',
+    )
 
     expect(await staticPermissionsPolicy()).toContain(expected)
     const response = middleware(new NextRequest('http://localhost/login'))
@@ -87,7 +104,7 @@ describe('patient web Permissions-Policy', () => {
 
   it('allows production voice with exact HTTPS storage origins and no local MinIO origin', () => {
     expect(
-      getStorageConnectOrigins('https://patientdocuments.blob.core.windows.net', 'production', undefined, 'true'),
+      getStorageConnectOrigins('https://patientdocuments.blob.core.windows.net', 'production', undefined, ''),
     ).toEqual(['https://patientdocuments.blob.core.windows.net'])
   })
 

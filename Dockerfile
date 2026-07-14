@@ -21,10 +21,8 @@ WORKDIR /workspace/spine_sense_patient_web
 ENV NEXT_TELEMETRY_DISABLED=1
 ARG PATIENT_APP_ENVIRONMENT=production
 ARG PATIENT_APP_API_BASE_URL=/api/proxy/api/v1
-ARG EXPO_PUBLIC_ENABLE_WEB_VOICE=false
 ENV PATIENT_APP_ENVIRONMENT=$PATIENT_APP_ENVIRONMENT
 ENV PATIENT_APP_API_BASE_URL=$PATIENT_APP_API_BASE_URL
-ENV EXPO_PUBLIC_ENABLE_WEB_VOICE=$EXPO_PUBLIC_ENABLE_WEB_VOICE
 RUN pnpm build:patient-app
 RUN test -f patient-app-export/index.html
 RUN mkdir -p public
@@ -33,11 +31,9 @@ RUN pnpm build
 # ── Production ───────────────────────────────────────────────────
 FROM node:20-alpine AS runner
 WORKDIR /app
-ARG EXPO_PUBLIC_ENABLE_WEB_VOICE=false
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PATIENT_APP_ENVIRONMENT=production
-ENV EXPO_PUBLIC_ENABLE_WEB_VOICE=$EXPO_PUBLIC_ENABLE_WEB_VOICE
 
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nextjs
