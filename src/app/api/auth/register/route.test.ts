@@ -155,18 +155,91 @@ describe('register route handler', () => {
     await expect(response.json()).resolves.toEqual({ error: 'service_unavailable' })
   })
 
-  it('preserves duplicate registration as a conflict instead of a login failure', async () => {
+  it('preserves an allowlisted email registration conflict without backend detail', async () => {
     mockedBackendFetch.mockResolvedValue(
-      Response.json({ detail: 'Email already registered' }, { status: 409 }),
+      Response.json(
+        {
+          detail: 'Email already registered',
+          registration_conflict: 'email',
+          submitted_email: 'must-not-forward@example.test',
+        },
+        { status: 409 },
+      ),
     )
 
-    const response = await POST(makeRegisterRequest({
-      email: 'patient@example.test',
-      password: 'Password123!!',
-      firstName: 'Synthetic',
-      lastName: 'Patient',
-      dateOfBirth: '1990-01-15',
-    }, '203.0.113.14'))
+    const response = await POST(
+      makeRegisterRequest(
+        {
+          email: 'patient@example.test',
+          password: 'Password123!!',
+          firstName: 'Synthetic',
+          lastName: 'Patient',
+          dateOfBirth: '1990-01-15',
+        },
+        '203.0.113.14',
+      ),
+    )
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({
+      error: 'conflict',
+      registration_conflict: 'email',
+    })
+  })
+
+  it('preserves an allowlisted phone registration conflict', async () => {
+    mockedBackendFetch.mockResolvedValue(
+      Response.json(
+        {
+          detail: 'Phone already registered',
+          registration_conflict: 'phone',
+        },
+        { status: 409 },
+      ),
+    )
+
+    const response = await POST(
+      makeRegisterRequest(
+        {
+          email: 'patient@example.test',
+          password: 'Password123!!',
+          firstName: 'Synthetic',
+          lastName: 'Patient',
+          phone: '5551234567',
+        },
+        '203.0.113.18',
+      ),
+    )
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({
+      error: 'conflict',
+      registration_conflict: 'phone',
+    })
+  })
+
+  it('strips unknown registration conflict discriminators', async () => {
+    mockedBackendFetch.mockResolvedValue(
+      Response.json(
+        {
+          detail: 'internal uniqueness detail',
+          registration_conflict: 'medical_record_number',
+        },
+        { status: 409 },
+      ),
+    )
+
+    const response = await POST(
+      makeRegisterRequest(
+        {
+          email: 'patient@example.test',
+          password: 'Password123!!',
+          firstName: 'Synthetic',
+          lastName: 'Patient',
+        },
+        '203.0.113.19',
+      ),
+    )
 
     expect(response.status).toBe(409)
     await expect(response.json()).resolves.toEqual({ error: 'conflict' })

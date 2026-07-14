@@ -27,13 +27,24 @@ type CredentialAuthErrorMode = 'credential' | 'registration'
 function normalizeAuthError(
   backendStatus: number,
   mode: CredentialAuthErrorMode = 'credential',
-): { status: number; body: { error: string } } {
+  backendBody?: unknown,
+): {
+  status: number
+  body: { error: string; registration_conflict?: 'email' | 'phone' }
+} {
   if (backendStatus === 429) {
     // Rate limit from the backend — safe to surface
     return { status: 429, body: { error: 'too_many_requests' } }
   }
   if (mode === 'registration' && backendStatus === 409) {
-    return { status: 409, body: { error: 'conflict' } }
+    const registrationConflict = allowlistedRegistrationConflict(backendBody)
+    return {
+      status: 409,
+      body: {
+        error: 'conflict',
+        ...(registrationConflict === undefined ? {} : { registration_conflict: registrationConflict }),
+      },
+    }
   }
   if (backendStatus === 422 || backendStatus === 400) {
     // Validation error (e.g. malformed request body) — safe to surface as 400
@@ -50,6 +61,12 @@ function normalizeAuthError(
   // 401, 403, 404, 423, 500, and anything else → generic auth_failed at 401
   // This collapses "wrong password", "email not found", "account locked" into one shape
   return { status: 401, body: { error: 'auth_failed' } }
+}
+
+function allowlistedRegistrationConflict(value: unknown): 'email' | 'phone' | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const conflict = (value as JsonRecord)['registration_conflict']
+  return conflict === 'email' || conflict === 'phone' ? conflict : undefined
 }
 
 export async function readRequestJson(request: NextRequest): Promise<unknown> {
@@ -87,7 +104,7 @@ export async function forwardCredentialAuth(
   const data = await readJsonBody<BackendLoginResponse>(backendResponse)
 
   if (!backendResponse.ok) {
-    const normalized = normalizeAuthError(backendResponse.status, options.errorMode)
+    const normalized = normalizeAuthError(backendResponse.status, options.errorMode, data)
     return clearAndNoStore(normalized.body, normalized.status)
   }
 
@@ -272,7 +289,6 @@ export async function sessionFromCookie(request: NextRequest): Promise<NextRespo
     }
     return response
   }
-
 
   const backendActorId = backendAuthenticatedActorId(data?.['user_id'])
   const sessionActorId = auditActorIdFromRequest(request)
