@@ -135,10 +135,10 @@ function resolveExportTarget(requestPath) {
 function validateWebVoicePolicy() {
   if (process.env.EXPO_PUBLIC_ENABLE_WEB_VOICE !== 'true') return;
 
-  const allowedEnvironments = new Set(['development', 'test', 'e2e']);
+  const allowedEnvironments = new Set(['development', 'test', 'e2e', 'staging', 'production']);
   if (!allowedEnvironments.has(process.env.PATIENT_APP_ENVIRONMENT ?? '')) {
     console.error(
-      'EXPO_PUBLIC_ENABLE_WEB_VOICE=true requires PATIENT_APP_ENVIRONMENT to be development, test, or e2e',
+      'EXPO_PUBLIC_ENABLE_WEB_VOICE=true requires PATIENT_APP_ENVIRONMENT to be development, test, e2e, staging, or production',
     );
     process.exit(1);
   }

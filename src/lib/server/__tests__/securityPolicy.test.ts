@@ -37,21 +37,30 @@ describe('patient web Permissions-Policy', () => {
     )
   })
 
-  it.each(['staging', 'production', 'preview', ''])(
-    'fails closed when voice is enabled in %j',
-    (environment) => {
-      vi.stubEnv('EXPO_PUBLIC_ENABLE_WEB_VOICE', 'true')
-      vi.stubEnv('PATIENT_APP_ENVIRONMENT', environment)
+  it.each(['preview', ''])('fails closed when voice is enabled in %j', (environment) => {
+    vi.stubEnv('EXPO_PUBLIC_ENABLE_WEB_VOICE', 'true')
+    vi.stubEnv('PATIENT_APP_ENVIRONMENT', environment)
 
-      expect(() => isWebVoiceEnabled()).toThrow(
-        'EXPO_PUBLIC_ENABLE_WEB_VOICE=true requires PATIENT_APP_ENVIRONMENT to be development, test, or e2e',
-      )
-      expect(() => buildPermissionsPolicyHeader()).toThrow()
+    expect(() => isWebVoiceEnabled()).toThrow(
+      'EXPO_PUBLIC_ENABLE_WEB_VOICE=true requires PATIENT_APP_ENVIRONMENT to be development, test, e2e, staging, or production',
+    )
+    expect(() => buildPermissionsPolicyHeader()).toThrow()
+  })
+
+  it.each(['development', 'test', 'e2e', 'staging', 'production'])(
+    'allows voice in explicit %s builds',
+    (environment) => {
+      expect(isWebVoiceEnabled('true', environment)).toBe(true)
     },
   )
 
-  it.each(['development', 'test', 'e2e'])('allows voice in explicit %s builds', (environment) => {
-    expect(isWebVoiceEnabled('true', environment)).toBe(true)
+  it('allows same-origin microphone access in production when voice is enabled', () => {
+    vi.stubEnv('EXPO_PUBLIC_ENABLE_WEB_VOICE', 'true')
+    vi.stubEnv('PATIENT_APP_ENVIRONMENT', 'production')
+
+    expect(buildPermissionsPolicyHeader()).toBe(
+      'camera=(), microphone=(self), geolocation=(), payment=(), usb=(), browsing-topics=()',
+    )
   })
 
   it.each([
@@ -74,6 +83,12 @@ describe('patient web Permissions-Policy', () => {
     )
 
     expect(getStorageConnectOrigins()).toEqual(['https://storage.example.test', 'https://cdn.example.test:8443'])
+  })
+
+  it('allows production voice with exact HTTPS storage origins and no local MinIO origin', () => {
+    expect(
+      getStorageConnectOrigins('https://patientdocuments.blob.core.windows.net', 'production', undefined, 'true'),
+    ).toEqual(['https://patientdocuments.blob.core.windows.net'])
   })
 
   it.each([

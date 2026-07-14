@@ -47,14 +47,19 @@ describe('web voice startup audit', () => {
     )
   })
 
-  it('fails startup before auditing an unsafe production voice policy', async () => {
+  it('enables and audits the production voice policy', async () => {
     vi.stubEnv('EXPO_PUBLIC_ENABLE_WEB_VOICE', 'true')
     vi.stubEnv('PATIENT_APP_ENVIRONMENT', 'production')
+    vi.stubEnv('NEXT_PUBLIC_STORAGE_DOMAINS', 'https://patient-documents.example.test')
+    vi.stubEnv('PATIENT_WEB_LOCAL_MINIO_PUBLIC_ORIGIN', '')
     const { auditWebVoicePolicyAtStartup } = await import('@/lib/server/startupAudit')
 
-    expect(() => auditWebVoicePolicyAtStartup()).toThrow(
-      'EXPO_PUBLIC_ENABLE_WEB_VOICE=true requires PATIENT_APP_ENVIRONMENT',
+    expect(() => auditWebVoicePolicyAtStartup()).not.toThrow()
+    expect(mockedAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'security.web_voice.policy',
+        reason: 'enabled',
+      }),
     )
-    expect(mockedAuditLog).not.toHaveBeenCalled()
   })
 })

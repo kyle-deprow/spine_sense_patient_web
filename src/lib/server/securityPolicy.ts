@@ -1,20 +1,20 @@
 /**
  * Build the patient-web Permissions-Policy from the shared web voice gate.
  * The microphone remains disabled unless the flag value is exactly "true"
- * and the exported patient app is explicitly non-production.
+ * and the exported patient app has an explicit supported environment.
  * This gate covers assessment voice capture and MyScribe web recording.
  */
-const WEB_VOICE_ENVIRONMENTS = new Set(['development', 'test', 'e2e'])
-const PATIENT_APP_ENVIRONMENTS = new Set([...WEB_VOICE_ENVIRONMENTS, 'staging', 'production'])
+const LOCAL_WEB_VOICE_ENVIRONMENTS = new Set(['development', 'test', 'e2e'])
+const PATIENT_APP_ENVIRONMENTS = new Set([...LOCAL_WEB_VOICE_ENVIRONMENTS, 'staging', 'production'])
 
 export function isWebVoiceEnabled(
   flag = process.env.EXPO_PUBLIC_ENABLE_WEB_VOICE,
   patientAppEnvironment = process.env.PATIENT_APP_ENVIRONMENT,
 ): boolean {
   if (flag !== 'true') return false
-  if (!patientAppEnvironment || !WEB_VOICE_ENVIRONMENTS.has(patientAppEnvironment)) {
+  if (!patientAppEnvironment || !PATIENT_APP_ENVIRONMENTS.has(patientAppEnvironment)) {
     throw new Error(
-      'EXPO_PUBLIC_ENABLE_WEB_VOICE=true requires PATIENT_APP_ENVIRONMENT to be development, test, or e2e',
+      'EXPO_PUBLIC_ENABLE_WEB_VOICE=true requires PATIENT_APP_ENVIRONMENT to be development, test, e2e, staging, or production',
     )
   }
   return true
@@ -42,11 +42,10 @@ export function getStorageConnectOrigins(
   for (const origin of origins) validateConnectOrigin(origin, patientAppEnvironment)
 
   if (voiceFlag === 'true') {
-    if (!WEB_VOICE_ENVIRONMENTS.has(patientAppEnvironment)) {
-      throw new Error(
-        'EXPO_PUBLIC_ENABLE_WEB_VOICE=true requires PATIENT_APP_ENVIRONMENT to be development, test, or e2e',
-      )
-    }
+    isWebVoiceEnabled(voiceFlag, patientAppEnvironment)
+  }
+
+  if (voiceFlag === 'true' && LOCAL_WEB_VOICE_ENVIRONMENTS.has(patientAppEnvironment)) {
     if (!localMinioPublicOrigin) {
       throw new Error(
         'PATIENT_WEB_LOCAL_MINIO_PUBLIC_ORIGIN is required when patient web voice is enabled',
@@ -85,7 +84,7 @@ function validateConnectOrigin(origin: string, environment: string): void {
   if (parsed.protocol === 'https:') return
   if (
     parsed.protocol === 'http:' &&
-    WEB_VOICE_ENVIRONMENTS.has(environment) &&
+    LOCAL_WEB_VOICE_ENVIRONMENTS.has(environment) &&
     ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname)
   ) return
   throw new Error(`Insecure patient web storage connect origin is not allowed: ${origin}`)
