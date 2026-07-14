@@ -172,6 +172,39 @@ describe('register route handler', () => {
     await expect(response.json()).resolves.toEqual({ error: 'conflict' })
   })
 
+  it('allows ten attempts in a short window before returning an actionable rate limit', async () => {
+    const ip = '203.0.113.16'
+    mockedBackendFetch.mockResolvedValue(
+      Response.json({ detail: 'Email already registered' }, { status: 409 }),
+    )
+
+    const body = {
+      email: 'patient@example.test',
+      password: 'Password123!!',
+      firstName: 'Synthetic',
+      lastName: 'Patient',
+    }
+
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const response = await POST(makeRegisterRequest(body, ip))
+      expect(response.status).toBe(409)
+    }
+
+    const limitedResponse = await POST(makeRegisterRequest(body, ip))
+
+    expect(limitedResponse.status).toBe(429)
+    expect(limitedResponse.headers.get('Retry-After')).toBe('900')
+    await expect(limitedResponse.json()).resolves.toEqual({ error: 'too_many_requests' })
+    expect(mockedBackendFetch).toHaveBeenCalledTimes(10)
+    expect(mockedAuditLog).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        event: 'auth.register.failure',
+        reason: 'rate_limited',
+        status: 429,
+      }),
+    )
+  })
+
   it('maps backend registration server failures to a server error, not auth_failed', async () => {
     mockedBackendFetch.mockResolvedValue(
       Response.json({ detail: 'internal error' }, { status: 500 }),

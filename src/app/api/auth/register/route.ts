@@ -7,7 +7,9 @@ import { BackendUnavailableError } from '@/lib/server/backend'
 import { jsonNoStore } from '@/lib/server/responses'
 import { rateLimit, getClientIp } from '@/lib/server/rate-limit'
 
-const WINDOW_MS = 60 * 60 * 1000 // 60 minutes
+const RATE_LIMIT_ATTEMPTS = 10
+const WINDOW_MS = 15 * 60 * 1000 // 15 minutes
+const RETRY_AFTER_SECONDS = String(WINDOW_MS / 1000)
 type JsonRecord = Record<string, unknown>
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -71,7 +73,7 @@ export async function POST(request: NextRequest) {
   }
 
   const ip = getClientIp(request)
-  if (!rateLimit(ip, { limit: 5, windowMs: WINDOW_MS })) {
+  if (!rateLimit(ip, { limit: RATE_LIMIT_ATTEMPTS, windowMs: WINDOW_MS })) {
     auditLog({
       ts: new Date().toISOString(),
       event: 'auth.register.failure',
@@ -80,7 +82,7 @@ export async function POST(request: NextRequest) {
       reason: 'rate_limited',
       ...auditContext,
     })
-    return clearAccountTransitionState(jsonNoStore({ error: 'too_many_requests' }, { status: 429, headers: { 'Retry-After': '3600' } }))
+    return clearAccountTransitionState(jsonNoStore({ error: 'too_many_requests' }, { status: 429, headers: { 'Retry-After': RETRY_AFTER_SECONDS } }))
   }
 
   auditLog({ ts: new Date().toISOString(), event: 'auth.register.attempt', method: 'POST', ...auditContext })
