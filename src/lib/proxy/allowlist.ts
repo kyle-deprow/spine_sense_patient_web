@@ -5,6 +5,7 @@ const BACKEND_ROOT_PATHS_WITH_TRAILING_SLASH = new Set([
   '/api/v1/patients/me/assessments',
   '/api/v1/patients/me/symptoms',
   '/api/v1/patients/me/tracked-symptoms',
+  '/api/v1/patients/me/tester-comments',
 ])
 
 export interface AllowedProxyRoute {
@@ -148,6 +149,15 @@ export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
     methods: ['GET', 'POST', 'PATCH', 'DELETE'],
   },
   { prefix: '/api/v1/patients/me/treatments', methods: ['GET'] },
+  // Tester/dev comment channel — @test.com accounts only. Exposing it here is
+  // safe on its own: the backend independently enforces tester-only access and
+  // 403s everyone else, and the payload is structurally isolated from the
+  // clinical record. Without this entry the BFF 404s every save on web.
+  {
+    prefix: '/api/v1/patients/me/tester-comments',
+    methods: ['GET', 'POST'],
+    match: 'exact',
+  },
   { prefix: DOCUMENTS_PREFIX, methods: ['GET'], match: 'exact' },
   { prefix: `${DOCUMENTS_PREFIX}/overview`, methods: ['GET'], match: 'exact' },
   { prefix: `${DOCUMENTS_PREFIX}/text`, methods: ['POST'], match: 'exact' },

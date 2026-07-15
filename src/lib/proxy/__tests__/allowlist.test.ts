@@ -472,4 +472,52 @@ describe('proxy allowlist', () => {
       ),
     ).toEqual({ ok: false, status: 405, code: 'proxy_method_not_allowed' })
   })
+
+  // The tester comment channel is reachable only through the BFF on web. The
+  // backend mounts it at .../tester-comments/ (trailing slash), while the app
+  // client posts without one, so the trailing-slash normalization is part of
+  // the contract — without it every tester note save 404s in the browser.
+  it('allows the tester comment channel and normalizes the backend trailing slash', () => {
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'tester-comments'],
+        'POST',
+        '/api/proxy/api/v1/patients/me/tester-comments',
+      ),
+    ).toEqual({
+      ok: true,
+      targetPath: '/api/v1/patients/me/tester-comments/',
+    })
+
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'tester-comments'],
+        'GET',
+        '/api/proxy/api/v1/patients/me/tester-comments',
+      ),
+    ).toEqual({
+      ok: true,
+      targetPath: '/api/v1/patients/me/tester-comments/',
+    })
+  })
+
+  it('keeps the tester comment channel narrow at the BFF boundary', () => {
+    // Mutating verbs the backend does not expose must not be forwarded.
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'tester-comments'],
+        'DELETE',
+        '/api/proxy/api/v1/patients/me/tester-comments',
+      ),
+    ).toEqual({ ok: false, status: 405, code: 'proxy_method_not_allowed' })
+
+    // `match: 'exact'` must not open sub-paths under the tester channel.
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'tester-comments', 'all'],
+        'GET',
+        '/api/proxy/api/v1/patients/me/tester-comments/all',
+      ),
+    ).toEqual({ ok: false, status: 404, code: 'proxy_path_not_allowed' })
+  })
 })
