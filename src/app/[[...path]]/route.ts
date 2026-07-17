@@ -124,6 +124,38 @@ async function servePatientApp(request: NextRequest, method: 'GET' | 'HEAD') {
 const SYSTEM_FONT_STACK =
   '-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
 
+/**
+ * `maximum-scale=1` pins the page at its rendered scale so a stray zoom cannot
+ * shift the layout. `interactive-widget=resizes-content` is a load-bearing
+ * assumption of the app's keyboard handling (see the app's
+ * `useWebKeyboardVisible` / `WebKeyboardFocusAssist`), and `viewport-fit=cover`
+ * lets the app-shell paint under the iOS home indicator.
+ */
+const VIEWPORT_CONTENT =
+  'width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content'
+
+const VIEWPORT_META = `<meta name="viewport" content="${VIEWPORT_CONTENT}" />`
+
+/**
+ * The export ships Expo's stock viewport (`…, shrink-to-fit=no`) because the
+ * BFF builds with SPINESENSE_WEB_OUTPUT=single, and Expo ignores the app's
+ * `app/+html.tsx` in single mode. Rewriting here is the only path that reaches
+ * production's <head>; a meta tag cannot be expressed in global.css. Replace
+ * rather than append — duplicate viewport tags have engine-dependent merge
+ * semantics.
+ */
+function rewriteViewportMeta(html: string): string {
+  if (!html.includes('</head>')) {
+    return html
+  }
+
+  const existing = /<meta[^>]*\bname=["']viewport["'][^>]*>/i
+  if (existing.test(html)) {
+    return html.replace(existing, VIEWPORT_META)
+  }
+  return html.replace('</head>', `${VIEWPORT_META}</head>`)
+}
+
 const WEB_COMPATIBILITY_STYLES = `<style data-patient-web-compat>
 @font-face { font-family: 'Satoshi-Regular'; src: local('unused'); font-weight: 400; }
 @font-face { font-family: 'Satoshi-Medium'; src: local('unused'); font-weight: 500; }
@@ -162,6 +194,17 @@ textarea {
   max-width: 100% !important;
   overflow: hidden !important;
   text-overflow: ellipsis !important;
+}
+
+/* iOS Safari auto-zooms any focused input that renders below 16px and never
+   zooms back out, leaving every subsequent screen shifted and clipped. Pin
+   every input to 16px so the zoom is never triggered. The deliberately
+   enlarged code-entry fields (OTP, MFA, invite) already render above the
+   threshold and opt out via an ss-zoom-exempt- id, keeping their own size. */
+input:not([id^="ss-zoom-exempt-"]),
+textarea,
+select {
+  font-size: 16px !important;
 }
 
 input:focus,
@@ -220,7 +263,7 @@ async function readResponseBody(
     return body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer
   }
 
-  const html = injectWebCompatibilityStyles(body.toString('utf8'))
+  const html = injectWebCompatibilityStyles(rewriteViewportMeta(body.toString('utf8')))
   const nonce = request.headers.get('x-nonce')
   if (!nonce) return html
 

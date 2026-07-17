@@ -94,6 +94,69 @@ describe('patient app export route', () => {
     expect(html.match(/data-patient-web-style-nonce/g)).toHaveLength(1)
   })
 
+  it('replaces the exported stock viewport with the zoom-pinned viewport', async () => {
+    // Expo's stock single-output template ships exactly this tag.
+    await makeExportFile(
+      'index.html',
+      '<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" /><title>SpineSense</title></head><body></body></html>',
+    )
+
+    const response = await GET(
+      new NextRequest('http://localhost/', {
+        headers: { 'x-nonce': 'test-nonce' },
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    const html = await response.text()
+
+    expect(html.match(/name="viewport"/g)).toHaveLength(1)
+    expect(html).toContain('maximum-scale=1')
+    expect(html).toContain('viewport-fit=cover')
+    expect(html).toContain('interactive-widget=resizes-content')
+    expect(html).not.toContain('shrink-to-fit=no')
+  })
+
+  it('injects the zoom-pinned viewport when the export ships none', async () => {
+    await makeExportFile(
+      'index.html',
+      '<!doctype html><html><head><title>SpineSense</title></head><body></body></html>',
+    )
+
+    const response = await GET(
+      new NextRequest('http://localhost/', {
+        headers: { 'x-nonce': 'test-nonce' },
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    const html = await response.text()
+    expect(html.match(/name="viewport"/g)).toHaveLength(1)
+    expect(html).toContain('maximum-scale=1')
+  })
+
+  it('pins text inputs to 16px so iOS Safari cannot auto-zoom on focus', async () => {
+    await makeExportFile(
+      'index.html',
+      '<!doctype html><html><head><title>SpineSense</title></head><body></body></html>',
+    )
+
+    const response = await GET(
+      new NextRequest('http://localhost/', {
+        headers: { 'x-nonce': 'test-nonce' },
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    const html = await response.text()
+
+    // iOS Safari auto-zooms any focused input rendering below 16px and never
+    // zooms back out, which shifts every subsequent screen.
+    expect(html).toMatch(/textarea,\s*\n?select\s*{\s*\n?\s*font-size:\s*16px\s*!important/)
+    // The enlarged code-entry fields opt out and keep their designed size.
+    expect(html).toContain('input:not([id^="ss-zoom-exempt-"])')
+  })
+
   it('does not inject compatibility CSS into malformed HTML without a head', async () => {
     await makeExportFile('index.html', '<main>Patient app</main>')
 
