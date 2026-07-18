@@ -2081,10 +2081,10 @@ test.describe('patient web full assessment flow', () => {
     await expect(page.getByTestId('results-share')).toHaveAttribute('aria-label', 'Open PDF report options')
     await page.getByTestId('results-share').click()
     await expect(page.getByTestId('results-report-options')).toBeVisible()
-    const includeDocuments = page.getByTestId('results-report-options-include-documents')
-    await expect(includeDocuments).toHaveAttribute('aria-checked', 'true')
+    const includeDocuments = page.getByTestId('results-report-options-include-documents').getByRole('switch')
+    await expect(includeDocuments).toBeChecked()
     await includeDocuments.click()
-    await expect(includeDocuments).toHaveAttribute('aria-checked', 'false')
+    await expect(includeDocuments).not.toBeChecked()
     await expect(page.getByTestId('results-report-options-generate')).toHaveAttribute('aria-label', 'Generate PDF')
     const reportResponse = await clickAndWaitForResponse({
       page,
