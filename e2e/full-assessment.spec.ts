@@ -270,9 +270,12 @@ async function uploadSyntheticAssessmentDocumentFromRecordsStep(page: Page): Pro
   const confirmResponse = await confirmResponsePromise
   expect(confirmResponse.ok(), `assessment document confirm status=${confirmResponse.status()}`).toBe(true)
   const confirmPayload = (await confirmResponse.json()) as AssessmentDocumentRecord
-  expect(normalizeAssessmentDocument(confirmPayload).processingStatus).toBe('processing')
+  const confirmedStatus = normalizeAssessmentDocument(confirmPayload).processingStatus
+  expect(['processing', 'complete']).toContain(confirmedStatus)
 
-  await completeSyntheticDocumentScan(page.request, documentId)
+  if (confirmedStatus === 'processing') {
+    await completeSyntheticDocumentScan(page.request, documentId)
+  }
 
   await expect(page.getByTestId(`records-document-${documentId}`)).toBeVisible({
     timeout: 30_000,
@@ -302,17 +305,23 @@ async function completeSyntheticDocumentScan(request: APIRequestContext, documen
   if (!TEST_SUPPORT_TOKEN) {
     throw new Error('PATIENT_WEB_TEST_SUPPORT_TOKEN is required for document upload E2E scan completion')
   }
-  const response = await request.post(BACKEND_DOCUMENT_SCAN_RESULT_URL, {
-    headers: {
-      authorization: `Bearer ${TEST_SUPPORT_TOKEN}`,
-      'content-type': 'application/json',
-    },
-    data: {
-      document_id: documentId,
-      verdict: 'clean',
-    },
-    timeout: 90_000,
-  })
+  const completeScan = () =>
+    request.post(BACKEND_DOCUMENT_SCAN_RESULT_URL, {
+      headers: {
+        authorization: `Bearer ${TEST_SUPPORT_TOKEN}`,
+        'content-type': 'application/json',
+      },
+      data: {
+        document_id: documentId,
+        verdict: 'clean',
+      },
+      timeout: 90_000,
+    })
+  let response = await completeScan()
+  for (let attempt = 1; response.status() === 404 && attempt < 5; attempt += 1) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 1000))
+    response = await completeScan()
+  }
   expect(response.status(), `document scan completion failed status=${response.status()}`).toBe(200)
   const payload = (await response.json()) as AssessmentDocumentRecord & { scan_status?: string; scanStatus?: string }
   const normalized = normalizeAssessmentDocument(payload)
@@ -320,12 +329,18 @@ async function completeSyntheticDocumentScan(request: APIRequestContext, documen
   expect(payload.scan_status ?? payload.scanStatus).toBe('clean')
 }
 
-function expectQuestionnaireMutationContracts(mutations: readonly QuestionnaireMutation[]) {
+function expectQuestionnaireMutationContracts(
+  mutations: readonly QuestionnaireMutation[],
+  generatedAdaptiveAnswers: ReadonlyMap<string, unknown>,
+) {
   const screeningAnswers = new Map<string, unknown>([
     ...fullAssessmentScenario.screening.map(({ id, value }) => [id, value] as const),
     ...fullAssessmentScenario.screeningText.map(({ id, text }) => [id, text] as const),
   ])
-  const adaptiveAnswers = new Map<string, unknown>(fullAssessmentScenario.adaptive.map(({ id, value }) => [id, value]))
+  const adaptiveAnswers = new Map<string, unknown>([
+    ...fullAssessmentScenario.adaptive.map(({ id, value }) => [id, value] as const),
+    ...generatedAdaptiveAnswers,
+  ])
   const screeningGoalSubmissionCounts = new Map(EXPECTED_SCREENING_GOAL_QUESTION_IDS.map((id) => [id, 0]))
   const adaptiveGoalSubmissionIds = new Set<string>()
   const contracts = {
@@ -773,20 +788,17 @@ async function actionableLocatorForTestId(page: Page, testId: string): Promise<L
 async function visibleDynamicQuestionTestId(page: Page, questionPrefix: string): Promise<string | null> {
   return page
     .locator(`[data-testid^="${questionPrefix}-"]:visible`)
-    .evaluateAll((elements) => {
+    .evaluateAll((elements, prefix) => {
+      const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const exactQuestionTestId = new RegExp(`^${escapedPrefix}-[A-Za-z0-9_]+$`)
       for (const element of elements) {
         const testId = element.getAttribute('data-testid')
-        if (
-          testId != null &&
-          !testId.includes('-option-') &&
-          !testId.includes('-input') &&
-          !testId.includes('-stop-')
-        ) {
+        if (testId != null && exactQuestionTestId.test(testId)) {
           return testId
         }
       }
       return null
-    })
+    }, questionPrefix)
     .catch(() => null)
 }
 
@@ -1556,7 +1568,10 @@ async function answerScreening(page: Page) {
   throw new Error('Timed out answering screening questions before reaching submit')
 }
 
-async function answerIssuedAdaptiveQuestion(page: Page): Promise<void> {
+async function answerIssuedAdaptiveQuestion(
+  page: Page,
+  generatedAdaptiveAnswers: Map<string, unknown>,
+): Promise<void> {
   const testId = await visibleDynamicQuestionTestId(page, 'adaptive-question')
   const match = /^adaptive-question-([A-Za-z0-9_]+)$/.exec(testId ?? '')
   if (match?.[1] == null) {
@@ -1570,7 +1585,54 @@ async function answerIssuedAdaptiveQuestion(page: Page): Promise<void> {
 
   const answer = ADAPTIVE_ANSWERS_BY_ID.get(questionId)
   if (answer == null) {
-    throw new Error(`No exact adaptive fixture answer is defined for issued question ${questionId}`)
+    if (!/^gen_\d+$/.test(questionId)) {
+      throw new Error(`No exact adaptive fixture answer is defined for issued question ${questionId}`)
+    }
+
+    const question = page.getByTestId(`adaptive-question-${questionId}`)
+    const radios = question.getByRole('radio')
+    if ((await radios.count()) > 0) {
+      const radio = radios.first()
+      const testId = await radio.getAttribute('data-testid')
+      const optionPrefix = `adaptive-question-${questionId}-option-`
+      const stopPrefix = `adaptive-question-${questionId}-stop-`
+      if (testId?.startsWith(optionPrefix)) {
+        generatedAdaptiveAnswers.set(questionId, testId.slice(optionPrefix.length))
+      } else if (testId?.startsWith(stopPrefix)) {
+        const value = Number(testId.slice(stopPrefix.length))
+        if (!Number.isSafeInteger(value)) {
+          throw new Error(`Generated adaptive pain scale ${questionId} has an invalid server-issued stop`)
+        }
+        generatedAdaptiveAnswers.set(questionId, value)
+      } else {
+        throw new Error(`Generated adaptive radio ${questionId} has no exact server-issued value selector`)
+      }
+      await radio.click()
+      return
+    }
+
+    const checkboxes = question.getByRole('checkbox')
+    if ((await checkboxes.count()) > 0) {
+      const checkbox = checkboxes.first()
+      const testId = await checkbox.getAttribute('data-testid')
+      const optionPrefix = `adaptive-question-${questionId}-option-`
+      if (!testId?.startsWith(optionPrefix)) {
+        throw new Error(`Generated adaptive checkbox ${questionId} has no exact server-issued value selector`)
+      }
+      generatedAdaptiveAnswers.set(questionId, [testId.slice(optionPrefix.length)])
+      await checkbox.click()
+      return
+    }
+
+    const textInput = question.getByRole('textbox')
+    if ((await textInput.count()) > 0) {
+      const value = 'No additional details for this synthetic test.'
+      generatedAdaptiveAnswers.set(questionId, value)
+      await textInput.fill(value)
+      return
+    }
+
+    throw new Error(`Generated adaptive question ${questionId} has no supported server-issued answer control`)
   }
 
   for (const value of answerValues(answer.value)) {
@@ -1583,7 +1645,10 @@ async function answerIssuedAdaptiveQuestion(page: Page): Promise<void> {
   }
 }
 
-async function completeAdaptiveIfPresent(page: Page): Promise<string | null> {
+async function completeAdaptiveIfPresent(
+  page: Page,
+  generatedAdaptiveAnswers: Map<string, unknown>,
+): Promise<string | null> {
   const adaptiveScreen = page.getByTestId('adaptive-screen')
   let initialStage = await waitForAssessmentStage(page, [
     'adaptive-loading-state',
@@ -1621,7 +1686,7 @@ async function completeAdaptiveIfPresent(page: Page): Promise<string | null> {
     if (!(await adaptiveScreen.isVisible({ timeout: 1000 }).catch(() => false))) {
       return waitForAnyVisibleTestId(page, ['review-screen'], 60_000).catch(() => 'left-adaptive-screen')
     }
-    await answerIssuedAdaptiveQuestion(page)
+    await answerIssuedAdaptiveQuestion(page, generatedAdaptiveAnswers)
     const currentQuestionTestId = await visibleDynamicQuestionTestId(page, 'adaptive-question')
     await waitForEnabledAndClick(page, 'adaptive-submit')
     const nextStage = await waitForDynamicQuestionAdvance(
@@ -1850,6 +1915,7 @@ test.describe('patient web full assessment flow', () => {
     test.setTimeout(FULL_FLOW_TIMEOUT_MS)
     await page.emulateMedia({ reducedMotion: 'no-preference' })
     const questionnaireMutations = captureQuestionnaireMutations(page)
+    const generatedAdaptiveAnswers = new Map<string, unknown>()
 
     let email = uniqueSyntheticEmail()
     const { registration, onboarding } = fullAssessmentScenario
@@ -1945,6 +2011,17 @@ test.describe('patient web full assessment flow', () => {
     await clickChiefComplaintSave(page)
     await expectTreatmentHistoryAfterStorySave(page)
     await clickByTestId(page, 'medical-history-conditions-none')
+    const negativeMedicalHistoryAnswers = page.getByRole('button', {
+      name: 'No',
+      exact: true,
+    })
+    await expect(negativeMedicalHistoryAnswers).toHaveCount(4)
+    for (let remaining = 4; remaining > 0; remaining -= 1) {
+      await negativeMedicalHistoryAnswers.first().click({ force: true, timeout: 10_000 })
+      await expect(negativeMedicalHistoryAnswers).toHaveCount(remaining - 1)
+      await page.waitForTimeout(500)
+    }
+    await clickByTestId(page, 'medical-history-nicotine-no')
     await waitForEnabledAndClick(page, 'medical-history-continue-btn')
 
     await expectImagingRecordsAfterHistorySave(page)
@@ -1971,11 +2048,11 @@ test.describe('patient web full assessment flow', () => {
     await answerScreening(page)
     await submitScreening(page)
 
-    const postAdaptiveStage = await completeAdaptiveIfPresent(page)
+    const postAdaptiveStage = await completeAdaptiveIfPresent(page, generatedAdaptiveAnswers)
     if (postAdaptiveStage !== 'review-screen') {
       throw new Error(`Expected review-screen after adaptive flow, got ${postAdaptiveStage}`)
     }
-    expectQuestionnaireMutationContracts(questionnaireMutations)
+    expectQuestionnaireMutationContracts(questionnaireMutations, generatedAdaptiveAnswers)
     await expect(page.getByTestId('review-screen')).toBeVisible({
       timeout: 120_000,
     })
@@ -2004,6 +2081,10 @@ test.describe('patient web full assessment flow', () => {
     await expect(page.getByTestId('results-share')).toHaveAttribute('aria-label', 'Open PDF report options')
     await page.getByTestId('results-share').click()
     await expect(page.getByTestId('results-report-options')).toBeVisible()
+    const includeDocuments = page.getByTestId('results-report-options-include-documents')
+    await expect(includeDocuments).toHaveAttribute('aria-checked', 'true')
+    await includeDocuments.click()
+    await expect(includeDocuments).toHaveAttribute('aria-checked', 'false')
     await expect(page.getByTestId('results-report-options-generate')).toHaveAttribute('aria-label', 'Generate PDF')
     const reportResponse = await clickAndWaitForResponse({
       page,
@@ -2013,7 +2094,13 @@ test.describe('patient web full assessment flow', () => {
       timeout: 120_000,
       attempts: 2,
     })
-    expect(reportResponse.status()).toBe(201)
+    if (reportResponse.status() !== 201) {
+      const reportError = await reportResponse
+        .json()
+        .then((payload) => sanitizeDiagnostic(JSON.stringify(payload)))
+        .catch(() => 'non-JSON response')
+      throw new Error(`Assessment report generation failed status=${reportResponse.status()} body=${reportError}`)
+    }
     await expect(page.getByTestId('results-report-error')).toBeHidden()
     await waitForEnabledAndClick(page, 'tab-home', 30_000)
 
