@@ -32,6 +32,7 @@ const INTAKE_ALLOWED_RE =
 const REPORT_RE = `^\\/api\\/v1\\/patients\\/me\\/reports\\/${UUID_RE}`
 const REPORT_EXACT_RE = new RegExp(`${REPORT_RE}$`, 'i')
 const REPORT_DOWNLOAD_URL_RE = new RegExp(`${REPORT_RE}\\/download-url$`, 'i')
+const REPORT_EMAIL_SELF_RE = new RegExp(`${REPORT_RE}\\/email-self$`, 'i')
 const DOCUMENTS_PREFIX = '/api/v1/patients/me/documents'
 const DOCUMENT_RE = `^\\/api\\/v1\\/patients\\/me\\/documents\\/${UUID_RE}`
 const DOCUMENT_EXACT_RE = new RegExp(`${DOCUMENT_RE}$`, 'i')
@@ -107,6 +108,11 @@ export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
     prefix: '/api/v1/patients/me/reports',
     methods: ['POST'],
     pathPattern: REPORT_DOWNLOAD_URL_RE,
+  },
+  {
+    prefix: '/api/v1/patients/me/reports',
+    methods: ['POST'],
+    pathPattern: REPORT_EMAIL_SELF_RE,
   },
   {
     prefix: '/api/v1/patients/me/consents',
@@ -226,6 +232,11 @@ export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
   { prefix: '/api/v1/patients/me', methods: ['GET', 'PATCH'], match: 'exact' },
   { prefix: '/api/v1/invite-codes', methods: ['GET', 'POST'] },
   { prefix: '/api/v1/safety', methods: ['GET', 'POST'] },
+  // Patient creating a third-party share token for a completed report. Kept
+  // exact + POST-only so only the collection endpoint is reachable; the public
+  // recipient serve route (GET /api/v1/share/{token}/report) is deliberately
+  // NOT exposed here — external recipients hit the API directly, not the BFF.
+  { prefix: '/api/v1/shares', methods: ['POST'], match: 'exact' },
 ]
 
 export type ProxyPathValidation =

@@ -255,6 +255,70 @@ describe('proxy allowlist', () => {
     ).toEqual({ ok: false, status: 404, code: 'proxy_path_not_allowed' })
   })
 
+  it('allows report email-self and third-party share creation for the web app', () => {
+    const reportId = '10000000-0000-4000-8000-000000000002'
+
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'reports', reportId, 'email-self'],
+        'POST',
+        `/api/proxy/api/v1/patients/me/reports/${reportId}/email-self`,
+      ),
+    ).toEqual({
+      ok: true,
+      targetPath: `/api/v1/patients/me/reports/${reportId}/email-self`,
+    })
+
+    expect(validateProxyTarget(['api', 'v1', 'shares'], 'POST', '/api/proxy/api/v1/shares')).toEqual({
+      ok: true,
+      targetPath: '/api/v1/shares',
+    })
+  })
+
+  it('keeps report email-self and share creation narrow at the BFF boundary', () => {
+    const reportId = '10000000-0000-4000-8000-000000000002'
+
+    // Wrong method on email-self must not be forwarded.
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'reports', reportId, 'email-self'],
+        'GET',
+        `/api/proxy/api/v1/patients/me/reports/${reportId}/email-self`,
+      ),
+    ).toEqual({ ok: false, status: 405, code: 'proxy_method_not_allowed' })
+
+    // Malformed report id on email-self must be rejected.
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'patients', 'me', 'reports', 'not-a-uuid', 'email-self'],
+        'POST',
+        '/api/proxy/api/v1/patients/me/reports/not-a-uuid/email-self',
+      ),
+    ).toEqual({ ok: false, status: 404, code: 'proxy_path_not_allowed' })
+
+    // Wrong method on the share collection must not be forwarded.
+    expect(validateProxyTarget(['api', 'v1', 'shares'], 'GET', '/api/proxy/api/v1/shares')).toEqual({
+      ok: false,
+      status: 405,
+      code: 'proxy_method_not_allowed',
+    })
+
+    // `match: 'exact'` must not open child paths under the share collection.
+    expect(
+      validateProxyTarget(['api', 'v1', 'shares', 'some-token'], 'GET', '/api/proxy/api/v1/shares/some-token'),
+    ).toEqual({ ok: false, status: 404, code: 'proxy_path_not_allowed' })
+
+    // The public recipient serve route (singular /share/{token}/report) is a
+    // direct-to-API path and must never be reachable through the patient BFF.
+    expect(
+      validateProxyTarget(
+        ['api', 'v1', 'share', 'some-token', 'report'],
+        'GET',
+        '/api/proxy/api/v1/share/some-token/report',
+      ),
+    ).toEqual({ ok: false, status: 404, code: 'proxy_path_not_allowed' })
+  })
+
   it('allows only implemented patient document routes and methods', () => {
     const documentId = '10000000-0000-4000-8000-000000000001'
     const routes = [
