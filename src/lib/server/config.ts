@@ -1,3 +1,8 @@
+import {
+  getFrontDoorOriginGuardConfig,
+  type FrontDoorOriginGuardMode,
+} from '@/lib/front-door-origin-guard'
+
 export interface PatientWebConfig {
   backendInternalUrl: string
   csrfSecret: string
@@ -8,6 +13,9 @@ export interface PatientWebConfig {
   googleClientSecret: string
   googleOauthBaaConfirmed: boolean
   publicUrl: string | null
+  environment: string
+  frontDoorOriginGuardMode: FrontDoorOriginGuardMode
+  azureFrontDoorId: string | null
 }
 
 export interface AuditActorSigningKey {
@@ -136,6 +144,7 @@ export function getPatientWebConfig(): PatientWebConfig {
   const googleClientId = process.env.GOOGLE_CLIENT_ID ?? ''
   const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET ?? ''
   const googleOauthBaaConfirmed = parseBooleanEnv('GOOGLE_OAUTH_BAA_CONFIRMED')
+  const frontDoorOriginGuard = getFrontDoorOriginGuardConfig()
   if (
     process.env.NODE_ENV === 'production' &&
     (googleClientId || googleClientSecret) &&
@@ -154,5 +163,8 @@ export function getPatientWebConfig(): PatientWebConfig {
     googleClientSecret,
     googleOauthBaaConfirmed,
     publicUrl: process.env.PATIENT_WEB_PUBLIC_URL ?? null,
+    environment: frontDoorOriginGuard.environment,
+    frontDoorOriginGuardMode: frontDoorOriginGuard.mode,
+    azureFrontDoorId: frontDoorOriginGuard.expectedFrontDoorId,
   }
 }

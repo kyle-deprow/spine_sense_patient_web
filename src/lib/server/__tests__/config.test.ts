@@ -37,4 +37,26 @@ describe('patient web config', () => {
 
     expect(() => getPatientWebConfig()).toThrow('GOOGLE_OAUTH_BAA_CONFIRMED must be true or false')
   })
+
+  it('includes the explicit Front Door origin guard configuration', () => {
+    vi.stubEnv('ENVIRONMENT', 'production')
+    vi.stubEnv('FRONT_DOOR_ORIGIN_GUARD_MODE', 'enforce')
+    vi.stubEnv('AZURE_FRONT_DOOR_ID', '12345678-1234-1234-1234-123456789abc')
+
+    expect(getPatientWebConfig()).toMatchObject({
+      environment: 'production',
+      frontDoorOriginGuardMode: 'enforce',
+      azureFrontDoorId: '12345678-1234-1234-1234-123456789abc',
+    })
+  })
+
+  it('fails startup config validation for an active guard without a canonical ID', () => {
+    vi.stubEnv('ENVIRONMENT', 'staging')
+    vi.stubEnv('FRONT_DOOR_ORIGIN_GUARD_MODE', 'audit')
+    vi.stubEnv('AZURE_FRONT_DOOR_ID', '')
+
+    expect(() => getPatientWebConfig()).toThrow(
+      'AZURE_FRONT_DOOR_ID is required when the Front Door origin guard is active',
+    )
+  })
 })

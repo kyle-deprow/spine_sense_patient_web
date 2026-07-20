@@ -1,5 +1,10 @@
 import { NextResponse, type NextRequest } from 'next/server'
 
+import {
+  auditFrontDoorOriginRejection,
+  frontDoorOriginRejectionReason,
+  getFrontDoorOriginGuardConfig,
+} from '@/lib/front-door-origin-guard'
 import { buildPermissionsPolicyHeader, getStorageConnectOrigins } from '@/lib/server/securityPolicy'
 
 type CspOptions = {
@@ -48,7 +53,10 @@ function applySecurityHeaders(response: NextResponse, nonce: string, pathname: s
   response.headers.set('Permissions-Policy', buildPermissionsPolicyHeader())
 
   if (process.env.NODE_ENV !== 'development') {
-    response.headers.set('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload')
+    response.headers.set(
+      'Strict-Transport-Security',
+      'max-age=63072000; includeSubDomains; preload',
+    )
   }
 
   if (pathname.startsWith('/api/') || isPatientAppShellPath(pathname)) {
@@ -64,6 +72,37 @@ function isPatientAppShellPath(pathname: string): boolean {
 }
 
 export function middleware(request: NextRequest) {
+  const guardConfig = getFrontDoorOriginGuardConfig()
+  if (guardConfig.mode !== 'off') {
+    const expectedFrontDoorId = guardConfig.expectedFrontDoorId
+    if (expectedFrontDoorId === null) {
+      return new NextResponse('Service unavailable', {
+        status: 503,
+        headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' },
+      })
+    }
+    const reason = frontDoorOriginRejectionReason(
+      request.headers,
+      expectedFrontDoorId,
+    )
+    if (reason !== null) {
+      if (guardConfig.mode === 'enforce') {
+        return new NextResponse('Forbidden', {
+          status: 403,
+          headers: {
+            'Cache-Control': 'no-store',
+            Pragma: 'no-cache',
+          },
+        })
+      }
+      auditFrontDoorOriginRejection(guardConfig, reason)
+    }
+  }
+
+  if (isSecurityHeaderBypassPath(request.nextUrl.pathname)) {
+    return NextResponse.next()
+  }
+
   const nonce = crypto.randomUUID()
   const requestHeaders = new Headers(request.headers)
   requestHeaders.set('x-nonce', nonce)
@@ -77,6 +116,15 @@ export function middleware(request: NextRequest) {
   return response
 }
 
+function isSecurityHeaderBypassPath(pathname: string): boolean {
+  return (
+    pathname.startsWith('/_next/static') ||
+    pathname.startsWith('/_next/image') ||
+    pathname === '/favicon.ico' ||
+    pathname === '/robots.txt'
+  )
+}
+
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|robots.txt).*)'],
+  matcher: ['/:path*'],
 }
