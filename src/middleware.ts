@@ -17,7 +17,7 @@ export function buildCspHeader(nonce: string, options: CspOptions = {}): string 
     "style-src-attr 'none'",
     "img-src 'self' blob: data:",
     "font-src 'self'",
-    `connect-src 'self' ${storageOrigins}`,
+    `connect-src 'self' blob: ${storageOrigins}`,
     "media-src 'self' blob:",
     "object-src 'none'",
     "frame-ancestors 'none'",

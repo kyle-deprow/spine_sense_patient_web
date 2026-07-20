@@ -23,7 +23,9 @@ describe('middleware CSP', () => {
 
     const csp = buildCspHeader('nonce-value')
 
-    expect(csp).toContain("connect-src 'self' https://storage.example.test https://cdn.example.test:8443")
+    expect(csp).toContain(
+      "connect-src 'self' blob: https://storage.example.test https://cdn.example.test:8443",
+    )
     expect(csp).not.toContain('https://*.storage.example.test')
     expect(csp).not.toContain('https://storage.example.test/')
   })
