@@ -159,6 +159,109 @@ describe('proxy route handler', () => {
     await expect(response.json()).resolves.toEqual({ data: 'test' })
   })
 
+  it.each([
+    {
+      label: 'completed replay',
+      backendResponse: () =>
+        new Response(null, {
+          status: 204,
+          headers: { 'X-Idempotent-Replayed': 'true' },
+        }),
+      expectedStatus: 204,
+      expectedBody: '',
+      expectedReplay: 'true',
+      expectedRetryAfter: null,
+    },
+    {
+      label: 'completed replay without a retained response representation',
+      backendResponse: () =>
+        Response.json(
+          {
+            code: 'idempotency_result_unavailable',
+            detail: 'The prior mutation completed but its result is not replayable',
+          },
+          { status: 409 },
+        ),
+      expectedStatus: 409,
+      expectedBody: JSON.stringify({
+        code: 'idempotency_result_unavailable',
+        detail: 'The prior mutation completed but its result is not replayable',
+      }),
+      expectedReplay: null,
+      expectedRetryAfter: null,
+    },
+    {
+      label: 'active processing lease',
+      backendResponse: () =>
+        Response.json(
+          {
+            code: 'idempotency_in_progress',
+            detail: 'A request with this idempotency key is still in progress',
+          },
+          { status: 503, headers: { 'Retry-After': '3' } },
+        ),
+      expectedStatus: 503,
+      expectedBody: JSON.stringify({
+        code: 'idempotency_in_progress',
+        detail: 'A request with this idempotency key is still in progress',
+      }),
+      expectedReplay: null,
+      expectedRetryAfter: '3',
+    },
+    {
+      label: 'coordination store unavailable',
+      backendResponse: () =>
+        Response.json(
+          {
+            code: 'idempotency_unavailable',
+            detail: 'Idempotency coordination is temporarily unavailable',
+          },
+          { status: 503, headers: { 'Retry-After': '1' } },
+        ),
+      expectedStatus: 503,
+      expectedBody: JSON.stringify({
+        code: 'idempotency_unavailable',
+        detail: 'Idempotency coordination is temporarily unavailable',
+      }),
+      expectedReplay: null,
+      expectedRetryAfter: '1',
+    },
+  ])(
+    'preserves the F7 idempotency contract for $label',
+    async ({
+      backendResponse,
+      expectedStatus,
+      expectedBody,
+      expectedReplay,
+      expectedRetryAfter,
+    }) => {
+      mockedBackendFetch.mockResolvedValue(backendResponse())
+      const csrf = createCsrfToken(CSRF_SECRET, 'idempotency-contract-test')
+      const request = makeProxyRequest(
+        VALID_PATHNAME,
+        'POST',
+        { spine_patient_sess: 'access-token', spine_patient_csrf: csrf },
+        {
+          'Content-Type': 'application/json',
+          [CSRF_HEADER]: csrf,
+          Origin: ORIGIN,
+          'X-Idempotency-Key': 'stable-offline-mutation-key',
+        },
+        JSON.stringify({}),
+      )
+
+      const response = await POST(request, makeContext(VALID_SEGMENTS))
+
+      expect(response.status).toBe(expectedStatus)
+      await expect(response.text()).resolves.toBe(expectedBody)
+      expect(response.headers.get('X-Idempotent-Replayed')).toBe(expectedReplay)
+      expect(response.headers.get('Retry-After')).toBe(expectedRetryAfter)
+      expect(response.headers.get('Cache-Control')).toBe('no-store')
+      const forwardedHeaders = new Headers(mockedBackendFetch.mock.calls[0]?.[1]?.headers)
+      expect(forwardedHeaders.get('X-Idempotency-Key')).toBe('stable-offline-mutation-key')
+    },
+  )
+
   it('keeps the default backend timeout for normal proxy calls', async () => {
     mockedBackendFetch.mockResolvedValue(Response.json({ data: 'test' }))
 

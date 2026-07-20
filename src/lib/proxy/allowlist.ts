@@ -40,6 +40,10 @@ const DOCUMENT_CONFIRM_RE = new RegExp(`${DOCUMENT_RE}\\/confirm$`, 'i')
 const DOCUMENT_DOWNLOAD_URL_RE = new RegExp(`${DOCUMENT_RE}\\/download-url$`, 'i')
 const DOCUMENT_FINDINGS_RE = new RegExp(`${DOCUMENT_RE}\\/findings$`, 'i')
 const DOCUMENT_TEXT_UPDATE_RE = new RegExp(`${DOCUMENT_RE}\\/(?:text|extracted-text)$`, 'i')
+const TREATMENT_FOLLOWUPS_RE = new RegExp(
+  `^\\/api\\/v1\\/patients\\/me\\/treatments\\/${UUID_RE}\\/followups$`,
+  'i',
+)
 const MISCRIBE_PREFIX = '/api/v1/patients/me/miscribe'
 const MISCRIBE_RECORDINGS_PREFIX = `${MISCRIBE_PREFIX}/recordings`
 const MISCRIBE_RECORDING_RE = `^\\/api\\/v1\\/patients\\/me\\/miscribe\\/recordings\\/${UUID_RE}`
@@ -155,6 +159,16 @@ export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
     methods: ['GET', 'POST', 'PATCH', 'DELETE'],
   },
   { prefix: '/api/v1/patients/me/treatments', methods: ['GET'] },
+  {
+    prefix: '/api/v1/patients/me/treatments',
+    methods: ['POST'],
+    match: 'exact',
+  },
+  {
+    prefix: '/api/v1/patients/me/treatments',
+    methods: ['POST'],
+    pathPattern: TREATMENT_FOLLOWUPS_RE,
+  },
   // Tester/dev comment channel — @test.com accounts only. Exposing it here is
   // safe on its own: the backend independently enforces tester-only access and
   // 403s everyone else, and the payload is structurally isolated from the

@@ -435,6 +435,31 @@ describe('proxy allowlist', () => {
     })
   })
 
+  it('allows only the idempotency-protected treatment creation routes', () => {
+    const treatmentId = '10000000-0000-4000-8000-000000000001'
+    for (const targetPath of [
+      '/api/v1/patients/me/treatments',
+      `/api/v1/patients/me/treatments/${treatmentId}/followups`,
+    ]) {
+      expect(validateProxyTarget(targetPath.slice(1).split('/'), 'POST', `/api/proxy${targetPath}`)).toEqual({
+        ok: true,
+        targetPath,
+      })
+    }
+
+    for (const targetPath of [
+      `/api/v1/patients/me/treatments/${treatmentId}`,
+      '/api/v1/patients/me/treatments/not-a-uuid/followups',
+      `/api/v1/patients/me/treatments/${treatmentId}/unknown`,
+    ]) {
+      expect(validateProxyTarget(targetPath.slice(1).split('/'), 'POST', `/api/proxy${targetPath}`)).toEqual({
+        ok: false,
+        status: 405,
+        code: 'proxy_method_not_allowed',
+      })
+    }
+  })
+
   it('allows only the implemented MyScribe route and method combinations', () => {
     const recordingId = '10000000-0000-4000-8000-000000000001'
     const routes = [
