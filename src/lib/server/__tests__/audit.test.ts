@@ -7,7 +7,7 @@ const TOKEN = 'opaque-access-token-with-private-content'
 
 describe('audit sanitization', () => {
   beforeEach(() => {
-    vi.stubEnv('PATIENT_WEB_CSRF_SECRET', 'audit-test-secret')
+    vi.stubEnv('PATIENT_WEB_CSRF_SECRET', 'audit-test-secret-at-least-thirty-two-bytes')
   })
 
   afterEach(() => {

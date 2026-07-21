@@ -20,7 +20,7 @@ async function makeExportFile(fileName: string, body: string | Uint8Array): Prom
 
 describe('patient app export route', () => {
   beforeEach(() => {
-    vi.stubEnv('PATIENT_WEB_CSRF_SECRET', 'test-patient-web-csrf-secret')
+    vi.stubEnv('PATIENT_WEB_CSRF_SECRET', 'test-patient-web-csrf-secret-at-least-32-bytes')
   })
 
   afterEach(async () => {

@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { getPatientWebConfig, parseAllowedOrigins } from '@/lib/server/config'
+import { getPatientWebConfig, parseAllowedOrigins, parseClientIpMode } from '@/lib/server/config'
 
 describe('patient web config', () => {
   beforeEach(() => {
     vi.stubEnv('BACKEND_INTERNAL_URL', 'https://api.example.test')
-    vi.stubEnv('PATIENT_WEB_CSRF_SECRET', 'test-patient-web-csrf-secret')
+    vi.stubEnv('PATIENT_WEB_CSRF_SECRET', 'test-patient-web-csrf-secret-at-least-32-bytes')
   })
 
   afterEach(() => {
@@ -15,6 +15,7 @@ describe('patient web config', () => {
   it('accepts Azure Bicep boolean casing for Google OAuth BAA confirmation', () => {
     vi.stubEnv('NODE_ENV', 'production')
     vi.stubEnv('ENVIRONMENT', 'production')
+    vi.stubEnv('PATIENT_WEB_CLIENT_IP_MODE', 'unavailable')
     vi.stubEnv('GOOGLE_CLIENT_ID', 'google-web-client-id')
     vi.stubEnv('GOOGLE_CLIENT_SECRET', 'google-web-client-secret')
     vi.stubEnv('GOOGLE_OAUTH_BAA_CONFIRMED', 'True')
@@ -25,6 +26,7 @@ describe('patient web config', () => {
   it('fails closed when Google OAuth is configured without production BAA confirmation', () => {
     vi.stubEnv('NODE_ENV', 'production')
     vi.stubEnv('ENVIRONMENT', 'production')
+    vi.stubEnv('PATIENT_WEB_CLIENT_IP_MODE', 'unavailable')
     vi.stubEnv('GOOGLE_CLIENT_ID', 'google-web-client-id')
     vi.stubEnv('GOOGLE_CLIENT_SECRET', 'google-web-client-secret')
     vi.stubEnv('GOOGLE_OAUTH_BAA_CONFIRMED', 'false')
@@ -79,6 +81,7 @@ describe('patient web config', () => {
 
   it('includes the explicit Front Door origin guard configuration', () => {
     vi.stubEnv('ENVIRONMENT', 'production')
+    vi.stubEnv('PATIENT_WEB_CLIENT_IP_MODE', 'azure-front-door')
     vi.stubEnv('FRONT_DOOR_ORIGIN_GUARD_MODE', 'enforce')
     vi.stubEnv('AZURE_FRONT_DOOR_ID', '12345678-1234-1234-1234-123456789abc')
 
@@ -145,4 +148,55 @@ describe('patient web config', () => {
       )
     },
   )
+
+  it.each(['local', 'development', 'dev', 'test', 'e2e'])(
+    'permits single-bucket rate limiting only for explicit local label %s',
+    (environment) => {
+      expect(parseClientIpMode('single-bucket', environment)).toBe('single-bucket')
+    },
+  )
+
+  it.each(['production', 'prod', 'staging', 'unknown', ''])(
+    'rejects single-bucket rate limiting for hosted or unknown label %s',
+    (environment) => {
+      expect(() => parseClientIpMode('single-bucket', environment)).toThrow()
+    },
+  )
+
+  it.each(['production', 'prod', 'staging'])(
+    'permits unavailable and Azure Front Door modes for hosted label %s',
+    (environment) => {
+      expect(parseClientIpMode('unavailable', environment)).toBe('unavailable')
+      expect(parseClientIpMode('azure-front-door', environment)).toBe('azure-front-door')
+    },
+  )
+
+  it.each(['local', 'development', 'dev', 'test', 'e2e', 'unknown', undefined])(
+    'rejects hosted rate-limit modes for local or unknown label %s',
+    (environment) => {
+      expect(() => parseClientIpMode('unavailable', environment)).toThrow()
+      expect(() => parseClientIpMode('azure-front-door', environment)).toThrow()
+    },
+  )
+
+  it.each([undefined, '', 'forwarded', 'Azure-Front-Door'])(
+    'rejects invalid or missing client IP mode %s',
+    (mode) => {
+      expect(() => parseClientIpMode(mode, 'production')).toThrow('PATIENT_WEB_CLIENT_IP_MODE')
+    },
+  )
+
+  it('rejects a CSRF secret shorter than 32 UTF-8 bytes', () => {
+    vi.stubEnv('PATIENT_WEB_CSRF_SECRET', 'too-short')
+    expect(() => getPatientWebConfig()).toThrow('PATIENT_WEB_CSRF_SECRET must be at least 32 bytes')
+  })
+
+  it('requires an exact Front Door ID in Azure client-IP mode', () => {
+    vi.stubEnv('ENVIRONMENT', 'production')
+    vi.stubEnv('PATIENT_WEB_CLIENT_IP_MODE', 'azure-front-door')
+    vi.stubEnv('AZURE_FRONT_DOOR_ID', '')
+    expect(() => getPatientWebConfig()).toThrow(
+      'AZURE_FRONT_DOOR_ID is required for azure-front-door client IP mode',
+    )
+  })
 })

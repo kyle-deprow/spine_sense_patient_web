@@ -31,7 +31,7 @@ describe('Google OAuth BFF routes', () => {
 
   beforeEach(() => {
     vi.stubEnv('ENVIRONMENT', 'test')
-    vi.stubEnv('PATIENT_WEB_CSRF_SECRET', 'test-patient-web-csrf-secret')
+    vi.stubEnv('PATIENT_WEB_CSRF_SECRET', 'test-patient-web-csrf-secret-at-least-32-bytes')
     vi.stubEnv('PATIENT_WEB_ALLOWED_ORIGINS', 'http://localhost')
     vi.stubEnv('GOOGLE_CLIENT_ID', 'google-web-client-id')
     vi.stubEnv('GOOGLE_CLIENT_SECRET', 'google-web-client-secret')

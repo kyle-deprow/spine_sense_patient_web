@@ -13,8 +13,9 @@ describe('web voice startup audit', () => {
   beforeEach(() => {
     vi.resetModules()
     vi.unstubAllEnvs()
-    vi.stubEnv('PATIENT_WEB_CSRF_SECRET', 'startup-audit-test-csrf-secret')
+    vi.stubEnv('PATIENT_WEB_CSRF_SECRET', 'startup-audit-test-csrf-secret-at-least-32-bytes')
     vi.stubEnv('ENVIRONMENT', 'test')
+    vi.stubEnv('PATIENT_WEB_CLIENT_IP_MODE', 'single-bucket')
     vi.stubEnv('PATIENT_WEB_ALLOWED_ORIGINS', 'https://patient.example.test')
     vi.stubEnv('PATIENT_WEB_AUDIT_ACTOR_SIGNING_CURRENT_KEY_ID', 'startup-current')
     vi.stubEnv(
@@ -77,6 +78,25 @@ describe('web voice startup audit', () => {
     const { auditWebVoicePolicyAtStartup } = await import('@/lib/server/startupAudit')
 
     expect(() => auditWebVoicePolicyAtStartup()).toThrow('PATIENT_WEB_ALLOWED_ORIGINS')
+    expect(mockedAuditLog).not.toHaveBeenCalled()
+  })
+
+  it('fails startup before policy audit for an invalid client IP mode', async () => {
+    vi.stubEnv('PATIENT_WEB_CLIENT_IP_MODE', 'forwarded')
+    const { auditWebVoicePolicyAtStartup } = await import('@/lib/server/startupAudit')
+
+    expect(() => auditWebVoicePolicyAtStartup()).toThrow('PATIENT_WEB_CLIENT_IP_MODE')
+    expect(mockedAuditLog).not.toHaveBeenCalled()
+  })
+
+  it('fails startup before policy audit for hosted single-bucket mode', async () => {
+    vi.stubEnv('ENVIRONMENT', 'production')
+    vi.stubEnv('PATIENT_WEB_CLIENT_IP_MODE', 'single-bucket')
+    const { auditWebVoicePolicyAtStartup } = await import('@/lib/server/startupAudit')
+
+    expect(() => auditWebVoicePolicyAtStartup()).toThrow(
+      'single-bucket is allowed only in local environments',
+    )
     expect(mockedAuditLog).not.toHaveBeenCalled()
   })
 })

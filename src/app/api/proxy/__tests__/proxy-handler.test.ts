@@ -58,7 +58,7 @@ function makeContext(pathSegments: readonly string[]): {
 
 const VALID_PATHNAME = '/api/proxy/api/v1/patients/me/assessments'
 const VALID_SEGMENTS = ['api', 'v1', 'patients', 'me', 'assessments']
-const CSRF_SECRET = 'test-patient-web-csrf-secret'
+const CSRF_SECRET = 'test-patient-web-csrf-secret-at-least-32-bytes'
 const ORIGIN = 'http://localhost'
 
 describe('proxy route handler', () => {

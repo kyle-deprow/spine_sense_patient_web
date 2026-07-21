@@ -3,6 +3,7 @@ import { NextRequest } from 'next/server'
 
 import { CSRF_HEADER, createCsrfToken } from '@/lib/auth/csrf'
 import { backendFetch } from '@/lib/server/backend'
+import { clearRateLimitStore } from '@/lib/server/rate-limit'
 
 vi.mock('@/lib/server/backend', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/server/backend')>()
@@ -10,7 +11,7 @@ vi.mock('@/lib/server/backend', async (importOriginal) => {
 })
 
 const mockedBackendFetch = vi.mocked(backendFetch)
-const CSRF_SECRET = 'test-patient-web-csrf-secret'
+const CSRF_SECRET = 'test-patient-web-csrf-secret-at-least-32-bytes'
 const ORIGIN = 'http://localhost'
 const ACTOR_ID = '10000000-0000-4000-8000-000000000001'
 
@@ -22,7 +23,12 @@ const { POST: authenticatedSetup } = await import('@/app/api/auth/mfa/setup/rout
 const { POST: authenticatedConfirm } = await import('@/app/api/auth/mfa/confirm/route')
 const { DELETE: disable } = await import('@/app/api/auth/mfa/disable/route')
 
-function request(path: string, method: 'POST' | 'DELETE', body: unknown, cookies: Record<string, string> = {}) {
+function request(
+  path: string,
+  method: 'POST' | 'DELETE',
+  body: unknown,
+  cookies: Record<string, string> = {},
+) {
   const csrf = createCsrfToken(CSRF_SECRET, `mfa-route-${path.replaceAll('/', '-')}`)
   const cookie = Object.entries({ spine_patient_csrf: csrf, ...cookies })
     .map(([name, value]) => `${name}=${value}`)
@@ -44,6 +50,7 @@ describe('exact MFA BFF routes', () => {
     vi.stubEnv('PATIENT_WEB_CSRF_SECRET', CSRF_SECRET)
     vi.stubEnv('PATIENT_WEB_ALLOWED_ORIGINS', ORIGIN)
     mockedBackendFetch.mockReset()
+    clearRateLimitStore()
   })
 
   it('injects the HttpOnly transaction into login verification', async () => {
@@ -101,7 +108,9 @@ describe('exact MFA BFF routes', () => {
       secret: 'DISPLAYSECRET',
       otpauth_uri: 'otpauth://totp/test',
     })
-    expect(mockedBackendFetch.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({ mfa_token: 'trusted-transaction' }))
+    expect(mockedBackendFetch.mock.calls[0]?.[1]?.body).toBe(
+      JSON.stringify({ mfa_token: 'trusted-transaction' }),
+    )
     const setCookie = response.headers.getSetCookie().join('\n')
     expect(setCookie).toContain('spine_patient_mfa_pending=pending-secret-id')
     expect(setCookie).toContain('HttpOnly')
@@ -230,7 +239,10 @@ describe('exact MFA BFF routes', () => {
     const init = mockedBackendFetch.mock.calls[0]?.[1]
     expect((init?.headers as Headers).get('Authorization')).toBe('Bearer trusted-access')
     expect(init?.body).toBe(
-      JSON.stringify({ code: '123456', method_id: '20000000-0000-4000-8000-000000000001' }),
+      JSON.stringify({
+        code: '123456',
+        method_id: '20000000-0000-4000-8000-000000000001',
+      }),
     )
     expect(response.status).toBe(200)
   })
@@ -248,13 +260,18 @@ describe('exact MFA BFF routes', () => {
       ),
     )
 
-    expect(mockedBackendFetch).toHaveBeenCalledWith('/api/v1/auth/mfa', expect.objectContaining({ method: 'DELETE' }))
+    expect(mockedBackendFetch).toHaveBeenCalledWith(
+      '/api/v1/auth/mfa',
+      expect.objectContaining({ method: 'DELETE' }),
+    )
     expect(response.headers.getSetCookie().join('\n')).toContain('spine_patient_sess=;')
     expect(response.headers.get('Cache-Control')).toBe('no-store')
   })
 
   it('fails before backend forwarding when transient state is missing', async () => {
-    const response = await confirm(request('/api/auth/mfa/enrollment/confirm', 'POST', { code: '123456' }))
+    const response = await confirm(
+      request('/api/auth/mfa/enrollment/confirm', 'POST', { code: '123456' }),
+    )
 
     expect(response.status).toBe(401)
     expect(mockedBackendFetch).not.toHaveBeenCalled()

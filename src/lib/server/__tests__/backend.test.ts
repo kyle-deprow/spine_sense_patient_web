@@ -9,7 +9,7 @@ import {
 
 describe('backendFetch', () => {
   beforeEach(() => {
-    vi.stubEnv('PATIENT_WEB_CSRF_SECRET', 'test-patient-web-csrf-secret')
+    vi.stubEnv('PATIENT_WEB_CSRF_SECRET', 'test-patient-web-csrf-secret-at-least-32-bytes')
     vi.stubEnv('BACKEND_INTERNAL_URL', 'http://backend.internal')
   })
 
@@ -44,10 +44,7 @@ describe('backendFetch', () => {
   })
 
   it('normalizes fetch timeout failures to backend unavailable', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockRejectedValue(new DOMException('timed out', 'TimeoutError')),
-    )
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new DOMException('timed out', 'TimeoutError')))
 
     await expect(backendFetch('/api/v1/slow')).rejects.toThrow(BackendUnavailableError)
   })

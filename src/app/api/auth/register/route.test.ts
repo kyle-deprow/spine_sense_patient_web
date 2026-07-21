@@ -4,6 +4,7 @@ import { NextRequest } from 'next/server'
 import { CSRF_HEADER, createCsrfToken } from '@/lib/auth/csrf'
 import { BackendUnavailableError, backendFetch } from '@/lib/server/backend'
 import { auditLog } from '@/lib/server/audit'
+import { clearRateLimitStore } from '@/lib/server/rate-limit'
 
 vi.mock('@/lib/server/backend', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/server/backend')>()
@@ -21,7 +22,7 @@ vi.mock('@/lib/server/audit', async (importOriginal) => {
 const mockedBackendFetch = vi.mocked(backendFetch)
 const mockedAuditLog = vi.mocked(auditLog)
 
-const CSRF_SECRET = 'test-patient-web-csrf-secret'
+const CSRF_SECRET = 'test-patient-web-csrf-secret-at-least-32-bytes'
 const ORIGIN = 'http://localhost'
 
 // Import after mocking so the route module picks up the mocked backendFetch.
@@ -64,6 +65,7 @@ describe('register route handler', () => {
     vi.stubEnv('PATIENT_WEB_ALLOWED_ORIGINS', ORIGIN)
     mockedBackendFetch.mockReset()
     mockedAuditLog.mockReset()
+    clearRateLimitStore()
   })
 
   it('normalizes current app registration fields before forwarding to the backend', async () => {

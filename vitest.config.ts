@@ -6,6 +6,7 @@ export default defineConfig({
     environment: 'node',
     env: {
       ENVIRONMENT: 'test',
+      PATIENT_WEB_CLIENT_IP_MODE: 'single-bucket',
       PATIENT_WEB_ALLOWED_ORIGINS: 'https://patient.example.test',
       PATIENT_APP_ENVIRONMENT: 'test',
       NEXT_PUBLIC_STORAGE_DOMAINS:

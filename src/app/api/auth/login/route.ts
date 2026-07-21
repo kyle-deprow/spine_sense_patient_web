@@ -1,11 +1,15 @@
 import type { NextRequest } from 'next/server'
 
 import { validateAuthMutation } from '@/lib/auth/route-guards'
-import { clearAccountTransitionState, forwardCredentialAuth, readRequestJson } from '@/lib/server/auth'
+import {
+  clearAccountTransitionState,
+  forwardCredentialAuth,
+  readRequestJson,
+} from '@/lib/server/auth'
 import { auditLog, createAuditContext } from '@/lib/server/audit'
 import { BackendUnavailableError } from '@/lib/server/backend'
 import { jsonNoStore } from '@/lib/server/responses'
-import { rateLimit, getClientIp } from '@/lib/server/rate-limit'
+import { checkCredentialRateLimit } from '@/lib/server/rate-limit'
 
 const WINDOW_MS = 15 * 60 * 1000 // 15 minutes
 
@@ -24,8 +28,24 @@ export async function POST(request: NextRequest) {
     return clearAccountTransitionState(failure)
   }
 
-  const ip = getClientIp(request)
-  if (!rateLimit(ip, { limit: 10, windowMs: WINDOW_MS })) {
+  const rateLimitResult = checkCredentialRateLimit(request, 'auth.login', {
+    limit: 10,
+    windowMs: WINDOW_MS,
+  })
+  if (rateLimitResult === 'client_ip_unavailable') {
+    auditLog({
+      ts: new Date().toISOString(),
+      event: 'auth.login.failure',
+      method: 'POST',
+      status: 503,
+      reason: 'client_ip_unavailable',
+      ...auditContext,
+    })
+    return clearAccountTransitionState(
+      jsonNoStore({ error: 'service_unavailable' }, { status: 503 }),
+    )
+  }
+  if (rateLimitResult === 'rate_limited') {
     auditLog({
       ts: new Date().toISOString(),
       event: 'auth.login.failure',
@@ -34,10 +54,20 @@ export async function POST(request: NextRequest) {
       reason: 'rate_limited',
       ...auditContext,
     })
-    return clearAccountTransitionState(jsonNoStore({ error: 'too_many_requests' }, { status: 429, headers: { 'Retry-After': '900' } }))
+    return clearAccountTransitionState(
+      jsonNoStore(
+        { error: 'too_many_requests' },
+        { status: 429, headers: { 'Retry-After': '900' } },
+      ),
+    )
   }
 
-  auditLog({ ts: new Date().toISOString(), event: 'auth.login.attempt', method: 'POST', ...auditContext })
+  auditLog({
+    ts: new Date().toISOString(),
+    event: 'auth.login.attempt',
+    method: 'POST',
+    ...auditContext,
+  })
 
   const body = await readRequestJson(request)
   if (body == null) {
@@ -65,7 +95,9 @@ export async function POST(request: NextRequest) {
         reason: 'backend_unavailable',
         ...auditContext,
       })
-      return clearAccountTransitionState(jsonNoStore({ error: 'service_unavailable' }, { status: 503 }))
+      return clearAccountTransitionState(
+        jsonNoStore({ error: 'service_unavailable' }, { status: 503 }),
+      )
     }
     throw err
   }

@@ -22,7 +22,7 @@ vi.mock('@/lib/server/audit', async (importOriginal) => {
 const mockedBackendFetch = vi.mocked(backendFetch)
 const mockedAuditLog = vi.mocked(auditLog)
 
-const CSRF_SECRET = 'test-patient-web-csrf-secret'
+const CSRF_SECRET = 'test-patient-web-csrf-secret-at-least-32-bytes'
 const ORIGIN = 'http://localhost'
 const ACTOR_ID = '10000000-0000-4000-8000-000000000001'
 const ACCESS_TOKEN = 'existing-private-access-token'
@@ -70,7 +70,9 @@ function makeAuthRequest(
   )
 }
 
-function makeContext(pathSegments: string[]): { params: Promise<{ path: string[] }> } {
+function makeContext(pathSegments: string[]): {
+  params: Promise<{ path: string[] }>
+} {
   return { params: Promise.resolve({ path: pathSegments }) }
 }
 
@@ -194,10 +196,10 @@ describe('auth catch-all route handler', () => {
       }),
     )
 
-    const request = makeAuthRequest(
-      '/api/auth/verify/confirm?return_to=patient@example.test',
-      { email: 'patient@example.test', code: 'private-verification-code' },
-    )
+    const request = makeAuthRequest('/api/auth/verify/confirm?return_to=patient@example.test', {
+      email: 'patient@example.test',
+      code: 'private-verification-code',
+    })
     const response = await POST(request, makeContext(['verify', 'confirm']))
 
     expect(response.status).toBe(200)
@@ -395,7 +397,9 @@ describe('auth catch-all route handler', () => {
     const response = await POST(request, makeContext(['verify', 'registration', 'send']))
 
     expect(response.status).toBe(503)
-    await expect(response.json()).resolves.toEqual({ error: 'service_unavailable' })
+    await expect(response.json()).resolves.toEqual({
+      error: 'service_unavailable',
+    })
     expect(mockedAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({
         event: 'auth.generic.allowed',

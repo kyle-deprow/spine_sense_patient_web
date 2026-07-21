@@ -2,7 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 
 import { signAuditActorCookie } from '@/lib/auth/cookies'
-import { forwardCredentialAuth, logoutWithCookie, refreshWithCookie, sessionFromCookie } from '@/lib/server/auth'
+import {
+  forwardCredentialAuth,
+  logoutWithCookie,
+  refreshWithCookie,
+  sessionFromCookie,
+} from '@/lib/server/auth'
 import { BackendUnavailableError, backendFetch } from '@/lib/server/backend'
 
 vi.mock('@/lib/server/backend', async (importOriginal) => {
@@ -33,7 +38,8 @@ function boundSessionCookies(actorId: string, accessToken: string): Record<strin
   return {
     spine_patient_sess: accessToken,
     spine_patient_sess_iat: String(issuedAt),
-    spine_patient_audit_actor: signAuditActorCookie(actorId, accessToken, issuedAt, SIGNING_KEY) ?? '',
+    spine_patient_audit_actor:
+      signAuditActorCookie(actorId, accessToken, issuedAt, SIGNING_KEY) ?? '',
   }
 }
 
@@ -41,7 +47,7 @@ describe('BFF auth boundary', () => {
   const actorId = '10000000-0000-4000-8000-000000000001'
 
   beforeEach(() => {
-    vi.stubEnv('PATIENT_WEB_CSRF_SECRET', 'test-patient-web-csrf-secret')
+    vi.stubEnv('PATIENT_WEB_CSRF_SECRET', 'test-patient-web-csrf-secret-at-least-32-bytes')
     mockedBackendFetch.mockReset()
   })
 
@@ -110,7 +116,9 @@ describe('BFF auth boundary', () => {
   })
 
   it('does not set auth cookies when backend authentication fails', async () => {
-    mockedBackendFetch.mockResolvedValue(Response.json({ error: 'invalid_credentials' }, { status: 401 }))
+    mockedBackendFetch.mockResolvedValue(
+      Response.json({ error: 'invalid_credentials' }, { status: 401 }),
+    )
 
     const response = await forwardCredentialAuth('/api/v1/auth/login', {})
 
@@ -172,7 +180,9 @@ describe('BFF auth boundary', () => {
     const response = await forwardCredentialAuth('/api/v1/auth/login', {})
 
     expect(response.status).toBe(502)
-    await expect(response.json()).resolves.toEqual({ error: 'invalid_auth_transaction' })
+    await expect(response.json()).resolves.toEqual({
+      error: 'invalid_auth_transaction',
+    })
     const setCookie = response.headers.getSetCookie().join('\n')
     expect(setCookie).not.toContain('spine_patient_sess=must-not-be-issued')
     expect(setCookie).toContain('spine_patient_mfa_transaction=;')
@@ -192,7 +202,9 @@ describe('BFF auth boundary', () => {
     })
 
     it('returns 401 refresh_failed when backend returns non-OK', async () => {
-      mockedBackendFetch.mockResolvedValue(Response.json({ error: 'token_invalid' }, { status: 401 }))
+      mockedBackendFetch.mockResolvedValue(
+        Response.json({ error: 'token_invalid' }, { status: 401 }),
+      )
 
       const request = makeRequest({
         spine_patient_refresh: 'stale-refresh-token',
@@ -320,7 +332,9 @@ describe('BFF auth boundary', () => {
     })
 
     it('returns 401 and issues a new CSRF cookie when backend returns non-OK', async () => {
-      mockedBackendFetch.mockResolvedValue(Response.json({ error: 'token_expired' }, { status: 401 }))
+      mockedBackendFetch.mockResolvedValue(
+        Response.json({ error: 'token_expired' }, { status: 401 }),
+      )
 
       const request = makeRequest({
         spine_patient_sess: 'expired-access-token',
@@ -333,7 +347,9 @@ describe('BFF auth boundary', () => {
     })
 
     it('returns 200 with session data when backend returns OK', async () => {
-      mockedBackendFetch.mockResolvedValue(Response.json({ user_id: actorId, email: 'patient@example.test' }))
+      mockedBackendFetch.mockResolvedValue(
+        Response.json({ user_id: actorId, email: 'patient@example.test' }),
+      )
 
       const request = makeRequest(boundSessionCookies(actorId, 'valid-access-token'))
       const response = await sessionFromCookie(request)

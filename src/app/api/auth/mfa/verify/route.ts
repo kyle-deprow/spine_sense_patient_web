@@ -2,11 +2,15 @@ import type { NextRequest } from 'next/server'
 
 import { COOKIE_NAMES, clearMfaTransactionCookies } from '@/lib/auth/cookies'
 import { validateAuthMutation } from '@/lib/auth/route-guards'
-import { clearAccountTransitionState, forwardCredentialAuth, readRequestJson } from '@/lib/server/auth'
+import {
+  clearAccountTransitionState,
+  forwardCredentialAuth,
+  readRequestJson,
+} from '@/lib/server/auth'
 import { auditLog, createAuditContext } from '@/lib/server/audit'
 import { BackendUnavailableError } from '@/lib/server/backend'
 import { jsonNoStore } from '@/lib/server/responses'
-import { rateLimit, getClientIp } from '@/lib/server/rate-limit'
+import { checkCredentialRateLimit } from '@/lib/server/rate-limit'
 
 const WINDOW_MS = 15 * 60 * 1000 // 15 minutes
 
@@ -25,8 +29,24 @@ export async function POST(request: NextRequest) {
     return clearAccountTransitionState(failure)
   }
 
-  const ip = getClientIp(request)
-  if (!rateLimit(ip, { limit: 5, windowMs: WINDOW_MS })) {
+  const rateLimitResult = checkCredentialRateLimit(request, 'auth.mfa.verify', {
+    limit: 5,
+    windowMs: WINDOW_MS,
+  })
+  if (rateLimitResult === 'client_ip_unavailable') {
+    auditLog({
+      ts: new Date().toISOString(),
+      event: 'auth.mfa.verify.failure',
+      method: 'POST',
+      status: 503,
+      reason: 'client_ip_unavailable',
+      ...auditContext,
+    })
+    return clearAccountTransitionState(
+      jsonNoStore({ error: 'service_unavailable' }, { status: 503 }),
+    )
+  }
+  if (rateLimitResult === 'rate_limited') {
     auditLog({
       ts: new Date().toISOString(),
       event: 'auth.mfa.verify.failure',
@@ -36,7 +56,10 @@ export async function POST(request: NextRequest) {
       ...auditContext,
     })
     return clearAccountTransitionState(
-      jsonNoStore({ error: 'too_many_requests' }, { status: 429, headers: { 'Retry-After': '900' } }),
+      jsonNoStore(
+        { error: 'too_many_requests' },
+        { status: 429, headers: { 'Retry-After': '900' } },
+      ),
     )
   }
 
@@ -86,7 +109,9 @@ export async function POST(request: NextRequest) {
         reason: 'backend_unavailable',
         ...auditContext,
       })
-      return clearAccountTransitionState(jsonNoStore({ error: 'service_unavailable' }, { status: 503 }))
+      return clearAccountTransitionState(
+        jsonNoStore({ error: 'service_unavailable' }, { status: 503 }),
+      )
     }
     throw err
   }

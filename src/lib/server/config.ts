@@ -16,7 +16,11 @@ export interface PatientWebConfig {
   environment: string
   frontDoorOriginGuardMode: FrontDoorOriginGuardMode
   azureFrontDoorId: string | null
+  clientIpMode: ClientIpMode
 }
+
+export const CLIENT_IP_MODES = ['azure-front-door', 'single-bucket', 'unavailable'] as const
+export type ClientIpMode = (typeof CLIENT_IP_MODES)[number]
 
 export interface AuditActorSigningKey {
   id: string
@@ -29,7 +33,8 @@ export interface AuditActorSigningKeys {
 }
 
 const SIGNING_KEY_ID_RE = /^[A-Za-z0-9_-]{1,32}$/
-const LOCAL_ORIGIN_ENVIRONMENTS = new Set(['local', 'development', 'test', 'e2e'])
+const LOCAL_ORIGIN_ENVIRONMENTS = new Set(['local', 'development', 'dev', 'test', 'e2e'])
+const HOSTED_ENVIRONMENTS = new Set(['staging', 'production', 'prod'])
 
 function splitList(value: string | undefined): string[] {
   if (!value) return []
@@ -84,6 +89,44 @@ function requireSecret(name: string, fallback?: string): string {
   const value = process.env[name] ?? fallback
   if (value) return value
   throw new Error(`${name} is required outside development`)
+}
+
+function requireSecretBytes(name: string, minimumBytes: number, fallback?: string): string {
+  const value = requireSecret(name, fallback)
+  if (Buffer.byteLength(value, 'utf8') < minimumBytes) {
+    throw new Error(`${name} must be at least ${minimumBytes} bytes`)
+  }
+  return value
+}
+
+export function parseClientIpMode(
+  mode = process.env.PATIENT_WEB_CLIENT_IP_MODE,
+  environment = process.env.ENVIRONMENT,
+): ClientIpMode {
+  const normalizedMode = mode?.trim()
+  const normalizedEnvironment = environment?.trim()
+  if (!normalizedMode || !(CLIENT_IP_MODES as readonly string[]).includes(normalizedMode)) {
+    throw new Error(
+      'PATIENT_WEB_CLIENT_IP_MODE must be azure-front-door, single-bucket, or unavailable',
+    )
+  }
+  if (!normalizedEnvironment) {
+    throw new Error('ENVIRONMENT is required for PATIENT_WEB_CLIENT_IP_MODE')
+  }
+  if (normalizedMode === 'single-bucket' && !LOCAL_ORIGIN_ENVIRONMENTS.has(normalizedEnvironment)) {
+    throw new Error(
+      'PATIENT_WEB_CLIENT_IP_MODE=single-bucket is allowed only in local environments',
+    )
+  }
+  if (
+    (normalizedMode === 'azure-front-door' || normalizedMode === 'unavailable') &&
+    !HOSTED_ENVIRONMENTS.has(normalizedEnvironment)
+  ) {
+    throw new Error(
+      `PATIENT_WEB_CLIENT_IP_MODE=${normalizedMode} is allowed only in hosted environments`,
+    )
+  }
+  return normalizedMode as ClientIpMode
 }
 
 function requireValue(name: string): string {
@@ -175,8 +218,9 @@ function validateBackendUrl(url: string): void {
 
 export function getPatientWebConfig(): PatientWebConfig {
   const isDevelopment = process.env.NODE_ENV === 'development'
-  const csrfSecret = requireSecret(
+  const csrfSecret = requireSecretBytes(
     'PATIENT_WEB_CSRF_SECRET',
+    32,
     isDevelopment ? 'development-only-patient-web-csrf-secret' : undefined,
   )
 
@@ -201,6 +245,10 @@ export function getPatientWebConfig(): PatientWebConfig {
   ) {
     throw new Error('Google OAuth production traffic requires GOOGLE_OAUTH_BAA_CONFIRMED=true')
   }
+  const clientIpMode = parseClientIpMode()
+  if (clientIpMode === 'azure-front-door' && frontDoorOriginGuard.expectedFrontDoorId === null) {
+    throw new Error('AZURE_FRONT_DOOR_ID is required for azure-front-door client IP mode')
+  }
 
   return {
     backendInternalUrl,
@@ -215,5 +263,6 @@ export function getPatientWebConfig(): PatientWebConfig {
     environment: frontDoorOriginGuard.environment,
     frontDoorOriginGuardMode: frontDoorOriginGuard.mode,
     azureFrontDoorId: frontDoorOriginGuard.expectedFrontDoorId,
+    clientIpMode,
   }
 }
