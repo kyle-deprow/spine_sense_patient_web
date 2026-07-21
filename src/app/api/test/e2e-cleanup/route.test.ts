@@ -26,21 +26,20 @@ describe('patient web test cleanup route', () => {
   })
 
   afterEach(() => {
+    vi.doUnmock('@/lib/server/rate-limit')
     vi.resetModules()
     vi.unstubAllEnvs()
   })
 
-  it('is hidden in production unless test support is explicitly enabled', async () => {
-    vi.stubEnv('NODE_ENV', 'production')
-
+  it('is hidden in every recognized environment unless test support is explicitly enabled', async () => {
     const { POST } = await import('./route')
     const response = await POST(makeRequest(TEST_TOKEN))
 
     expect(response.status).toBe(404)
+    expect(response.headers.get('cache-control')).toContain('no-store')
   })
 
-  it('requires the configured bearer token in production', async () => {
-    vi.stubEnv('NODE_ENV', 'production')
+  it('requires the configured bearer token in local test support', async () => {
     vi.stubEnv('PATIENT_WEB_TEST_SUPPORT_ENABLED', 'true')
     vi.stubEnv('PATIENT_WEB_TEST_SUPPORT_TOKEN', TEST_TOKEN)
 
@@ -50,6 +49,48 @@ describe('patient web test cleanup route', () => {
     expect((await POST(makeRequest())).status).toBe(404)
     expect((await POST(makeRequest(TEST_TOKEN))).status).toBe(200)
   })
+
+  it('uses ENVIRONMENT rather than NODE_ENV for authorization', async () => {
+    vi.stubEnv('ENVIRONMENT', 'test')
+    vi.stubEnv('NODE_ENV', 'production')
+    vi.stubEnv('PATIENT_WEB_TEST_SUPPORT_ENABLED', 'true')
+    vi.stubEnv('PATIENT_WEB_TEST_SUPPORT_TOKEN', TEST_TOKEN)
+
+    const { POST } = await import('./route')
+
+    expect((await POST(makeRequest())).status).toBe(404)
+    expect((await POST(makeRequest(TEST_TOKEN))).status).toBe(200)
+  })
+
+  it.each([undefined, '', 'preview', 'unknown'])(
+    'denies an unrecognized explicit environment even with enabled test support: %s',
+    async (environment) => {
+      if (environment === undefined) {
+        delete process.env.ENVIRONMENT
+      } else {
+        vi.stubEnv('ENVIRONMENT', environment)
+      }
+      vi.stubEnv('NODE_ENV', 'development')
+      vi.stubEnv('PATIENT_WEB_TEST_SUPPORT_ENABLED', 'true')
+      vi.stubEnv('PATIENT_WEB_TEST_SUPPORT_TOKEN', TEST_TOKEN)
+
+      const { POST } = await import('./route')
+
+      expect((await POST(makeRequest(TEST_TOKEN))).status).toBe(404)
+    },
+  )
+
+  it.each(['short', 'wrong-token-with-a-different-length'])(
+    'denies invalid configured or supplied bearer tokens: %s',
+    async (token) => {
+      vi.stubEnv('PATIENT_WEB_TEST_SUPPORT_ENABLED', 'true')
+      vi.stubEnv('PATIENT_WEB_TEST_SUPPORT_TOKEN', token === 'short' ? token : TEST_TOKEN)
+
+      const { POST } = await import('./route')
+
+      expect((await POST(makeRequest(token))).status).toBe(404)
+    },
+  )
 
   it('clears BFF rate-limit state after token authorization', async () => {
     vi.stubEnv('NODE_ENV', 'production')
@@ -68,9 +109,41 @@ describe('patient web test cleanup route', () => {
     const response = await POST(makeRequest(TEST_TOKEN))
 
     expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toContain('no-store')
     expect(await response.json()).toEqual({ status: 'cleanup_complete' })
     await expect(rateLimit('route-cleanup-test', { limit: 1, windowMs: 60_000 })).resolves.toBe(
       true,
     )
+  })
+
+  it('does not clear rate-limit state when authorization is denied', async () => {
+    vi.stubEnv('PATIENT_WEB_TEST_SUPPORT_ENABLED', 'true')
+    vi.stubEnv('PATIENT_WEB_TEST_SUPPORT_TOKEN', TEST_TOKEN)
+
+    const { POST } = await import('./route')
+    const { rateLimit } = await import('@/lib/server/rate-limit')
+    const options = { limit: 1, windowMs: 60_000 }
+    await expect(rateLimit('unauthorized-cleanup-test', options)).resolves.toBe(true)
+    await expect(rateLimit('unauthorized-cleanup-test', options)).resolves.toBe(false)
+
+    const response = await POST(makeRequest('wrong-token'))
+
+    expect(response.status).toBe(404)
+    await expect(rateLimit('unauthorized-cleanup-test', options)).resolves.toBe(false)
+  })
+
+  it('awaits cleanup failure and returns a no-store service unavailable response', async () => {
+    vi.stubEnv('PATIENT_WEB_TEST_SUPPORT_ENABLED', 'true')
+    vi.stubEnv('PATIENT_WEB_TEST_SUPPORT_TOKEN', TEST_TOKEN)
+    vi.doMock('@/lib/server/rate-limit', () => ({
+      clearRateLimitStore: vi.fn().mockRejectedValue(new Error('redis unavailable')),
+    }))
+
+    const { POST } = await import('./route')
+    const response = await POST(makeRequest(TEST_TOKEN))
+
+    expect(response.status).toBe(503)
+    expect(response.headers.get('cache-control')).toContain('no-store')
+    expect(await response.json()).toEqual({ error: 'service_unavailable' })
   })
 })

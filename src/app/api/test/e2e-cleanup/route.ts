@@ -1,12 +1,23 @@
-import { timingSafeEqual } from 'node:crypto'
+import { createHash, timingSafeEqual } from 'node:crypto'
 
 import type { NextRequest } from 'next/server'
 
 import { clearRateLimitStore } from '@/lib/server/rate-limit'
 import { jsonNoStore } from '@/lib/server/responses'
 
-function isLocalEnvironment(): boolean {
-  return process.env.NODE_ENV !== 'production'
+const TEST_SUPPORT_ENVIRONMENTS = new Set([
+  'local',
+  'development',
+  'dev',
+  'test',
+  'e2e',
+  'staging',
+  'production',
+  'prod',
+])
+
+function hasExplicitEnvironment(): boolean {
+  return TEST_SUPPORT_ENVIRONMENTS.has(process.env.ENVIRONMENT?.trim() ?? '')
 }
 
 function testSupportEnabled(): boolean {
@@ -19,19 +30,20 @@ function testSupportToken(): string {
 
 function hasTokenAccess(request: NextRequest): boolean {
   const expectedToken = testSupportToken()
-  if (!expectedToken) return false
+  if (Buffer.byteLength(expectedToken, 'utf8') < 32) return false
 
   const authorization = request.headers.get('authorization') ?? ''
-  const [scheme, token] = authorization.split(/\s+/, 2)
-  if (scheme?.toLowerCase() !== 'bearer' || !token) return false
+  const match = /^Bearer[\t ]+(\S+)$/i.exec(authorization)
+  const token = match?.[1]
+  if (!token) return false
 
-  const expected = Buffer.from(expectedToken)
-  const actual = Buffer.from(token)
-  return expected.length === actual.length && timingSafeEqual(expected, actual)
+  const expected = createHash('sha256').update(expectedToken, 'utf8').digest()
+  const actual = createHash('sha256').update(token, 'utf8').digest()
+  return timingSafeEqual(expected, actual)
 }
 
 function hasCleanupAccess(request: NextRequest): boolean {
-  if (isLocalEnvironment()) return true
+  if (!hasExplicitEnvironment()) return false
   if (!testSupportEnabled()) return false
   return hasTokenAccess(request)
 }
