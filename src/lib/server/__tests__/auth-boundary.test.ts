@@ -33,8 +33,7 @@ function boundSessionCookies(actorId: string, accessToken: string): Record<strin
   return {
     spine_patient_sess: accessToken,
     spine_patient_sess_iat: String(issuedAt),
-    spine_patient_audit_actor:
-      signAuditActorCookie(actorId, accessToken, issuedAt, SIGNING_KEY) ?? '',
+    spine_patient_audit_actor: signAuditActorCookie(actorId, accessToken, issuedAt, SIGNING_KEY) ?? '',
   }
 }
 
@@ -111,9 +110,7 @@ describe('BFF auth boundary', () => {
   })
 
   it('does not set auth cookies when backend authentication fails', async () => {
-    mockedBackendFetch.mockResolvedValue(
-      Response.json({ error: 'invalid_credentials' }, { status: 401 }),
-    )
+    mockedBackendFetch.mockResolvedValue(Response.json({ error: 'invalid_credentials' }, { status: 401 }))
 
     const response = await forwardCredentialAuth('/api/v1/auth/login', {})
 
@@ -122,6 +119,63 @@ describe('BFF auth boundary', () => {
     await expect(response.json()).resolves.toEqual({ error: 'auth_failed' })
     expect(response.headers.getSetCookie().join('\n')).toContain('spine_patient_audit_actor=;')
     expect(response.headers.get('Cache-Control')).toBe('no-store')
+  })
+
+  it('keeps an MFA challenge in HttpOnly cookies and never exposes the transaction', async () => {
+    mockedBackendFetch.mockResolvedValue(
+      Response.json({
+        mfa_required: true,
+        mfa_token: 'short-lived-auth-transaction',
+        mfa_method_id: '20000000-0000-4000-8000-000000000001',
+        user_id: actorId,
+      }),
+    )
+
+    const response = await forwardCredentialAuth('/api/v1/auth/login', {
+      email: 'patient@example.test',
+      password: 'redacted',
+    })
+
+    await expect(response.json()).resolves.toEqual({ mfa_required: true })
+    const setCookie = response.headers.getSetCookie().join('\n')
+    expect(setCookie).toContain('spine_patient_mfa_transaction=short-lived-auth-transaction')
+    expect(setCookie).toContain('spine_patient_mfa_method=20000000-0000-4000-8000-000000000001')
+    expect(setCookie).toContain('HttpOnly')
+    expect(setCookie).toContain('SameSite=strict')
+    expect(setCookie).not.toContain('mfa_token')
+    expect(response.headers.get('Cache-Control')).toBe('no-store')
+  })
+
+  it('fails closed when a challenge response omits its transaction', async () => {
+    mockedBackendFetch.mockResolvedValue(Response.json({ mfa_required: true, user_id: actorId }))
+
+    const response = await forwardCredentialAuth('/api/v1/auth/login', {})
+
+    expect(response.status).toBe(502)
+    await expect(response.json()).resolves.toEqual({
+      error: 'invalid_auth_transaction',
+    })
+    expect(response.headers.getSetCookie().join('\n')).toContain('spine_patient_mfa_transaction=;')
+  })
+
+  it('fails closed when a backend response combines a session token pair with a challenge', async () => {
+    mockedBackendFetch.mockResolvedValue(
+      Response.json({
+        access_token: 'must-not-be-issued',
+        refresh_token: 'must-not-be-issued',
+        user_id: actorId,
+        mfa_required: true,
+        mfa_method_id: '20000000-0000-4000-8000-000000000001',
+      }),
+    )
+
+    const response = await forwardCredentialAuth('/api/v1/auth/login', {})
+
+    expect(response.status).toBe(502)
+    await expect(response.json()).resolves.toEqual({ error: 'invalid_auth_transaction' })
+    const setCookie = response.headers.getSetCookie().join('\n')
+    expect(setCookie).not.toContain('spine_patient_sess=must-not-be-issued')
+    expect(setCookie).toContain('spine_patient_mfa_transaction=;')
   })
 
   // ── refreshWithCookie ──────────────────────────────────────────────────────
@@ -138,9 +192,7 @@ describe('BFF auth boundary', () => {
     })
 
     it('returns 401 refresh_failed when backend returns non-OK', async () => {
-      mockedBackendFetch.mockResolvedValue(
-        Response.json({ error: 'token_invalid' }, { status: 401 }),
-      )
+      mockedBackendFetch.mockResolvedValue(Response.json({ error: 'token_invalid' }, { status: 401 }))
 
       const request = makeRequest({
         spine_patient_refresh: 'stale-refresh-token',
@@ -149,7 +201,9 @@ describe('BFF auth boundary', () => {
       const response = await refreshWithCookie(request)
 
       expect(response.status).toBe(401)
-      await expect(response.json()).resolves.toEqual({ error: 'refresh_failed' })
+      await expect(response.json()).resolves.toEqual({
+        error: 'refresh_failed',
+      })
       const setCookie = response.headers.getSetCookie().join('\n')
       expect(setCookie).toContain('spine_patient_sess=;')
       expect(setCookie).toContain('spine_patient_audit_actor=;')
@@ -188,7 +242,9 @@ describe('BFF auth boundary', () => {
       const response = await refreshWithCookie(request)
 
       expect(response.status).toBe(401)
-      await expect(response.json()).resolves.toEqual({ error: 'session_expired' })
+      await expect(response.json()).resolves.toEqual({
+        error: 'session_expired',
+      })
       const setCookie = response.headers.getSetCookie().join('\n')
       expect(setCookie).toContain('spine_patient_sess=;')
       expect(setCookie).toContain('spine_patient_audit_actor=;')
@@ -219,7 +275,9 @@ describe('BFF auth boundary', () => {
       const response = await logoutWithCookie(request)
 
       expect(response.status).toBe(502)
-      await expect(response.json()).resolves.toEqual({ error: 'logout_backend_failed' })
+      await expect(response.json()).resolves.toEqual({
+        error: 'logout_backend_failed',
+      })
       const setCookie = response.headers.getSetCookie().join('\n')
       expect(setCookie).toContain('spine_patient_sess=;')
     })
@@ -231,7 +289,9 @@ describe('BFF auth boundary', () => {
       const response = await logoutWithCookie(request)
 
       expect(response.status).toBe(502)
-      await expect(response.json()).resolves.toEqual({ error: 'logout_backend_failed' })
+      await expect(response.json()).resolves.toEqual({
+        error: 'logout_backend_failed',
+      })
       const setCookie = response.headers.getSetCookie().join('\n')
       expect(setCookie).toContain('spine_patient_sess=;')
     })
@@ -260,11 +320,11 @@ describe('BFF auth boundary', () => {
     })
 
     it('returns 401 and issues a new CSRF cookie when backend returns non-OK', async () => {
-      mockedBackendFetch.mockResolvedValue(
-        Response.json({ error: 'token_expired' }, { status: 401 }),
-      )
+      mockedBackendFetch.mockResolvedValue(Response.json({ error: 'token_expired' }, { status: 401 }))
 
-      const request = makeRequest({ spine_patient_sess: 'expired-access-token' })
+      const request = makeRequest({
+        spine_patient_sess: 'expired-access-token',
+      })
       const response = await sessionFromCookie(request)
 
       expect(response.status).toBe(401)
@@ -273,9 +333,7 @@ describe('BFF auth boundary', () => {
     })
 
     it('returns 200 with session data when backend returns OK', async () => {
-      mockedBackendFetch.mockResolvedValue(
-        Response.json({ user_id: actorId, email: 'patient@example.test' }),
-      )
+      mockedBackendFetch.mockResolvedValue(Response.json({ user_id: actorId, email: 'patient@example.test' }))
 
       const request = makeRequest(boundSessionCookies(actorId, 'valid-access-token'))
       const response = await sessionFromCookie(request)

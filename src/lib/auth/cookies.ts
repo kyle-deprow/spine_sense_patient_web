@@ -3,11 +3,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 import type { NextRequest } from 'next/server'
 import type { NextResponse } from 'next/server'
 
-import {
-  getPatientWebConfig,
-  type AuditActorSigningKey,
-  type AuditActorSigningKeys,
-} from '@/lib/server/config'
+import { getPatientWebConfig, type AuditActorSigningKey, type AuditActorSigningKeys } from '@/lib/server/config'
 
 export const COOKIE_NAMES = {
   access: 'spine_patient_sess',
@@ -15,12 +11,16 @@ export const COOKIE_NAMES = {
   csrf: 'spine_patient_csrf',
   sessionIssuedAt: 'spine_patient_sess_iat',
   auditActor: 'spine_patient_audit_actor',
+  mfaTransaction: 'spine_patient_mfa_transaction',
+  mfaMethod: 'spine_patient_mfa_method',
+  mfaPending: 'spine_patient_mfa_pending',
 } as const
 
 export const ACCESS_TOKEN_MAX_AGE_SECONDS = 15 * 60
 export const REFRESH_TOKEN_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 export const CSRF_TOKEN_MAX_AGE_SECONDS = 2 * 60 * 60
 export const SESSION_MAX_AGE_SECONDS = 12 * 60 * 60 // 12 hours absolute limit
+export const MFA_TRANSACTION_MAX_AGE_SECONDS = 5 * 60
 
 const AUDIT_ACTOR_COOKIE_VERSION = 'v2'
 const AUDIT_ACTOR_SIGNING_PURPOSE = 'patient-web-audit-actor\0'
@@ -44,11 +44,7 @@ export function shouldUseSecureCookies(
   allowInsecureE2e = process.env.PATIENT_WEB_E2E_ALLOW_INSECURE_COOKIES,
   allowedOrigins = process.env.PATIENT_WEB_ALLOWED_ORIGINS,
 ): boolean {
-  if (
-    allowInsecureE2e === 'true' &&
-    nodeEnv === 'production' &&
-    !hasOnlyLocalOrigins(allowedOrigins)
-  ) {
+  if (allowInsecureE2e === 'true' && nodeEnv === 'production' && !hasOnlyLocalOrigins(allowedOrigins)) {
     throw new Error('PATIENT_WEB_E2E_ALLOW_INSECURE_COOKIES must not be set in production')
   }
   if (override === 'true') return true
@@ -117,6 +113,38 @@ export function auditActorCookieOptions(): CookieOptions {
   }
 }
 
+export function mfaTransactionCookieOptions(): CookieOptions {
+  return {
+    httpOnly: true,
+    secure: shouldUseSecureCookies(),
+    sameSite: 'strict',
+    path: '/api/auth/mfa',
+    maxAge: MFA_TRANSACTION_MAX_AGE_SECONDS,
+  }
+}
+
+export function setMfaTransactionCookies(response: NextResponse, transaction: string, methodId?: string | null): void {
+  if (!transaction) throw new Error('Cannot issue an empty MFA transaction')
+  response.cookies.set(COOKIE_NAMES.mfaTransaction, transaction, mfaTransactionCookieOptions())
+  if (methodId) {
+    response.cookies.set(COOKIE_NAMES.mfaMethod, methodId, mfaTransactionCookieOptions())
+  } else {
+    clearCookie(response, COOKIE_NAMES.mfaMethod, mfaTransactionCookieOptions())
+  }
+  clearCookie(response, COOKIE_NAMES.mfaPending, mfaTransactionCookieOptions())
+}
+
+export function setMfaPendingCookie(response: NextResponse, pendingId: string): void {
+  if (!pendingId) throw new Error('Cannot issue an empty MFA pending identifier')
+  response.cookies.set(COOKIE_NAMES.mfaPending, pendingId, mfaTransactionCookieOptions())
+}
+
+export function clearMfaTransactionCookies(response: NextResponse): void {
+  clearCookie(response, COOKIE_NAMES.mfaTransaction, mfaTransactionCookieOptions())
+  clearCookie(response, COOKIE_NAMES.mfaMethod, mfaTransactionCookieOptions())
+  clearCookie(response, COOKIE_NAMES.mfaPending, mfaTransactionCookieOptions())
+}
+
 export function normalizeAuditActorId(value: unknown): string | undefined {
   return typeof value === 'string' && UUID_RE.test(value) ? value.toLowerCase() : undefined
 }
@@ -135,12 +163,8 @@ export function signAuditActorCookie(
   key: AuditActorSigningKey,
 ): string | undefined {
   const normalizedActorId = normalizeAuditActorId(actorId)
-  if (
-    normalizedActorId === undefined ||
-    !accessToken ||
-    !validSessionIssuedAt(issuedAt) ||
-    !KEY_ID_RE.test(key.id)
-  ) return undefined
+  if (normalizedActorId === undefined || !accessToken || !validSessionIssuedAt(issuedAt) || !KEY_ID_RE.test(key.id))
+    return undefined
 
   const correlation = tokenSessionCorrelation(accessToken, key)
   const payload = `${AUDIT_ACTOR_COOKIE_VERSION}.${key.id}.${normalizedActorId}.${issuedAt}.${correlation}`
@@ -197,17 +221,17 @@ export function auditActorIdFromRequest(request: NextRequest): string | undefine
 
 export function issueAuthenticatedSessionCookies(
   response: NextResponse,
-  session: { accessToken: string; refreshToken: string; actorId: unknown; issuedAt?: number },
+  session: {
+    accessToken: string
+    refreshToken: string
+    actorId: unknown
+    issuedAt?: number
+  },
 ): { actorId: string; issuedAt: number; sessionCorrelation: string } {
   const { auditActorSigningKeys } = getPatientWebConfig()
   const actorId = normalizeAuditActorId(session.actorId)
   const issuedAt = session.issuedAt ?? Math.floor(Date.now() / 1000)
-  const actorCookie = signAuditActorCookie(
-    actorId,
-    session.accessToken,
-    issuedAt,
-    auditActorSigningKeys.current,
-  )
+  const actorCookie = signAuditActorCookie(actorId, session.accessToken, issuedAt, auditActorSigningKeys.current)
   if (!session.accessToken || !session.refreshToken || !actorId || !actorCookie) {
     throw new Error('Cannot issue patient web session without a full token pair and trusted actor')
   }
@@ -248,6 +272,10 @@ export function clearAuthCookies(response: NextResponse): void {
     ...auditActorCookieOptions(),
     maxAge: 0,
   })
+}
+
+function clearCookie(response: NextResponse, name: string, options: CookieOptions): void {
+  response.cookies.set(name, '', { ...options, maxAge: 0 })
 }
 
 function sessionIssuedAtCookieOptions(): CookieOptions {

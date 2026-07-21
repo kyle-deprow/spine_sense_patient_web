@@ -20,10 +20,7 @@ export async function backendFetch(
   const target = new URL(path, backendInternalUrl)
 
   const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? BACKEND_TIMEOUT_MS)
-  const signal =
-    init.signal != null
-      ? AbortSignal.any([init.signal, timeoutSignal])
-      : timeoutSignal
+  const signal = init.signal != null ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal
 
   try {
     return await fetch(target, {
@@ -56,18 +53,24 @@ export async function readJsonBody<T>(response: Response): Promise<T> {
 export function hasTokenPair(value: unknown): value is BackendTokenPair {
   if (!value || typeof value !== 'object') return false
   const record = value as Record<string, unknown>
-  return typeof record.access_token === 'string' && typeof record.refresh_token === 'string'
+  return (
+    typeof record.access_token === 'string' &&
+    record.access_token.length > 0 &&
+    typeof record.refresh_token === 'string' &&
+    record.refresh_token.length > 0
+  )
 }
 
 export function stripTokens<T extends Record<string, unknown>>(
   body: T,
-): Omit<T, 'access_token' | 'refresh_token' | 'mfa_token' | 'user_id' | 'mfa_method_id'> {
+): Omit<T, 'access_token' | 'refresh_token' | 'mfa_token' | 'user_id' | 'mfa_method_id' | 'pending_id'> {
   const {
     access_token: _accessToken,
     refresh_token: _refreshToken,
     mfa_token: _mfaToken,
     user_id: _userId,
     mfa_method_id: _mfaMethodId,
+    pending_id: _pendingId,
     ...safeBody
   } = body
   return safeBody

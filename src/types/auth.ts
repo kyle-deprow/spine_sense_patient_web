@@ -7,6 +7,7 @@ export interface BackendTokenPair {
 /** Raw shape returned by the backend — never serialised into a browser response. */
 export interface BackendLoginResponse extends Partial<BackendTokenPair> {
   mfa_required?: boolean
+  mfa_enrollment_required?: boolean
   mfa_token?: string | null
   user_id?: string | null
   mfa_method_id?: string | null
@@ -15,6 +16,7 @@ export interface BackendLoginResponse extends Partial<BackendTokenPair> {
 /** Browser-facing login response — sensitive credentials and identifiers are stripped by stripTokens. */
 export interface LoginResponse {
   mfa_required?: boolean
+  mfa_enrollment_required?: boolean
 }
 
 export interface RegisterResponse {
@@ -39,4 +41,6 @@ export interface SessionResponse {
   is_active: boolean
   verification_status: string
   has_completed_onboarding: boolean
+  mfa_verified: boolean
+  mfa_step_up_required: boolean
 }

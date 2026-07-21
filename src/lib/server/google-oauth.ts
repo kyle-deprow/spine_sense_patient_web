@@ -4,12 +4,17 @@ import { createHash, randomBytes } from 'crypto'
 import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
 
-import { clearAuthCookies, issueAuthenticatedSessionCookies } from '@/lib/auth/cookies'
+import {
+  clearAuthCookies,
+  clearMfaTransactionCookies,
+  issueAuthenticatedSessionCookies,
+  setMfaTransactionCookies,
+} from '@/lib/auth/cookies'
 import { auditLog, createAuditContext } from '@/lib/server/audit'
 import { issueCsrfCookie, resolveBackendAuthenticatedActorId } from '@/lib/server/auth'
 import { backendFetch, hasTokenPair, readJsonBody } from '@/lib/server/backend'
 import { getPatientWebConfig } from '@/lib/server/config'
-import type { BackendLoginResponse } from '@/types/auth'
+import type { BackendLoginResponse, BackendTokenPair } from '@/types/auth'
 
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
@@ -122,6 +127,7 @@ export function startGoogleOAuth(request: NextRequest): NextResponse {
 
   const response = NextResponse.redirect(authUrl)
   clearAuthCookies(response)
+  clearMfaTransactionCookies(response)
   response.cookies.set(OAUTH_COOKIE_NAMES.state, state, oauthCookieOptions())
   response.cookies.set(OAUTH_COOKIE_NAMES.verifier, verifier, oauthCookieOptions())
   response.cookies.set(OAUTH_COOKIE_NAMES.mode, mode, oauthCookieOptions())
@@ -157,24 +163,60 @@ export async function completeGoogleOAuth(request: NextRequest): Promise<NextRes
     const backendPath = mode === 'register' ? '/api/v1/auth/register/google' : '/api/v1/auth/login/google'
     const backendResponse = await backendFetch(backendPath, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
       body: JSON.stringify({ id_token: token.id_token }),
     })
     const data = await readJsonBody<BackendLoginResponse & BackendErrorResponse>(backendResponse)
-    const backendActorId = data.user_id
-    if (!backendResponse.ok || !hasTokenPair(data)) {
+    const authData = data as BackendLoginResponse & BackendErrorResponse
+    const backendActorId = authData.user_id
+    if (!backendResponse.ok) {
       return googleFailureRedirect(request, mode, googleFailureReason(mode, backendResponse.status, data))
     }
-    const actorId = await resolveBackendAuthenticatedActorId(backendActorId, data)
+    const tokenPairIssued = hasTokenPair(data)
+    const hasChallenge = authData.mfa_required === true || authData.mfa_enrollment_required === true
+    const malformedChallenge =
+      (authData.mfa_required !== undefined && typeof authData.mfa_required !== 'boolean') ||
+      (authData.mfa_enrollment_required !== undefined && typeof authData.mfa_enrollment_required !== 'boolean') ||
+      (authData.mfa_required === true && authData.mfa_enrollment_required === true) ||
+      (hasChallenge && tokenPairIssued) ||
+      (hasChallenge && (typeof authData.mfa_token !== 'string' || authData.mfa_token.length === 0)) ||
+      (authData.mfa_required === true &&
+        (typeof authData.mfa_method_id !== 'string' || authData.mfa_method_id.length === 0))
+    if (malformedChallenge || (!tokenPairIssued && !hasChallenge)) {
+      return googleFailureRedirect(request, mode, 'callback_failed')
+    }
+    if (hasChallenge) {
+      const challengePath = authData.mfa_enrollment_required ? '/mfa-enrollment' : '/verify?mode=mfa'
+      const response = redirectWithinApp(request, challengePath)
+      clearAuthCookies(response)
+      clearMfaTransactionCookies(response)
+      setMfaTransactionCookies(response, authData.mfa_token as string, authData.mfa_method_id)
+      issueCsrfCookie(response)
+      clearOauthCookies(response)
+      auditLog({
+        ts: new Date().toISOString(),
+        event: 'auth.mfa.interim',
+        method: 'GET',
+        status: backendResponse.status,
+        ...auditContext,
+      })
+      return response
+    }
+    const tokenPair = data as BackendTokenPair
+    const actorId = await resolveBackendAuthenticatedActorId(backendActorId, tokenPair)
     if (actorId === undefined) {
       return googleFailureRedirect(request, mode, 'callback_failed')
     }
 
     const response = redirectWithinApp(request, returnTo)
     clearAuthCookies(response)
+    clearMfaTransactionCookies(response)
     const issued = issueAuthenticatedSessionCookies(response, {
-      accessToken: data.access_token,
-      refreshToken: data.refresh_token,
+      accessToken: tokenPair.access_token,
+      refreshToken: tokenPair.refresh_token,
       actorId,
     })
     issueCsrfCookie(response)
@@ -204,11 +246,7 @@ export async function completeGoogleOAuth(request: NextRequest): Promise<NextRes
   }
 }
 
-async function exchangeGoogleCode(
-  request: NextRequest,
-  code: string,
-  verifier: string,
-): Promise<GoogleTokenResponse> {
+async function exchangeGoogleCode(request: NextRequest, code: string, verifier: string): Promise<GoogleTokenResponse> {
   const { clientId, clientSecret } = googleConfig()
   const body = new URLSearchParams({
     code,
@@ -221,7 +259,10 @@ async function exchangeGoogleCode(
 
   const response = await fetch(GOOGLE_TOKEN_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/json',
+    },
     body,
     cache: 'no-store',
     signal: AbortSignal.timeout(15_000),
@@ -231,23 +272,21 @@ async function exchangeGoogleCode(
     throw new Error('Google OAuth token exchange failed')
   }
 
-  return await response.json() as GoogleTokenResponse
+  return (await response.json()) as GoogleTokenResponse
 }
 
-function googleFailureRedirect(
-  request: NextRequest,
-  mode: GoogleAuthMode,
-  reason: GoogleFailureReason,
-): NextResponse {
+function googleFailureRedirect(request: NextRequest, mode: GoogleAuthMode, reason: GoogleFailureReason): NextResponse {
   const auditContext = createAuditContext()
-  const targetPath = mode === 'register' && (reason === 'account_exists' || reason === 'already_linked')
-    ? '/login'
-    : mode === 'register'
-      ? '/register'
-      : '/login'
+  const targetPath =
+    mode === 'register' && (reason === 'account_exists' || reason === 'already_linked')
+      ? '/login'
+      : mode === 'register'
+        ? '/register'
+        : '/login'
   const target = `${targetPath}?socialAuthError=${encodeURIComponent(reason)}`
   const response = redirectWithinApp(request, target)
   clearAuthCookies(response)
+  clearMfaTransactionCookies(response)
   clearOauthCookies(response)
   auditLog({
     ts: new Date().toISOString(),
@@ -259,11 +298,7 @@ function googleFailureRedirect(
   return response
 }
 
-function googleFailureReason(
-  mode: GoogleAuthMode,
-  status: number,
-  data: BackendErrorResponse,
-): GoogleFailureReason {
+function googleFailureReason(mode: GoogleAuthMode, status: number, data: BackendErrorResponse): GoogleFailureReason {
   const detail = typeof data.detail === 'string' ? data.detail : ''
 
   if (mode === 'register' && status === 409 && detail === 'ACCOUNT_EXISTS_REQUIRES_LOGIN') {

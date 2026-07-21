@@ -6,19 +6,16 @@ import {
   SESSION_MAX_AGE_SECONDS,
   auditActorIdFromRequest,
   clearAuthCookies,
+  clearMfaTransactionCookies,
   issueAuthenticatedSessionCookies,
+  setMfaTransactionCookies,
   setCsrfCookie,
 } from '@/lib/auth/cookies'
 import { createCsrfToken } from '@/lib/auth/csrf'
 import { BackendUnavailableError, backendFetch, hasTokenPair, readJsonBody, stripTokens } from '@/lib/server/backend'
 import { getPatientWebConfig } from '@/lib/server/config'
 import { jsonNoStore, withNoStore } from '@/lib/server/responses'
-import {
-  auditLog,
-  backendAuthenticatedActorId,
-  createAuditContext,
-  type AuditContext,
-} from '@/lib/server/audit'
+import { auditLog, backendAuthenticatedActorId, createAuditContext, type AuditContext } from '@/lib/server/audit'
 import type { BackendLoginResponse, BackendTokenPair } from '@/types/auth'
 
 type JsonRecord = Record<string, unknown>
@@ -105,13 +102,16 @@ export async function forwardCredentialAuth(
 
   if (!backendResponse.ok) {
     const normalized = normalizeAuthError(backendResponse.status, options.errorMode, data)
-    return clearAndNoStore(normalized.body, normalized.status)
+    const response = clearAndNoStore(normalized.body, normalized.status)
+    if (!backendPath.includes('/mfa/verify')) clearMfaTransactionCookies(response)
+    return response
   }
 
   // The backend authenticated this UUID; never derive actor attribution from JWT claims.
   const actorId = await resolveBackendAuthenticatedActorId(data?.user_id, data)
   if (actorId !== undefined) options.onAuthenticatedActor?.(actorId)
   const mfaRequired = data?.mfa_required
+  const mfaEnrollmentRequired = data?.mfa_enrollment_required
 
   // Derive audit event name from the backend path before stripTokens discards user_id.
   const auditContext = options.auditContext ?? createAuditContext()
@@ -119,12 +119,30 @@ export async function forwardCredentialAuth(
   const successEvent = isMfaVerify ? 'auth.mfa.verify.success' : 'auth.login.success'
 
   const tokenPairIssued = hasTokenPair(data)
+  const hasChallenge = mfaRequired === true || mfaEnrollmentRequired === true
+  const malformedChallenge =
+    (mfaRequired !== undefined && typeof mfaRequired !== 'boolean') ||
+    (mfaEnrollmentRequired !== undefined && typeof mfaEnrollmentRequired !== 'boolean') ||
+    (mfaRequired === true && mfaEnrollmentRequired === true) ||
+    (hasChallenge && tokenPairIssued) ||
+    (hasChallenge && (typeof data.mfa_token !== 'string' || data.mfa_token.length === 0)) ||
+    (mfaRequired === true && (typeof data.mfa_method_id !== 'string' || data.mfa_method_id.length === 0))
+
+  const permitsUnauthenticatedSuccess = backendPath.includes('/register/patient')
+  if (malformedChallenge || (!tokenPairIssued && !hasChallenge && !permitsUnauthenticatedSuccess)) {
+    const failure = clearAndNoStore({ error: 'invalid_auth_transaction' }, 502)
+    clearMfaTransactionCookies(failure)
+    return failure
+  }
   if (tokenPairIssued && actorId === undefined) {
     return clearAndNoStore({ error: 'authenticated_actor_unavailable' }, 502)
   }
 
-  const response = jsonNoStore(safeAuthResponse(data as JsonRecord), { status: backendResponse.status })
+  const response = jsonNoStore(safeAuthResponse(data as JsonRecord), {
+    status: backendResponse.status,
+  })
   clearAuthCookies(response)
+  clearMfaTransactionCookies(response)
 
   if (tokenPairIssued && actorId !== undefined) {
     const issued = issueAuthenticatedSessionCookies(response, {
@@ -151,7 +169,9 @@ export async function forwardCredentialAuth(
       sessionCorrelation: issued.sessionCorrelation,
       reason: 'backend_token_pair',
     })
-  } else if (mfaRequired) {
+  } else if (hasChallenge) {
+    const challenge = data as BackendLoginResponse
+    setMfaTransactionCookies(response, challenge.mfa_token as string, challenge.mfa_method_id)
     issueCsrfCookie(response)
     auditLog({
       ts: new Date().toISOString(),
@@ -230,6 +250,7 @@ export async function logoutWithCookie(request: NextRequest): Promise<NextRespon
     // Already logged out — cookies are absent, nothing to revoke.
     const response = jsonNoStore({ success: true })
     clearAuthCookies(response)
+    clearMfaTransactionCookies(response)
     return response
   }
 
@@ -255,11 +276,13 @@ export async function logoutWithCookie(request: NextRequest): Promise<NextRespon
   if (!backendOk) {
     const response = jsonNoStore({ error: 'logout_backend_failed' }, { status: 502 })
     clearAuthCookies(response)
+    clearMfaTransactionCookies(response)
     return response
   }
 
   const response = jsonNoStore({ success: true })
   clearAuthCookies(response)
+  clearMfaTransactionCookies(response)
   return response
 }
 
@@ -282,7 +305,9 @@ export async function sessionFromCookie(request: NextRequest): Promise<NextRespo
   const data = await readJsonBody<JsonRecord>(backendResponse)
 
   if (!backendResponse.ok) {
-    const response = jsonNoStore(data ?? { error: 'unauthorized' }, { status: backendResponse.status })
+    const response = jsonNoStore(data ?? { error: 'unauthorized' }, {
+      status: backendResponse.status,
+    })
     if (backendResponse.status === 401) {
       clearAuthCookies(response)
       issueCsrfCookie(response)
@@ -308,7 +333,10 @@ function safeAuthResponse(data: JsonRecord): JsonRecord {
   return stripTokens(data)
 }
 
-function toTokenPair(data: BackendTokenPair): { accessToken: string; refreshToken: string } {
+function toTokenPair(data: BackendTokenPair): {
+  accessToken: string
+  refreshToken: string
+} {
   return {
     accessToken: data.access_token,
     refreshToken: data.refresh_token,
@@ -323,6 +351,7 @@ export function clearAndNoStore(body: unknown, status = 200): NextResponse {
 
 export function clearAccountTransitionState(response: NextResponse): NextResponse {
   clearAuthCookies(response)
+  clearMfaTransactionCookies(response)
   return response
 }
 
