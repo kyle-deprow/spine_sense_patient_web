@@ -7,6 +7,7 @@ import {
   type Page,
   type Response as PlaywrightResponse,
 } from '@playwright/test'
+import { createHash } from 'node:crypto'
 
 import { fullAssessmentScenario } from './fixtures/fullAssessmentScenario'
 
@@ -75,6 +76,17 @@ type AssessmentDocumentRecord = {
   fileSizeBytes?: number | null
   processing_status?: string
   processingStatus?: string
+}
+
+type AssessmentReportGenerationPayload = {
+  id?: unknown
+  format?: unknown
+  file_name?: unknown
+  content_type?: unknown
+  byte_size?: unknown
+  sha256?: unknown
+  download_url?: unknown
+  expires_in_seconds?: unknown
 }
 
 const SCREENING_ANSWERS_BY_ID = new Map(fullAssessmentScenario.screening.map((answer) => [answer.id, answer]))
@@ -448,6 +460,43 @@ function expectQuestionnaireMutationContracts(
 function isAssessmentReportGenerationResponse(response: PlaywrightResponse): boolean {
   const url = new URL(response.url())
   return response.request().method() === 'POST' && ASSESSMENT_REPORT_PROXY_PATH_RE.test(url.pathname)
+}
+
+async function expectRenderedAssessmentPdf(request: APIRequestContext, response: PlaywrightResponse): Promise<void> {
+  const payload = (await response.json()) as AssessmentReportGenerationPayload
+  expect(typeof payload.id).toBe('string')
+  expect(payload.format).toBe('pdf')
+  expect(typeof payload.file_name).toBe('string')
+  expect(payload.file_name).toMatch(/^spinesense-assessment-report-[0-9a-f]{8}\.pdf$/i)
+  expect(payload.content_type).toBe('application/pdf')
+  expect(Number.isInteger(payload.byte_size) && Number(payload.byte_size) > 0).toBe(true)
+  expect(payload.sha256).toMatch(/^[0-9a-f]{64}$/i)
+  expect(Number.isInteger(payload.expires_in_seconds) && Number(payload.expires_in_seconds) > 0).toBe(true)
+  expect(typeof payload.download_url).toBe('string')
+
+  const downloadUrl = new URL(String(payload.download_url))
+  expect(['http:', 'https:']).toContain(downloadUrl.protocol)
+  if (EXPECT_SECURE_COOKIES) expect(downloadUrl.protocol).toBe('https:')
+
+  const download = await request.get(downloadUrl.toString(), {
+    timeout: 60_000,
+  })
+  expect(download.status(), 'generated report download failed').toBe(200)
+  expect(download.headers()['content-type']?.split(';', 1)[0]).toBe('application/pdf')
+  expect(download.headers()['content-disposition']).toContain('attachment;')
+  expect(download.headers()['content-disposition']).toContain(String(payload.file_name))
+
+  const pdf = await download.body()
+  expect(pdf.byteLength).toBe(payload.byte_size)
+  expect(pdf.subarray(0, 5).toString('ascii')).toBe('%PDF-')
+  expect(
+    pdf
+      .subarray(Math.max(0, pdf.byteLength - 1024))
+      .toString('latin1')
+      .trimEnd()
+      .endsWith('%%EOF'),
+  ).toBe(true)
+  expect(createHash('sha256').update(pdf).digest('hex')).toBe(payload.sha256)
 }
 
 async function postTestSupport(
@@ -2106,7 +2155,9 @@ test.describe('patient web full assessment flow', () => {
         .catch(() => 'non-JSON response')
       throw new Error(`Assessment report generation failed status=${reportResponse.status()} body=${reportError}`)
     }
+    await expectRenderedAssessmentPdf(request, reportResponse)
     await expect(page.getByTestId('results-report-error')).toBeHidden()
+    await expectNoBrowserStorage(page)
     await waitForEnabledAndClick(page, 'tab-home', 30_000)
 
     await expect(page.locator('[data-testid="home-screen"]:visible')).toBeVisible({ timeout: 60_000 })
