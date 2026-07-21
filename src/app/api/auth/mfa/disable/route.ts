@@ -8,7 +8,7 @@ import { credentialRateLimitFailureResponse } from '@/lib/server/rate-limit'
 export async function DELETE(request: NextRequest) {
   const failure = validateAuthMutation(request)
   if (failure) return failure
-  const rateLimitFailure = credentialRateLimitFailureResponse(request, 'auth.mfa.disable')
+  const rateLimitFailure = await credentialRateLimitFailureResponse(request, 'auth.mfa.disable')
   if (rateLimitFailure) return rateLimitFailure
   return disableMfa(request, await readRequestJson(request))
 }

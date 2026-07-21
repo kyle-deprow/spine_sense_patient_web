@@ -29,17 +29,17 @@ export async function POST(request: NextRequest) {
     return clearAccountTransitionState(failure)
   }
 
-  const rateLimitResult = checkCredentialRateLimit(request, 'auth.mfa.verify', {
+  const rateLimitResult = await checkCredentialRateLimit(request, 'auth.mfa.verify', {
     limit: 5,
     windowMs: WINDOW_MS,
   })
-  if (rateLimitResult === 'client_ip_unavailable') {
+  if (rateLimitResult === 'client_ip_unavailable' || rateLimitResult === 'store_unavailable') {
     auditLog({
       ts: new Date().toISOString(),
       event: 'auth.mfa.verify.failure',
       method: 'POST',
       status: 503,
-      reason: 'client_ip_unavailable',
+      reason: rateLimitResult,
       ...auditContext,
     })
     return clearAccountTransitionState(

@@ -59,13 +59,13 @@ function makeInvalidJsonRequest(ip = '203.0.113.11'): NextRequest {
 }
 
 describe('register route handler', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.stubEnv('ENVIRONMENT', 'test')
     vi.stubEnv('PATIENT_WEB_CSRF_SECRET', CSRF_SECRET)
     vi.stubEnv('PATIENT_WEB_ALLOWED_ORIGINS', ORIGIN)
     mockedBackendFetch.mockReset()
     mockedAuditLog.mockReset()
-    clearRateLimitStore()
+    await clearRateLimitStore()
   })
 
   it('normalizes current app registration fields before forwarding to the backend', async () => {

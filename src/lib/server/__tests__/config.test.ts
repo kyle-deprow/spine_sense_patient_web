@@ -1,11 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { getPatientWebConfig, parseAllowedOrigins, parseClientIpMode } from '@/lib/server/config'
+import {
+  getPatientWebConfig,
+  parseAllowedOrigins,
+  parseClientIpMode,
+  parseCredentialRateLimitConfig,
+} from '@/lib/server/config'
 
 describe('patient web config', () => {
   beforeEach(() => {
     vi.stubEnv('BACKEND_INTERNAL_URL', 'https://api.example.test')
     vi.stubEnv('PATIENT_WEB_CSRF_SECRET', 'test-patient-web-csrf-secret-at-least-32-bytes')
+    vi.stubEnv('PATIENT_WEB_CREDENTIAL_RATE_LIMIT_STORE', 'redis')
+    vi.stubEnv('REDIS_URL', 'rediss://:test-password@redis.example.test:6380/0')
   })
 
   afterEach(() => {
@@ -185,6 +192,36 @@ describe('patient web config', () => {
       expect(() => parseClientIpMode(mode, 'production')).toThrow('PATIENT_WEB_CLIENT_IP_MODE')
     },
   )
+
+  it('requires a TLS Redis store for hosted credential throttling', () => {
+    expect(() =>
+      parseCredentialRateLimitConfig(
+        'redis',
+        'redis://:password@redis.example.test:6379/0',
+        'production',
+      ),
+    ).toThrow('requires a rediss://')
+    expect(
+      parseCredentialRateLimitConfig(
+        'redis',
+        'rediss://:password@redis.example.test:6380/0',
+        'production',
+      ),
+    ).toEqual({
+      store: 'redis',
+      redisUrl: 'rediss://:password@redis.example.test:6380/0',
+    })
+  })
+
+  it('allows the bounded in-memory store only when explicitly local', () => {
+    expect(parseCredentialRateLimitConfig('memory', '', 'test')).toEqual({
+      store: 'memory',
+      redisUrl: null,
+    })
+    expect(() => parseCredentialRateLimitConfig('memory', '', 'production')).toThrow(
+      'only in local environments',
+    )
+  })
 
   it('rejects a CSRF secret shorter than 32 UTF-8 bytes', () => {
     vi.stubEnv('PATIENT_WEB_CSRF_SECRET', 'too-short')

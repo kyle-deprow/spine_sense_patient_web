@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const TEST_TOKEN = 'test-support-token-with-at-least-32-chars'
 
@@ -11,6 +11,20 @@ function makeRequest(token?: string): NextRequest {
 }
 
 describe('patient web test cleanup route', () => {
+  beforeEach(() => {
+    vi.stubEnv('ENVIRONMENT', 'test')
+    vi.stubEnv('PATIENT_WEB_CLIENT_IP_MODE', 'single-bucket')
+    vi.stubEnv('PATIENT_WEB_CREDENTIAL_RATE_LIMIT_STORE', 'memory')
+    vi.stubEnv('REDIS_URL', '')
+    vi.stubEnv('PATIENT_WEB_CSRF_SECRET', 'cleanup-test-csrf-secret-at-least-32-bytes')
+    vi.stubEnv('PATIENT_WEB_ALLOWED_ORIGINS', 'https://patient.example.test')
+    vi.stubEnv('PATIENT_WEB_AUDIT_ACTOR_SIGNING_CURRENT_KEY_ID', 'test-current')
+    vi.stubEnv(
+      'PATIENT_WEB_AUDIT_ACTOR_SIGNING_CURRENT_KEY',
+      'patient-web-test-actor-signing-key-32-bytes',
+    )
+  })
+
   afterEach(() => {
     vi.resetModules()
     vi.unstubAllEnvs()
@@ -44,13 +58,19 @@ describe('patient web test cleanup route', () => {
 
     const { POST } = await import('./route')
     const { rateLimit } = await import('@/lib/server/rate-limit')
-    expect(rateLimit('route-cleanup-test', { limit: 1, windowMs: 60_000 })).toBe(true)
-    expect(rateLimit('route-cleanup-test', { limit: 1, windowMs: 60_000 })).toBe(false)
+    await expect(rateLimit('route-cleanup-test', { limit: 1, windowMs: 60_000 })).resolves.toBe(
+      true,
+    )
+    await expect(rateLimit('route-cleanup-test', { limit: 1, windowMs: 60_000 })).resolves.toBe(
+      false,
+    )
 
     const response = await POST(makeRequest(TEST_TOKEN))
 
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ status: 'cleanup_complete' })
-    expect(rateLimit('route-cleanup-test', { limit: 1, windowMs: 60_000 })).toBe(true)
+    await expect(rateLimit('route-cleanup-test', { limit: 1, windowMs: 60_000 })).resolves.toBe(
+      true,
+    )
   })
 })

@@ -5,6 +5,37 @@ import { CSRF_HEADER, createCsrfToken } from '@/lib/auth/csrf'
 import { backendFetch } from '@/lib/server/backend'
 import { clearRateLimitStore } from '@/lib/server/rate-limit'
 
+const redisMocks = vi.hoisted(() => ({
+  connect: vi.fn(async () => undefined),
+  eval: vi.fn(async () => 1),
+  scan: vi.fn(async () => ['0', []] as [string, string[]]),
+  unlink: vi.fn(async () => 0),
+}))
+
+vi.mock('ioredis', () => ({
+  default: class MockRedis {
+    status = 'wait'
+    constructor() {
+      redisMocks.connect.mockImplementationOnce(async () => {
+        this.status = 'ready'
+      })
+    }
+    on() {
+      return this
+    }
+    async connect() {
+      await redisMocks.connect()
+      this.status = 'ready'
+    }
+    eval = redisMocks.eval
+    scan = redisMocks.scan
+    unlink = redisMocks.unlink
+    disconnect() {
+      this.status = 'end'
+    }
+  },
+}))
+
 vi.mock('@/lib/server/backend', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/server/backend')>()
   return { ...actual, backendFetch: vi.fn() }
@@ -26,7 +57,11 @@ const { DELETE: disable } = await import('@/app/api/auth/mfa/disable/route')
 
 type CredentialHandler = (request: NextRequest) => Promise<Response>
 
-function credentialRequest(path: string, method: 'POST' | 'DELETE' = 'POST'): NextRequest {
+function credentialRequest(
+  path: string,
+  method: 'POST' | 'DELETE' = 'POST',
+  extraHeaders: Record<string, string> = {},
+): NextRequest {
   const csrf = createCsrfToken(CSRF_SECRET, `credential-boundary-${path}`)
   return new NextRequest(`${ORIGIN}${path}`, {
     method,
@@ -39,6 +74,7 @@ function credentialRequest(path: string, method: 'POST' | 'DELETE' = 'POST'): Ne
       'x-real-ip': '198.51.100.3',
       'x-azure-clientip': '198.51.100.4',
       'x-azure-socketip': '198.51.100.5',
+      ...extraHeaders,
     },
     body: JSON.stringify({
       email: 'synthetic@example.test',
@@ -53,16 +89,21 @@ function credentialRequest(path: string, method: 'POST' | 'DELETE' = 'POST'): Ne
 describe('credential route rate-limit boundary', () => {
   let stdout: ReturnType<typeof vi.spyOn>
 
-  beforeEach(() => {
-    clearRateLimitStore()
-    mockedBackendFetch.mockReset()
+  beforeEach(async () => {
+    vi.stubEnv('ENVIRONMENT', 'test')
+    vi.stubEnv('PATIENT_WEB_CLIENT_IP_MODE', 'single-bucket')
+    vi.stubEnv('PATIENT_WEB_CREDENTIAL_RATE_LIMIT_STORE', 'memory')
+    vi.stubEnv('REDIS_URL', '')
     vi.stubEnv('PATIENT_WEB_CSRF_SECRET', CSRF_SECRET)
     vi.stubEnv('PATIENT_WEB_ALLOWED_ORIGINS', ORIGIN)
+    await clearRateLimitStore()
+    mockedBackendFetch.mockReset()
+    redisMocks.eval.mockReset().mockResolvedValue(1)
     stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
   })
 
   afterEach(() => {
-    stdout.mockRestore()
+    stdout?.mockRestore()
     vi.unstubAllEnvs()
   })
 
@@ -81,6 +122,8 @@ describe('credential route rate-limit boundary', () => {
     async (path, handler, method) => {
       vi.stubEnv('ENVIRONMENT', 'production')
       vi.stubEnv('PATIENT_WEB_CLIENT_IP_MODE', 'unavailable')
+      vi.stubEnv('PATIENT_WEB_CREDENTIAL_RATE_LIMIT_STORE', 'redis')
+      vi.stubEnv('REDIS_URL', 'rediss://:test-password@redis.example.test:6380/0')
 
       const response = await (handler as CredentialHandler)(
         credentialRequest(path, method as 'POST' | 'DELETE'),
@@ -117,6 +160,39 @@ describe('credential route rate-limit boundary', () => {
     const separateScope = await register(credentialRequest('/api/auth/register'))
     expect(separateScope.status).toBe(401)
   })
+
+  it.each([
+    ['/api/auth/login', login, 'POST'],
+    ['/api/auth/register', register, 'POST'],
+    ['/api/auth/mfa/enrollment/setup', enrollmentSetup, 'POST'],
+    ['/api/auth/mfa/enrollment/confirm', enrollmentConfirm, 'POST'],
+    ['/api/auth/mfa/verify', verify, 'POST'],
+    ['/api/auth/mfa/step-up', stepUp, 'POST'],
+    ['/api/auth/mfa/setup', replaceSetup, 'POST'],
+    ['/api/auth/mfa/confirm', replaceConfirm, 'POST'],
+    ['/api/auth/mfa/disable', disable, 'DELETE'],
+  ] as const)(
+    'fails closed before backend access when Redis is unavailable: %s',
+    async (path, handler, method) => {
+      const frontDoorId = '12345678-1234-1234-1234-123456789abc'
+      vi.stubEnv('ENVIRONMENT', 'production')
+      vi.stubEnv('PATIENT_WEB_CLIENT_IP_MODE', 'azure-front-door')
+      vi.stubEnv('AZURE_FRONT_DOOR_ID', frontDoorId)
+      vi.stubEnv('PATIENT_WEB_CREDENTIAL_RATE_LIMIT_STORE', 'redis')
+      vi.stubEnv('REDIS_URL', 'rediss://:test-password@redis.example.test:6380/0')
+      redisMocks.eval.mockRejectedValue(new Error('synthetic Redis outage'))
+
+      const response = await (handler as CredentialHandler)(
+        credentialRequest(path, method as 'POST' | 'DELETE', {
+          'x-azure-fdid': frontDoorId,
+        }),
+      )
+
+      expect(response.status).toBe(503)
+      expect(response.headers.get('Cache-Control')).toBe('no-store')
+      expect(mockedBackendFetch).not.toHaveBeenCalled()
+    },
+  )
 
   it.each([
     ['/api/auth/login', login, 'POST'],

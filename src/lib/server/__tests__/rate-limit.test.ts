@@ -23,6 +23,8 @@ function useAzureMode(secret = 'rate-limit-test-csrf-secret-at-least-32-bytes'):
   vi.stubEnv('PATIENT_WEB_CLIENT_IP_MODE', 'azure-front-door')
   vi.stubEnv('AZURE_FRONT_DOOR_ID', FRONT_DOOR_ID)
   vi.stubEnv('PATIENT_WEB_CSRF_SECRET', secret)
+  vi.stubEnv('PATIENT_WEB_CREDENTIAL_RATE_LIMIT_STORE', 'redis')
+  vi.stubEnv('REDIS_URL', 'rediss://:test-password@redis.example.test:6380/0')
 }
 
 describe('rate limiting', () => {
@@ -38,20 +40,30 @@ describe('rate limiting', () => {
     )
   })
 
-  afterEach(() => {
-    clearRateLimitStore()
+  afterEach(async () => {
+    vi.stubEnv('ENVIRONMENT', 'test')
+    vi.stubEnv('PATIENT_WEB_CLIENT_IP_MODE', 'single-bucket')
+    vi.stubEnv('PATIENT_WEB_CREDENTIAL_RATE_LIMIT_STORE', 'memory')
+    vi.stubEnv('REDIS_URL', '')
+    await clearRateLimitStore()
     vi.unstubAllEnvs()
   })
 
-  it('enforces the in-memory sliding window by default', () => {
-    expect(rateLimit('default-rate-limit-test', { limit: 1, windowMs: 60_000 })).toBe(true)
-    expect(rateLimit('default-rate-limit-test', { limit: 1, windowMs: 60_000 })).toBe(false)
+  it('enforces the in-memory sliding window by default', async () => {
+    await expect(
+      rateLimit('default-rate-limit-test', { limit: 1, windowMs: 60_000 }),
+    ).resolves.toBe(true)
+    await expect(
+      rateLimit('default-rate-limit-test', { limit: 1, windowMs: 60_000 }),
+    ).resolves.toBe(false)
   })
 
-  it('supports an opt-in non-production E2E bypass', () => {
+  it('supports an opt-in non-production E2E bypass', async () => {
     vi.stubEnv('PATIENT_WEB_E2E_BYPASS_RATE_LIMITS', 'true')
 
-    expect(rateLimit('e2e-rate-limit-test', { limit: 0, windowMs: 60_000 })).toBe(true)
+    await expect(rateLimit('e2e-rate-limit-test', { limit: 0, windowMs: 60_000 })).resolves.toBe(
+      true,
+    )
   })
 
   it('supports the E2E bypass in local production-mode standalone builds', () => {
@@ -65,13 +77,43 @@ describe('rate limiting', () => {
     expect(() => shouldBypassRateLimit('true', 'local', 'azure-front-door')).toThrow()
   })
 
-  it('can clear the in-memory state for gated E2E resets', () => {
-    expect(rateLimit('reset-rate-limit-test', { limit: 1, windowMs: 60_000 })).toBe(true)
-    expect(rateLimit('reset-rate-limit-test', { limit: 1, windowMs: 60_000 })).toBe(false)
+  it('can clear the in-memory state for gated E2E resets', async () => {
+    await expect(rateLimit('reset-rate-limit-test', { limit: 1, windowMs: 60_000 })).resolves.toBe(
+      true,
+    )
+    await expect(rateLimit('reset-rate-limit-test', { limit: 1, windowMs: 60_000 })).resolves.toBe(
+      false,
+    )
 
-    clearRateLimitStore()
+    await clearRateLimitStore()
 
-    expect(rateLimit('reset-rate-limit-test', { limit: 1, windowMs: 60_000 })).toBe(true)
+    await expect(rateLimit('reset-rate-limit-test', { limit: 1, windowMs: 60_000 })).resolves.toBe(
+      true,
+    )
+  })
+
+  it('allows a new attempt after the sliding window expires', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-21T00:00:00Z'))
+    await expect(rateLimit('expiry-rate-limit-test', { limit: 1, windowMs: 1_000 })).resolves.toBe(
+      true,
+    )
+    await expect(rateLimit('expiry-rate-limit-test', { limit: 1, windowMs: 1_000 })).resolves.toBe(
+      false,
+    )
+    vi.advanceTimersByTime(1_001)
+    await expect(rateLimit('expiry-rate-limit-test', { limit: 1, windowMs: 1_000 })).resolves.toBe(
+      true,
+    )
+    vi.useRealTimers()
+  })
+
+  it.each([
+    { limit: 0, windowMs: 1_000 },
+    { limit: 1.5, windowMs: 1_000 },
+    { limit: 1, windowMs: 0 },
+  ])('rejects invalid limiter options: %j', async (opts) => {
+    await expect(rateLimit('invalid-options-test', opts)).rejects.toThrow('Credential rate-limit')
   })
 
   it('ignores spoofable forwarding headers in local single-bucket mode', () => {
@@ -187,10 +229,12 @@ describe('rate limiting', () => {
     expect(getClientRateLimitKey(req, 'auth.login')).not.toBe(first)
   })
 
-  it('returns unavailable without reading address headers in unavailable mode', () => {
+  it('returns unavailable without reading address headers in unavailable mode', async () => {
     vi.stubEnv('ENVIRONMENT', 'production')
     vi.stubEnv('PATIENT_WEB_CLIENT_IP_MODE', 'unavailable')
-    expect(
+    vi.stubEnv('PATIENT_WEB_CREDENTIAL_RATE_LIMIT_STORE', 'redis')
+    vi.stubEnv('REDIS_URL', 'rediss://:test-password@redis.example.test:6380/0')
+    await expect(
       checkCredentialRateLimit(
         request({
           'x-forwarded-for': '198.51.100.1',
@@ -201,6 +245,6 @@ describe('rate limiting', () => {
         'auth.login',
         { limit: 1, windowMs: 60_000 },
       ),
-    ).toBe('client_ip_unavailable')
+    ).resolves.toBe('client_ip_unavailable')
   })
 })

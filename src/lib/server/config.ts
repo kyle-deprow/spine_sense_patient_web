@@ -17,10 +17,14 @@ export interface PatientWebConfig {
   frontDoorOriginGuardMode: FrontDoorOriginGuardMode
   azureFrontDoorId: string | null
   clientIpMode: ClientIpMode
+  credentialRateLimitStore: CredentialRateLimitStore
+  redisUrl: string | null
 }
 
 export const CLIENT_IP_MODES = ['azure-front-door', 'single-bucket', 'unavailable'] as const
 export type ClientIpMode = (typeof CLIENT_IP_MODES)[number]
+export const CREDENTIAL_RATE_LIMIT_STORES = ['redis', 'memory'] as const
+export type CredentialRateLimitStore = (typeof CREDENTIAL_RATE_LIMIT_STORES)[number]
 
 export interface AuditActorSigningKey {
   id: string
@@ -127,6 +131,44 @@ export function parseClientIpMode(
     )
   }
   return normalizedMode as ClientIpMode
+}
+
+export function parseCredentialRateLimitConfig(
+  store = process.env.PATIENT_WEB_CREDENTIAL_RATE_LIMIT_STORE,
+  redisUrl = process.env.REDIS_URL,
+  environment = process.env.ENVIRONMENT,
+): { store: CredentialRateLimitStore; redisUrl: string | null } {
+  const normalizedStore = store?.trim()
+  const normalizedEnvironment = environment?.trim() || 'unknown'
+  if (!(CREDENTIAL_RATE_LIMIT_STORES as readonly string[]).includes(normalizedStore ?? '')) {
+    throw new Error('PATIENT_WEB_CREDENTIAL_RATE_LIMIT_STORE must be redis or memory')
+  }
+  if (normalizedStore === 'memory') {
+    if (!LOCAL_ORIGIN_ENVIRONMENTS.has(normalizedEnvironment)) {
+      throw new Error('In-memory credential rate limiting is allowed only in local environments')
+    }
+    if (redisUrl?.trim()) {
+      throw new Error('REDIS_URL must be unset when the credential rate-limit store is memory')
+    }
+    return { store: 'memory', redisUrl: null }
+  }
+
+  if (!redisUrl?.trim()) {
+    throw new Error('REDIS_URL is required for the Redis credential rate-limit store')
+  }
+  let parsed: URL
+  try {
+    parsed = new URL(redisUrl)
+  } catch {
+    throw new Error('REDIS_URL must be a valid Redis URL')
+  }
+  if (!['redis:', 'rediss:'].includes(parsed.protocol) || !parsed.hostname) {
+    throw new Error('REDIS_URL must use redis:// or rediss://')
+  }
+  if (HOSTED_ENVIRONMENTS.has(normalizedEnvironment) && parsed.protocol !== 'rediss:') {
+    throw new Error('Hosted credential rate limiting requires a rediss:// REDIS_URL')
+  }
+  return { store: 'redis', redisUrl }
 }
 
 function requireValue(name: string): string {
@@ -246,6 +288,7 @@ export function getPatientWebConfig(): PatientWebConfig {
     throw new Error('Google OAuth production traffic requires GOOGLE_OAUTH_BAA_CONFIRMED=true')
   }
   const clientIpMode = parseClientIpMode()
+  const rateLimitConfig = parseCredentialRateLimitConfig()
   if (clientIpMode === 'azure-front-door' && frontDoorOriginGuard.expectedFrontDoorId === null) {
     throw new Error('AZURE_FRONT_DOOR_ID is required for azure-front-door client IP mode')
   }
@@ -264,5 +307,7 @@ export function getPatientWebConfig(): PatientWebConfig {
     frontDoorOriginGuardMode: frontDoorOriginGuard.mode,
     azureFrontDoorId: frontDoorOriginGuard.expectedFrontDoorId,
     clientIpMode,
+    credentialRateLimitStore: rateLimitConfig.store,
+    redisUrl: rateLimitConfig.redisUrl,
   }
 }

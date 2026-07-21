@@ -41,6 +41,10 @@ export async function POST(request: NextRequest) {
     return jsonNoStore({ detail: 'Not found' }, { status: 404 })
   }
 
-  clearRateLimitStore()
-  return jsonNoStore({ status: 'cleanup_complete' })
+  try {
+    await clearRateLimitStore()
+    return jsonNoStore({ status: 'cleanup_complete' })
+  } catch {
+    return jsonNoStore({ error: 'service_unavailable' }, { status: 503 })
+  }
 }

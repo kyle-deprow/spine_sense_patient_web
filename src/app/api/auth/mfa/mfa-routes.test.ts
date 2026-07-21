@@ -46,11 +46,11 @@ function request(
 }
 
 describe('exact MFA BFF routes', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.stubEnv('PATIENT_WEB_CSRF_SECRET', CSRF_SECRET)
     vi.stubEnv('PATIENT_WEB_ALLOWED_ORIGINS', ORIGIN)
     mockedBackendFetch.mockReset()
-    clearRateLimitStore()
+    await clearRateLimitStore()
   })
 
   it('injects the HttpOnly transaction into login verification', async () => {

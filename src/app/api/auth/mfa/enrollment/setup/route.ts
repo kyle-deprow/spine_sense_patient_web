@@ -7,7 +7,10 @@ import { credentialRateLimitFailureResponse } from '@/lib/server/rate-limit'
 export async function POST(request: NextRequest) {
   const failure = validateAuthMutation(request)
   if (failure) return failure
-  const rateLimitFailure = credentialRateLimitFailureResponse(request, 'auth.mfa.enrollment.setup')
+  const rateLimitFailure = await credentialRateLimitFailureResponse(
+    request,
+    'auth.mfa.enrollment.setup',
+  )
   if (rateLimitFailure) return rateLimitFailure
   return setupMfaEnrollment(request)
 }
