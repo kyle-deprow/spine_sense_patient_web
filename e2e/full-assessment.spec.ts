@@ -236,7 +236,7 @@ function normalizeAssessmentDocument(record: AssessmentDocumentRecord) {
   }
 }
 
-async function uploadSyntheticAssessmentDocumentFromRecordsStep(page: Page): Promise<void> {
+async function uploadSyntheticAssessmentDocumentFromRecordsStep(page: Page, email: string): Promise<void> {
   await clickByTestId(page, 'records-documents-file-tab')
 
   const uploadUrlResponsePromise = page.waitForResponse(
@@ -274,7 +274,7 @@ async function uploadSyntheticAssessmentDocumentFromRecordsStep(page: Page): Pro
   expect(['processing', 'complete']).toContain(confirmedStatus)
 
   if (confirmedStatus === 'processing') {
-    await completeSyntheticDocumentScan(page.request, documentId)
+    await completeSyntheticDocumentScan(page.request, documentId, email)
   }
 
   await expect(page.getByTestId(`records-document-${documentId}`)).toBeVisible({
@@ -298,7 +298,11 @@ async function uploadSyntheticAssessmentDocumentFromRecordsStep(page: Page): Pro
   )
 }
 
-async function completeSyntheticDocumentScan(request: APIRequestContext, documentId: string): Promise<void> {
+async function completeSyntheticDocumentScan(
+  request: APIRequestContext,
+  documentId: string,
+  email: string,
+): Promise<void> {
   if (!BACKEND_DOCUMENT_SCAN_RESULT_URL) {
     throw new Error('PATIENT_WEB_BACKEND_DOCUMENT_SCAN_RESULT_URL is required for document upload E2E')
   }
@@ -313,6 +317,7 @@ async function completeSyntheticDocumentScan(request: APIRequestContext, documen
       },
       data: {
         document_id: documentId,
+        email,
         verdict: 'clean',
       },
       timeout: 90_000,
@@ -2026,7 +2031,7 @@ test.describe('patient web full assessment flow', () => {
 
     await expectImagingRecordsAfterHistorySave(page)
     logMilestone('imaging records visible; uploading synthetic assessment document')
-    await uploadSyntheticAssessmentDocumentFromRecordsStep(page)
+    await uploadSyntheticAssessmentDocumentFromRecordsStep(page, email)
     await clickRecordsContinue(page)
 
     const firstAssessmentScreen = await waitForAssessmentEntry(page)
