@@ -30,6 +30,7 @@ describe('Google OAuth BFF routes', () => {
   const actorId = '10000000-0000-4000-8000-000000000001'
 
   beforeEach(() => {
+    vi.stubEnv('ENVIRONMENT', 'test')
     vi.stubEnv('PATIENT_WEB_CSRF_SECRET', 'test-patient-web-csrf-secret')
     vi.stubEnv('PATIENT_WEB_ALLOWED_ORIGINS', 'http://localhost')
     vi.stubEnv('GOOGLE_CLIENT_ID', 'google-web-client-id')
@@ -50,7 +51,9 @@ describe('Google OAuth BFF routes', () => {
     expect(location).toContain('https://accounts.google.com/o/oauth2/v2/auth')
     const authUrl = new URL(location ?? '')
     expect(authUrl.searchParams.get('client_id')).toBe('google-web-client-id')
-    expect(authUrl.searchParams.get('redirect_uri')).toBe('http://localhost/api/auth/google/callback')
+    expect(authUrl.searchParams.get('redirect_uri')).toBe(
+      'http://localhost/api/auth/google/callback',
+    )
     expect(authUrl.searchParams.get('scope')).toBe('openid email')
     expect(authUrl.searchParams.get('response_type')).toBe('code')
     expect(authUrl.searchParams.get('code_challenge_method')).toBe('S256')
@@ -65,8 +68,29 @@ describe('Google OAuth BFF routes', () => {
     expect(setCookie).not.toContain('google-web-client-secret')
   })
 
+  it('returns a sanitized no-store 503 before OAuth work when configuration is invalid', async () => {
+    vi.stubEnv('PATIENT_WEB_ALLOWED_ORIGINS', '')
+
+    const startResponse = startGoogle(new NextRequest('http://localhost/api/auth/google/start'))
+    const callbackResponse = await completeGoogle(
+      new NextRequest('http://localhost/api/auth/google/callback?code=unused&state=unused'),
+    )
+
+    for (const response of [startResponse, callbackResponse]) {
+      expect(response.status).toBe(503)
+      await expect(response.clone().json()).resolves.toEqual({
+        error: 'service_unavailable',
+      })
+      expect(response.headers.get('Cache-Control')).toBe('no-store')
+    }
+    expect(googleFetch).not.toHaveBeenCalled()
+    expect(mockedBackendFetch).not.toHaveBeenCalled()
+  })
+
   it('completes Google OAuth through the backend and sets HttpOnly app session cookies', async () => {
-    const startResponse = startGoogle(new NextRequest('http://localhost/api/auth/google/start?mode=login&returnTo=/'))
+    const startResponse = startGoogle(
+      new NextRequest('http://localhost/api/auth/google/start?mode=login&returnTo=/'),
+    )
     const state = new URL(startResponse.headers.get('location') ?? '').searchParams.get('state')
     const cookies = cookieHeaderFrom(startResponse)
     googleFetch.mockResolvedValueOnce(Response.json({ id_token: 'google-id-token' }))
@@ -79,9 +103,12 @@ describe('Google OAuth BFF routes', () => {
     )
     mockedBackendFetch.mockResolvedValueOnce(Response.json({ user_id: actorId }))
 
-    const callbackRequest = new NextRequest(`http://localhost/api/auth/google/callback?code=auth-code&state=${state}`, {
-      headers: { Cookie: cookies },
-    })
+    const callbackRequest = new NextRequest(
+      `http://localhost/api/auth/google/callback?code=auth-code&state=${state}`,
+      {
+        headers: { Cookie: cookies },
+      },
+    )
     const response = await completeGoogle(callbackRequest)
 
     expect(response.status).toBe(307)
@@ -127,35 +154,44 @@ describe('Google OAuth BFF routes', () => {
   it.each([
     [{ mfa_required: true }, '/verify?mode=mfa'],
     [{ mfa_enrollment_required: true }, '/mfa-enrollment'],
-  ])('keeps a Google challenge in HttpOnly state and redirects to %s', async (challenge, target) => {
-    const startResponse = startGoogle(new NextRequest('http://localhost/api/auth/google/start?mode=login&returnTo=/'))
-    const state = new URL(startResponse.headers.get('location') ?? '').searchParams.get('state')
-    const cookies = cookieHeaderFrom(startResponse)
-    googleFetch.mockResolvedValueOnce(Response.json({ id_token: 'google-id-token' }))
-    mockedBackendFetch.mockResolvedValueOnce(
-      Response.json({
-        ...challenge,
-        mfa_token: 'google-auth-transaction',
-        mfa_method_id:
-          'mfa_required' in challenge && challenge.mfa_required ? '20000000-0000-4000-8000-000000000001' : null,
-      }),
-    )
+  ])(
+    'keeps a Google challenge in HttpOnly state and redirects to %s',
+    async (challenge, target) => {
+      const startResponse = startGoogle(
+        new NextRequest('http://localhost/api/auth/google/start?mode=login&returnTo=/'),
+      )
+      const state = new URL(startResponse.headers.get('location') ?? '').searchParams.get('state')
+      const cookies = cookieHeaderFrom(startResponse)
+      googleFetch.mockResolvedValueOnce(Response.json({ id_token: 'google-id-token' }))
+      mockedBackendFetch.mockResolvedValueOnce(
+        Response.json({
+          ...challenge,
+          mfa_token: 'google-auth-transaction',
+          mfa_method_id:
+            'mfa_required' in challenge && challenge.mfa_required
+              ? '20000000-0000-4000-8000-000000000001'
+              : null,
+        }),
+      )
 
-    const response = await completeGoogle(
-      new NextRequest(`http://localhost/api/auth/google/callback?code=auth-code&state=${state}`, {
-        headers: { Cookie: cookies },
-      }),
-    )
+      const response = await completeGoogle(
+        new NextRequest(`http://localhost/api/auth/google/callback?code=auth-code&state=${state}`, {
+          headers: { Cookie: cookies },
+        }),
+      )
 
-    expect(response.headers.get('location')).toBe(`http://localhost${target}`)
-    const setCookie = response.headers.getSetCookie().join('\n')
-    expect(setCookie).toContain('spine_patient_mfa_transaction=google-auth-transaction')
-    expect(setCookie).toContain('HttpOnly')
-    expect(setCookie).not.toContain('spine_patient_sess=google-auth-transaction')
-  })
+      expect(response.headers.get('location')).toBe(`http://localhost${target}`)
+      const setCookie = response.headers.getSetCookie().join('\n')
+      expect(setCookie).toContain('spine_patient_mfa_transaction=google-auth-transaction')
+      expect(setCookie).toContain('HttpOnly')
+      expect(setCookie).not.toContain('spine_patient_sess=google-auth-transaction')
+    },
+  )
 
   it('fails closed when Google authentication returns both a token pair and an MFA challenge', async () => {
-    const startResponse = startGoogle(new NextRequest('http://localhost/api/auth/google/start?mode=login&returnTo=/'))
+    const startResponse = startGoogle(
+      new NextRequest('http://localhost/api/auth/google/start?mode=login&returnTo=/'),
+    )
     const state = new URL(startResponse.headers.get('location') ?? '').searchParams.get('state')
     const cookies = cookieHeaderFrom(startResponse)
     googleFetch.mockResolvedValueOnce(Response.json({ id_token: 'google-id-token' }))
@@ -174,7 +210,9 @@ describe('Google OAuth BFF routes', () => {
       }),
     )
 
-    expect(response.headers.get('location')).toBe('http://localhost/login?socialAuthError=callback_failed')
+    expect(response.headers.get('location')).toBe(
+      'http://localhost/login?socialAuthError=callback_failed',
+    )
     const setCookie = response.headers.getSetCookie().join('\n')
     expect(setCookie).not.toContain('spine_patient_sess=must-not-be-issued')
     expect(setCookie).toContain('spine_patient_mfa_transaction=;')
@@ -191,13 +229,18 @@ describe('Google OAuth BFF routes', () => {
       Response.json({ detail: 'ACCOUNT_EXISTS_REQUIRES_LOGIN' }, { status: 409 }),
     )
 
-    const callbackRequest = new NextRequest(`http://localhost/api/auth/google/callback?code=auth-code&state=${state}`, {
-      headers: { Cookie: cookies },
-    })
+    const callbackRequest = new NextRequest(
+      `http://localhost/api/auth/google/callback?code=auth-code&state=${state}`,
+      {
+        headers: { Cookie: cookies },
+      },
+    )
     const response = await completeGoogle(callbackRequest)
 
     expect(response.status).toBe(307)
-    expect(response.headers.get('location')).toBe('http://localhost/login?socialAuthError=account_exists')
+    expect(response.headers.get('location')).toBe(
+      'http://localhost/login?socialAuthError=account_exists',
+    )
     expect(response.headers.getSetCookie().join('\n')).toContain('spine_google_oauth_state=;')
   })
 
@@ -209,38 +252,57 @@ describe('Google OAuth BFF routes', () => {
     const cookies = cookieHeaderFrom(startResponse)
     googleFetch.mockResolvedValueOnce(Response.json({ id_token: 'google-id-token' }))
     mockedBackendFetch.mockResolvedValueOnce(
-      Response.json({ detail: 'Social identity already linked to another account' }, { status: 409 }),
+      Response.json(
+        { detail: 'Social identity already linked to another account' },
+        { status: 409 },
+      ),
     )
 
-    const callbackRequest = new NextRequest(`http://localhost/api/auth/google/callback?code=auth-code&state=${state}`, {
-      headers: { Cookie: cookies },
-    })
+    const callbackRequest = new NextRequest(
+      `http://localhost/api/auth/google/callback?code=auth-code&state=${state}`,
+      {
+        headers: { Cookie: cookies },
+      },
+    )
     const response = await completeGoogle(callbackRequest)
 
     expect(response.status).toBe(307)
-    expect(response.headers.get('location')).toBe('http://localhost/login?socialAuthError=already_linked')
+    expect(response.headers.get('location')).toBe(
+      'http://localhost/login?socialAuthError=already_linked',
+    )
     expect(response.headers.getSetCookie().join('\n')).toContain('spine_google_oauth_state=;')
   })
 
   it('redirects unlinked Google login attempts to login with an actionable reason', async () => {
-    const startResponse = startGoogle(new NextRequest('http://localhost/api/auth/google/start?mode=login&returnTo=/'))
+    const startResponse = startGoogle(
+      new NextRequest('http://localhost/api/auth/google/start?mode=login&returnTo=/'),
+    )
     const state = new URL(startResponse.headers.get('location') ?? '').searchParams.get('state')
     const cookies = cookieHeaderFrom(startResponse)
     googleFetch.mockResolvedValueOnce(Response.json({ id_token: 'google-id-token' }))
-    mockedBackendFetch.mockResolvedValueOnce(Response.json({ detail: 'SOCIAL_ACCOUNT_NOT_LINKED' }, { status: 401 }))
+    mockedBackendFetch.mockResolvedValueOnce(
+      Response.json({ detail: 'SOCIAL_ACCOUNT_NOT_LINKED' }, { status: 401 }),
+    )
 
-    const callbackRequest = new NextRequest(`http://localhost/api/auth/google/callback?code=auth-code&state=${state}`, {
-      headers: { Cookie: cookies },
-    })
+    const callbackRequest = new NextRequest(
+      `http://localhost/api/auth/google/callback?code=auth-code&state=${state}`,
+      {
+        headers: { Cookie: cookies },
+      },
+    )
     const response = await completeGoogle(callbackRequest)
 
     expect(response.status).toBe(307)
-    expect(response.headers.get('location')).toBe('http://localhost/login?socialAuthError=not_linked')
+    expect(response.headers.get('location')).toBe(
+      'http://localhost/login?socialAuthError=not_linked',
+    )
     expect(response.headers.getSetCookie().join('\n')).toContain('spine_google_oauth_state=;')
   })
 
   it('fails closed on state mismatch before calling Google or the backend', async () => {
-    const startResponse = startGoogle(new NextRequest('http://localhost/api/auth/google/start?mode=login'))
+    const startResponse = startGoogle(
+      new NextRequest('http://localhost/api/auth/google/start?mode=login'),
+    )
     const cookies = cookieHeaderFrom(startResponse)
     const callbackRequest = new NextRequest(
       'http://localhost/api/auth/google/callback?code=auth-code&state=wrong-state',
@@ -250,7 +312,9 @@ describe('Google OAuth BFF routes', () => {
     const response = await completeGoogle(callbackRequest)
 
     expect(response.status).toBe(307)
-    expect(response.headers.get('location')).toBe('http://localhost/login?socialAuthError=state_mismatch')
+    expect(response.headers.get('location')).toBe(
+      'http://localhost/login?socialAuthError=state_mismatch',
+    )
     expect(googleFetch).not.toHaveBeenCalled()
     expect(mockedBackendFetch).not.toHaveBeenCalled()
     expect(response.headers.getSetCookie().join('\n')).toContain('spine_google_oauth_state=;')

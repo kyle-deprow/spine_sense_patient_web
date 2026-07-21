@@ -4,15 +4,16 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 export const CSRF_HEADER = 'x-csrf-token'
 const JSON_CONTENT_TYPES = new Set(['application/json'])
 
-export type CsrfValidationResult =
-  | { ok: true }
-  | { ok: false; status: 403 | 415; code: string }
+export type CsrfValidationResult = { ok: true } | { ok: false; status: 403 | 415; code: string }
 
 export function isSafeMethod(method: string): boolean {
   return SAFE_METHODS.has(method.toUpperCase())
 }
 
-export function createCsrfToken(secret: string, nonce = randomBytes(32).toString('base64url')): string {
+export function createCsrfToken(
+  secret: string,
+  nonce = randomBytes(32).toString('base64url'),
+): string {
   const signature = signCsrfNonce(secret, nonce)
   return `${nonce}.${signature}`
 }
@@ -27,15 +28,15 @@ export function verifyCsrfToken(secret: string, token: string): boolean {
 export function validateUnsafeRequest(
   request: Request,
   csrfCookieValue: string | undefined,
-  options: { csrfSecret: string; allowedOrigins?: string[] } = { csrfSecret: '' },
+  options: { csrfSecret: string; allowedOrigins: string[] },
 ): CsrfValidationResult {
   if (isSafeMethod(request.method)) return { ok: true }
 
   const contentTypeResult = validateJsonContentType(request.headers.get('content-type'))
   if (!contentTypeResult.ok) return contentTypeResult
 
-  const originResult = validateOriginHeaders(request, options.allowedOrigins ?? [])
-  if (originResult !== null && !originResult.ok) return originResult
+  const originResult = validateOriginHeaders(request, options.allowedOrigins)
+  if (!originResult.ok) return originResult
 
   const headerValue = request.headers.get(CSRF_HEADER)
   if (!csrfCookieValue || !headerValue) {
@@ -52,20 +53,16 @@ export function validateUnsafeRequest(
 
 export function validateOriginHeaders(
   request: Request,
-  configuredAllowedOrigins: string[] = [],
-): CsrfValidationResult | null {
+  configuredAllowedOrigins: string[],
+): CsrfValidationResult {
   // Do NOT seed from request.url: behind a reverse proxy (nginx, Azure Front Door)
   // Next.js route handlers see the internal upstream URL (e.g. http://localhost:3000),
   // so auto-seeding would whitelist that internal origin for any caller who can set
   // the Origin header. Use only explicitly configured origins.
   const allowedOrigins = new Set(configuredAllowedOrigins)
 
-  // If no origins are configured, fail open with a warning to preserve backward
-  // compatibility for local dev where PATIENT_WEB_ALLOWED_ORIGINS may not be set.
-  // Return null to signal that origin validation is skipped (no error).
   if (allowedOrigins.size === 0) {
-    console.warn('[csrf] PATIENT_WEB_ALLOWED_ORIGINS is not set; origin validation is disabled')
-    return null
+    return { ok: false, status: 403, code: 'origin_forbidden' }
   }
 
   const origin = request.headers.get('origin')

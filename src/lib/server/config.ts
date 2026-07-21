@@ -29,6 +29,7 @@ export interface AuditActorSigningKeys {
 }
 
 const SIGNING_KEY_ID_RE = /^[A-Za-z0-9_-]{1,32}$/
+const LOCAL_ORIGIN_ENVIRONMENTS = new Set(['local', 'development', 'test', 'e2e'])
 
 function splitList(value: string | undefined): string[] {
   if (!value) return []
@@ -36,6 +37,47 @@ function splitList(value: string | undefined): string[] {
     .split(/[,\s]+/)
     .map((entry) => entry.trim())
     .filter(Boolean)
+}
+
+export function parseAllowedOrigins(
+  value: string | undefined,
+  environment: string | undefined,
+): string[] {
+  const entries = splitList(value)
+  if (entries.length === 0) {
+    throw new Error('PATIENT_WEB_ALLOWED_ORIGINS must contain at least one exact origin')
+  }
+
+  const allowLoopbackHttp = LOCAL_ORIGIN_ENVIRONMENTS.has(environment?.trim() || 'unknown')
+  const origins = new Set<string>()
+  for (const entry of entries) {
+    let parsed: URL
+    try {
+      parsed = new URL(entry)
+    } catch {
+      throw new Error('PATIENT_WEB_ALLOWED_ORIGINS must contain exact URL origins')
+    }
+    const isLoopback =
+      parsed.hostname === 'localhost' ||
+      parsed.hostname === '127.0.0.1' ||
+      parsed.hostname === '[::1]'
+    const validTransport =
+      parsed.protocol === 'https:' ||
+      (parsed.protocol === 'http:' && isLoopback && allowLoopbackHttp)
+    if (
+      entry.includes('*') ||
+      parsed.username !== '' ||
+      parsed.password !== '' ||
+      parsed.search !== '' ||
+      parsed.hash !== '' ||
+      entry !== parsed.origin ||
+      !validTransport
+    ) {
+      throw new Error('PATIENT_WEB_ALLOWED_ORIGINS must contain exact permitted origins')
+    }
+    origins.add(parsed.origin)
+  }
+  return [...origins]
 }
 
 function requireSecret(name: string, fallback?: string): string {
@@ -141,6 +183,10 @@ export function getPatientWebConfig(): PatientWebConfig {
   const backendInternalUrl = process.env.BACKEND_INTERNAL_URL ?? 'http://localhost:8000'
   validateBackendUrl(backendInternalUrl)
 
+  const allowedOrigins = parseAllowedOrigins(
+    process.env.PATIENT_WEB_ALLOWED_ORIGINS,
+    process.env.ENVIRONMENT,
+  )
   const googleClientId = process.env.GOOGLE_CLIENT_ID ?? ''
   const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET ?? ''
   const googleOauthBaaConfirmed = parseBooleanEnv('GOOGLE_OAUTH_BAA_CONFIRMED')
@@ -157,7 +203,7 @@ export function getPatientWebConfig(): PatientWebConfig {
     backendInternalUrl,
     csrfSecret,
     auditActorSigningKeys: auditActorSigningKeys(),
-    allowedOrigins: splitList(process.env.PATIENT_WEB_ALLOWED_ORIGINS),
+    allowedOrigins,
     storageOrigins: splitList(process.env.NEXT_PUBLIC_STORAGE_DOMAINS),
     googleClientId,
     googleClientSecret,

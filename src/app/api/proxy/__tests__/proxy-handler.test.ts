@@ -3,7 +3,11 @@ import { NextRequest } from 'next/server'
 
 import { CSRF_HEADER, createCsrfToken } from '@/lib/auth/csrf'
 import { signAuditActorCookie } from '@/lib/auth/cookies'
-import { BackendUnavailableError, LONG_BACKEND_TIMEOUT_MS, backendFetch } from '@/lib/server/backend'
+import {
+  BackendUnavailableError,
+  LONG_BACKEND_TIMEOUT_MS,
+  backendFetch,
+} from '@/lib/server/backend'
 import { auditLog, sessionCorrelationFromToken } from '@/lib/server/audit'
 import { isLongRunningBackendCall } from '@/lib/server/backend-timeouts'
 
@@ -59,6 +63,7 @@ const ORIGIN = 'http://localhost'
 
 describe('proxy route handler', () => {
   beforeEach(() => {
+    vi.stubEnv('ENVIRONMENT', 'test')
     vi.stubEnv('PATIENT_WEB_CSRF_SECRET', CSRF_SECRET)
     vi.stubEnv('PATIENT_WEB_ALLOWED_ORIGINS', ORIGIN)
     mockedBackendFetch.mockReset()
@@ -101,6 +106,51 @@ describe('proxy route handler', () => {
         status: 403,
       }),
     )
+  })
+
+  it('returns a sanitized 503 with zero backend calls when configuration is invalid', async () => {
+    vi.stubEnv('PATIENT_WEB_ALLOWED_ORIGINS', '')
+    const request = makeProxyRequest(
+      VALID_PATHNAME,
+      'POST',
+      { spine_patient_sess: 'access-token' },
+      { 'Content-Type': 'application/json', Origin: ORIGIN },
+      JSON.stringify({ answer: 'redacted' }),
+    )
+
+    const response = await POST(request, makeContext(VALID_SEGMENTS))
+
+    expect(response.status).toBe(503)
+    await expect(response.json()).resolves.toEqual({
+      error: 'service_unavailable',
+    })
+    expect(response.headers.get('Cache-Control')).toBe('no-store')
+    expect(mockedBackendFetch).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { Origin: 'https://evil.example.test' },
+    { Origin: ORIGIN, Referer: 'https://evil.example.test/path' },
+  ])('does not forward unsafe PHI requests with invalid origin metadata', async (originHeaders) => {
+    const csrf = createCsrfToken(CSRF_SECRET, 'origin-negative')
+    const response = await POST(
+      makeProxyRequest(
+        VALID_PATHNAME,
+        'POST',
+        { spine_patient_sess: 'access-token', spine_patient_csrf: csrf },
+        {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': csrf,
+          ...originHeaders,
+        },
+        JSON.stringify({ answer: 'redacted' }),
+      ),
+      makeContext(VALID_SEGMENTS),
+    )
+
+    expect(response.status).toBe(403)
+    expect(response.headers.get('Cache-Control')).toBe('no-store')
+    expect(mockedBackendFetch).not.toHaveBeenCalled()
   })
 
   it('returns 404 when path is not in the allowlist', async () => {
@@ -271,7 +321,11 @@ describe('proxy route handler', () => {
     const response = await GET(request, makeContext(VALID_SEGMENTS))
 
     expect(response.status).toBe(200)
-    expect(mockedBackendFetch).toHaveBeenCalledWith('/api/v1/patients/me/assessments/', expect.any(Object), {})
+    expect(mockedBackendFetch).toHaveBeenCalledWith(
+      '/api/v1/patients/me/assessments/',
+      expect.any(Object),
+      {},
+    )
   })
 
   it('uses the long backend timeout for LLM-backed assessment proxy calls', async () => {
@@ -408,7 +462,10 @@ describe('proxy route handler', () => {
         Origin: ORIGIN,
       },
     )
-    const response = await POST(request, makeContext(['api', 'v1', 'patients', 'me', 'intake', 'progress', 'complete']))
+    const response = await POST(
+      request,
+      makeContext(['api', 'v1', 'patients', 'me', 'intake', 'progress', 'complete']),
+    )
 
     expect(response.status).toBe(200)
     expect(mockedBackendFetch).toHaveBeenCalledWith(
@@ -424,25 +481,41 @@ describe('proxy route handler', () => {
   })
 
   it('classifies only explicitly long-running backend calls', () => {
-    expect(isLongRunningBackendCall('/api/v1/patients/me/assessments/assessment-123/adaptive/prepare')).toBe(true)
-    expect(isLongRunningBackendCall('/api/v1/patients/me/assessments/assessment-123/prefill')).toBe(false)
-    expect(isLongRunningBackendCall('/api/v1/patients/me/assessments/assessment-123/analysis/run')).toBe(true)
-    expect(isLongRunningBackendCall('/api/v1/patients/me/assessments/assessment-123/analysis')).toBe(false)
+    expect(
+      isLongRunningBackendCall('/api/v1/patients/me/assessments/assessment-123/adaptive/prepare'),
+    ).toBe(true)
+    expect(isLongRunningBackendCall('/api/v1/patients/me/assessments/assessment-123/prefill')).toBe(
+      false,
+    )
+    expect(
+      isLongRunningBackendCall('/api/v1/patients/me/assessments/assessment-123/analysis/run'),
+    ).toBe(true)
+    expect(
+      isLongRunningBackendCall('/api/v1/patients/me/assessments/assessment-123/analysis'),
+    ).toBe(false)
     expect(isLongRunningBackendCall('/api/v1/patients/me/assessments')).toBe(false)
     expect(isLongRunningBackendCall('/api/v1/patients/me/intake/story/transcriptions')).toBe(true)
     expect(isLongRunningBackendCall('/api/v1/patients/me/intake/story/audio-uploads')).toBe(false)
-    expect(isLongRunningBackendCall('/api/v1/patients/me/intake/story/transcriptions/extra')).toBe(false)
+    expect(isLongRunningBackendCall('/api/v1/patients/me/intake/story/transcriptions/extra')).toBe(
+      false,
+    )
     expect(
-      isLongRunningBackendCall('/api/v1/patients/me/miscribe/recordings/10000000-0000-4000-8000-00000000000A/process'),
+      isLongRunningBackendCall(
+        '/api/v1/patients/me/miscribe/recordings/10000000-0000-4000-8000-00000000000A/process',
+      ),
     ).toBe(true)
     expect(
       isLongRunningBackendCall(
         '/api/v1/patients/me/miscribe/recordings/10000000-0000-4000-8000-000000000001/upload-complete',
       ),
     ).toBe(false)
-    expect(isLongRunningBackendCall('/api/v1/patients/me/miscribe/recordings/not-a-uuid/process')).toBe(false)
     expect(
-      isLongRunningBackendCall('/api/v1/patients/me/miscribe/recordings/10000000-0000-7000-8000-000000000001/process'),
+      isLongRunningBackendCall('/api/v1/patients/me/miscribe/recordings/not-a-uuid/process'),
+    ).toBe(false)
+    expect(
+      isLongRunningBackendCall(
+        '/api/v1/patients/me/miscribe/recordings/10000000-0000-7000-8000-000000000001/process',
+      ),
     ).toBe(false)
   })
 
@@ -484,7 +557,10 @@ describe('proxy route handler', () => {
       },
       new Uint8Array([1, 2, 3]),
     )
-    const response = await PUT(request, makeContext(['api', 'v1', 'patients', 'me', 'documents', 'upload-url']))
+    const response = await PUT(
+      request,
+      makeContext(['api', 'v1', 'patients', 'me', 'documents', 'upload-url']),
+    )
 
     expect(response.status).toBe(405)
     await expect(response.json()).resolves.toEqual({
@@ -595,7 +671,9 @@ describe('proxy route handler', () => {
         }),
       )
       expect(mockedAuditLog.mock.calls[0]?.[0]).not.toHaveProperty('userId')
-      expect(mockedAuditLog.mock.calls[0]?.[0]?.requestId).not.toBe('patient@example.test?note=private')
+      expect(mockedAuditLog.mock.calls[0]?.[0]?.requestId).not.toBe(
+        'patient@example.test?note=private',
+      )
     })
 
     it('does not trust a browser-forged audit actor cookie', async () => {
@@ -634,7 +712,9 @@ describe('proxy route handler', () => {
       const response = await POST(request, makeContext([...segments, 'recordings', 'setup']))
 
       expect(response.status).toBe(201)
-      expect(mockedBackendFetch.mock.calls[0]?.[0]).toBe('/api/v1/patients/me/miscribe/recordings/setup?source=web')
+      expect(mockedBackendFetch.mock.calls[0]?.[0]).toBe(
+        '/api/v1/patients/me/miscribe/recordings/setup?source=web',
+      )
       const forwardedBody = mockedBackendFetch.mock.calls[0]?.[1]?.body
       expect(Buffer.from(forwardedBody as ArrayBuffer).toString('utf8')).toBe(requestBody)
       expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain('follow-up')
@@ -642,7 +722,9 @@ describe('proxy route handler', () => {
     })
 
     it('uses the long backend timeout for MyScribe transcription and summary processing', async () => {
-      mockedBackendFetch.mockResolvedValue(Response.json({ id: 'summary-1', recording_id: recordingId }))
+      mockedBackendFetch.mockResolvedValue(
+        Response.json({ id: 'summary-1', recording_id: recordingId }),
+      )
       const csrf = createCsrfToken(CSRF_SECRET, 'miscribe-process-test')
       const request = makeProxyRequest(
         `${prefix}/recordings/${recordingId}/process`,
@@ -656,7 +738,10 @@ describe('proxy route handler', () => {
         '{}',
       )
 
-      const response = await POST(request, makeContext([...segments, 'recordings', recordingId, 'process']))
+      const response = await POST(
+        request,
+        makeContext([...segments, 'recordings', recordingId, 'process']),
+      )
 
       expect(response.status).toBe(200)
       expect(mockedBackendFetch).toHaveBeenCalledWith(
@@ -677,7 +762,9 @@ describe('proxy route handler', () => {
         { 'Content-Type': 'application/json', Origin: ORIGIN },
       )
       const response =
-        method === 'POST' ? await POST(request, makeContext(path)) : await DELETE(request, makeContext(path))
+        method === 'POST'
+          ? await POST(request, makeContext(path))
+          : await DELETE(request, makeContext(path))
 
       expect(response.status).toBe(403)
       expect(mockedBackendFetch).not.toHaveBeenCalled()

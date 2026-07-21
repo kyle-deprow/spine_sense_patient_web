@@ -14,3 +14,7 @@ export function jsonNoStore(body: unknown, init?: ResponseInit): NextResponse {
 export function csrfFailureResponse(status: 403 | 415, code: string): NextResponse {
   return jsonNoStore({ error: code }, { status })
 }
+
+export function configurationUnavailableResponse(): NextResponse {
+  return jsonNoStore({ error: 'service_unavailable' }, { status: 503 })
+}

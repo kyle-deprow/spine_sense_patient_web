@@ -14,6 +14,8 @@ describe('web voice startup audit', () => {
     vi.resetModules()
     vi.unstubAllEnvs()
     vi.stubEnv('PATIENT_WEB_CSRF_SECRET', 'startup-audit-test-csrf-secret')
+    vi.stubEnv('ENVIRONMENT', 'test')
+    vi.stubEnv('PATIENT_WEB_ALLOWED_ORIGINS', 'https://patient.example.test')
     vi.stubEnv('PATIENT_WEB_AUDIT_ACTOR_SIGNING_CURRENT_KEY_ID', 'startup-current')
     vi.stubEnv(
       'PATIENT_WEB_AUDIT_ACTOR_SIGNING_CURRENT_KEY',
@@ -67,6 +69,14 @@ describe('web voice startup audit', () => {
     expect(() => auditWebVoicePolicyAtStartup()).toThrow(
       'AZURE_FRONT_DOOR_ID is required when the Front Door origin guard is active',
     )
+    expect(mockedAuditLog).not.toHaveBeenCalled()
+  })
+
+  it('fails startup before policy audit when the allowed-origin policy is missing', async () => {
+    vi.stubEnv('PATIENT_WEB_ALLOWED_ORIGINS', '')
+    const { auditWebVoicePolicyAtStartup } = await import('@/lib/server/startupAudit')
+
+    expect(() => auditWebVoicePolicyAtStartup()).toThrow('PATIENT_WEB_ALLOWED_ORIGINS')
     expect(mockedAuditLog).not.toHaveBeenCalled()
   })
 })

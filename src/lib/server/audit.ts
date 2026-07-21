@@ -72,9 +72,15 @@ export function createRequestAuditContext(
   request: NextRequest,
   token = request.cookies.get(COOKIE_NAMES.access)?.value,
 ): AuditContext {
-  const context = createAuditContext(token)
-  const actorId = auditActorIdFromRequest(request)
-  return actorId === undefined ? context : { ...context, actorId }
+  try {
+    const context = createAuditContext(token)
+    const actorId = auditActorIdFromRequest(request)
+    return actorId === undefined ? context : { ...context, actorId }
+  } catch {
+    // The route's configuration guard returns the sanitized 503. Avoid
+    // evaluating invalid configuration first while deriving audit context.
+    return { requestId: randomUUID() }
+  }
 }
 
 export function sessionCorrelationFromToken(token: string): string {
@@ -98,13 +104,21 @@ export function auditLog(record: AuditRecord): void {
   if (resourceType !== undefined) entry['resourceType'] = resourceType
   const actorId = backendAuthenticatedActorId(record.actorId)
   if (actorId !== undefined) entry['actorId'] = actorId
-  if (record.status !== undefined && Number.isInteger(record.status) && record.status >= 100 && record.status <= 599) {
+  if (
+    record.status !== undefined &&
+    Number.isInteger(record.status) &&
+    record.status >= 100 &&
+    record.status <= 599
+  ) {
     entry['status'] = record.status
   }
   if (record.requestId !== undefined && UUID_RE.test(record.requestId)) {
     entry['requestId'] = record.requestId.toLowerCase()
   }
-  if (record.sessionCorrelation !== undefined && SESSION_CORRELATION_RE.test(record.sessionCorrelation)) {
+  if (
+    record.sessionCorrelation !== undefined &&
+    SESSION_CORRELATION_RE.test(record.sessionCorrelation)
+  ) {
     entry['sessionCorrelation'] = record.sessionCorrelation
   }
   if (reason !== undefined) entry['reason'] = reason
@@ -117,5 +131,7 @@ function safeLabel(value: string | undefined): string | undefined {
 }
 
 function isIsoTimestamp(value: string): boolean {
-  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) && !Number.isNaN(Date.parse(value))
+  return (
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) && !Number.isNaN(Date.parse(value))
+  )
 }

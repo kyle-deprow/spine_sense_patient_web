@@ -5,8 +5,11 @@ import { sessionFromCookie } from '@/lib/server/auth'
 import { auditLog, createRequestAuditContext } from '@/lib/server/audit'
 import { BackendUnavailableError } from '@/lib/server/backend'
 import { jsonNoStore } from '@/lib/server/responses'
+import { validatePatientWebConfiguration } from '@/lib/auth/route-guards'
 
 export async function GET(request: NextRequest) {
+  const configurationFailure = validatePatientWebConfiguration()
+  if (configurationFailure) return configurationFailure
   const auditContext = createRequestAuditContext(
     request,
     request.cookies.get(COOKIE_NAMES.access)?.value,

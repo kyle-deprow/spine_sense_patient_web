@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { getPatientWebConfig } from '@/lib/server/config'
+import { getPatientWebConfig, parseAllowedOrigins } from '@/lib/server/config'
 
 describe('patient web config', () => {
   beforeEach(() => {
@@ -59,4 +59,51 @@ describe('patient web config', () => {
       'AZURE_FRONT_DOOR_ID is required when the Front Door origin guard is active',
     )
   })
+
+  it.each([undefined, '', '   '])('rejects an unset or blank allowed-origin list (%s)', (value) => {
+    expect(() => parseAllowedOrigins(value, 'test')).toThrow('PATIENT_WEB_ALLOWED_ORIGINS')
+  })
+
+  it.each([
+    '*',
+    'https://*.example.test',
+    'https://user:pass@patient.example.test',
+    'https://patient.example.test/path',
+    'https://patient.example.test?query=1',
+    'https://patient.example.test#fragment',
+    'https://patient.example.test/',
+    'http://patient.example.test',
+  ])('rejects a non-exact or insecure allowed origin: %s', (origin) => {
+    expect(() => parseAllowedOrigins(origin, 'production')).toThrow('PATIENT_WEB_ALLOWED_ORIGINS')
+  })
+
+  it('accepts exact HTTPS origins and deduplicates them', () => {
+    expect(
+      parseAllowedOrigins(
+        'https://patient.example.test, https://patient.example.test https://other.example.test:8443',
+        'production',
+      ),
+    ).toEqual(['https://patient.example.test', 'https://other.example.test:8443'])
+  })
+
+  it.each(['local', 'development', 'test', 'e2e'])(
+    'accepts HTTP loopback in explicit %s',
+    (environment) => {
+      expect(
+        parseAllowedOrigins(
+          'http://localhost:3000 http://127.0.0.1:43101 http://[::1]:43101',
+          environment,
+        ),
+      ).toEqual(['http://localhost:3000', 'http://127.0.0.1:43101', 'http://[::1]:43101'])
+    },
+  )
+
+  it.each([undefined, '', 'production', 'staging'])(
+    'rejects HTTP loopback in hosted or unknown %s',
+    (environment) => {
+      expect(() => parseAllowedOrigins('http://127.0.0.1:43101', environment)).toThrow(
+        'PATIENT_WEB_ALLOWED_ORIGINS',
+      )
+    },
+  )
 })

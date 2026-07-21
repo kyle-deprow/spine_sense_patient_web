@@ -13,12 +13,12 @@ const sameOrigin = 'https://patient.example.test'
 function makeRequest(init: { headers?: Record<string, string> } = {}) {
   return new Request(`${sameOrigin}/api/auth/login`, {
     method: 'POST',
+    ...init,
     headers: {
       Origin: sameOrigin,
       'Content-Type': 'application/json',
       ...init.headers,
     },
-    ...init,
   })
 }
 
@@ -40,13 +40,25 @@ describe('csrf helpers', () => {
       },
     })
 
-    expect(validateUnsafeRequest(request, token, { csrfSecret: secret })).toEqual({ ok: true })
+    expect(
+      validateUnsafeRequest(request, token, {
+        csrfSecret: secret,
+        allowedOrigins: [sameOrigin],
+      }),
+    ).toEqual({
+      ok: true,
+    })
   })
 
   it('blocks missing csrf headers before backend forwarding', () => {
     const token = createCsrfToken(secret)
 
-    expect(validateUnsafeRequest(makeRequest(), token, { csrfSecret: secret })).toEqual({
+    expect(
+      validateUnsafeRequest(makeRequest(), token, {
+        csrfSecret: secret,
+        allowedOrigins: [sameOrigin],
+      }),
+    ).toEqual({
       ok: false,
       status: 403,
       code: 'csrf_missing',
@@ -71,6 +83,27 @@ describe('csrf helpers', () => {
       ok: false,
       status: 415,
       code: 'content_type_unsupported',
+    })
+  })
+
+  it('denies an empty origin policy instead of skipping validation', () => {
+    expect(validateOriginHeaders(makeRequest(), [])).toEqual({
+      ok: false,
+      status: 403,
+      code: 'origin_forbidden',
+    })
+  })
+
+  it.each([
+    [{ Origin: '' }, 'origin_forbidden'],
+    [{ Origin: 'https://evil.example.test' }, 'origin_forbidden'],
+    [{ Referer: 'not a URL' }, 'referer_forbidden'],
+    [{ Referer: 'https://evil.example.test/path' }, 'referer_forbidden'],
+  ])('fails closed for invalid request origin metadata', (headers, code) => {
+    expect(validateOriginHeaders(makeRequest({ headers }), [sameOrigin])).toEqual({
+      ok: false,
+      status: 403,
+      code,
     })
   })
 })

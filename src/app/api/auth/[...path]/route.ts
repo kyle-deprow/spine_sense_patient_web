@@ -5,8 +5,14 @@ import {
   clearAuthCookies,
   issueAuthenticatedSessionCookies,
 } from '@/lib/auth/cookies'
-import { validateAuthMutation } from '@/lib/auth/route-guards'
-import { BackendUnavailableError, backendFetch, hasTokenPair, readJsonBody, stripTokens } from '@/lib/server/backend'
+import { validateAuthMutation, validatePatientWebConfiguration } from '@/lib/auth/route-guards'
+import {
+  BackendUnavailableError,
+  backendFetch,
+  hasTokenPair,
+  readJsonBody,
+  stripTokens,
+} from '@/lib/server/backend'
 import { issueCsrfCookie, resolveBackendAuthenticatedActorId } from '@/lib/server/auth'
 import {
   auditLog,
@@ -56,6 +62,8 @@ function sanitizeAuthPath(authPath: string): string | null {
 }
 
 async function handler(request: NextRequest, context: AuthProxyContext) {
+  const configurationFailure = validatePatientWebConfiguration()
+  if (configurationFailure) return configurationFailure
   const accessToken = request.cookies.get(COOKIE_NAMES.access)?.value
   const auditContext = createRequestAuditContext(request, accessToken)
   const { path } = await context.params
@@ -64,13 +72,26 @@ async function handler(request: NextRequest, context: AuthProxyContext) {
 
   if (sanitizeAuthPath(authPath) === null) {
     auditGenericCall(request.method, 'denied', 'auth.invalid', 400, 'invalid_path', auditContext)
-    return transitionResponse(jsonNoStore({ error: 'invalid_path' }, { status: 400 }), isAccountTransition)
+    return transitionResponse(
+      jsonNoStore({ error: 'invalid_path' }, { status: 400 }),
+      isAccountTransition,
+    )
   }
 
   const routeCategory = AUTH_ROUTE_CATEGORIES.get(authPath)
   if (!routeCategory) {
-    auditGenericCall(request.method, 'denied', 'auth.unknown', 404, 'path_not_allowed', auditContext)
-    return transitionResponse(jsonNoStore({ error: 'not_found' }, { status: 404 }), isAccountTransition)
+    auditGenericCall(
+      request.method,
+      'denied',
+      'auth.unknown',
+      404,
+      'path_not_allowed',
+      auditContext,
+    )
+    return transitionResponse(
+      jsonNoStore({ error: 'not_found' }, { status: 404 }),
+      isAccountTransition,
+    )
   }
 
   if (shouldForwardBody(request.method)) {
@@ -113,7 +134,10 @@ async function handler(request: NextRequest, context: AuthProxyContext) {
         'backend_unavailable',
         auditContext,
       )
-      return transitionResponse(jsonNoStore({ error: 'service_unavailable' }, { status: 503 }), isAccountTransition)
+      return transitionResponse(
+        jsonNoStore({ error: 'service_unavailable' }, { status: 503 }),
+        isAccountTransition,
+      )
     }
     throw err
   }
@@ -159,7 +183,10 @@ async function handler(request: NextRequest, context: AuthProxyContext) {
     isAccountTransition,
   )
   if (tokenPairIssued && isAccountTransition && actorId !== undefined) {
-    issueAuthenticatedSessionCookies(response, { ...toTokenPair(data), actorId })
+    issueAuthenticatedSessionCookies(response, {
+      ...toTokenPair(data),
+      actorId,
+    })
     issueCsrfCookie(response)
   }
   return response
@@ -210,7 +237,10 @@ function shouldForwardBody(method: string): boolean {
   return !['GET', 'HEAD'].includes(method.toUpperCase())
 }
 
-function toTokenPair(data: BackendTokenPair): { accessToken: string; refreshToken: string } {
+function toTokenPair(data: BackendTokenPair): {
+  accessToken: string
+  refreshToken: string
+} {
   return {
     accessToken: data.access_token,
     refreshToken: data.refresh_token,

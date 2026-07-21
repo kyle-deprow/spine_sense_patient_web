@@ -5,17 +5,32 @@ import { COOKIE_NAMES } from '@/lib/auth/cookies'
 import { validateUnsafeRequest } from '@/lib/auth/csrf'
 import { validateProxyTarget } from '@/lib/proxy/allowlist'
 import { buildProxyRequestHeaders, buildProxyResponseHeaders } from '@/lib/proxy/headers'
-import { auditLog, createRequestAuditContext, deriveResourceType, type AuditContext } from '@/lib/server/audit'
+import {
+  auditLog,
+  createRequestAuditContext,
+  deriveResourceType,
+  type AuditContext,
+} from '@/lib/server/audit'
 import { BackendUnavailableError, backendFetch } from '@/lib/server/backend'
 import { backendTimeoutOptions } from '@/lib/server/backend-timeouts'
 import { getPatientWebConfig } from '@/lib/server/config'
-import { csrfFailureResponse, jsonNoStore } from '@/lib/server/responses'
+import {
+  configurationUnavailableResponse,
+  csrfFailureResponse,
+  jsonNoStore,
+} from '@/lib/server/responses'
 
 type ProxyContext = {
   params: Promise<{ path: string[] }>
 }
 
 async function handler(request: NextRequest, context: ProxyContext) {
+  let config
+  try {
+    config = getPatientWebConfig()
+  } catch {
+    return configurationUnavailableResponse()
+  }
   const accessToken = request.cookies.get(COOKIE_NAMES.access)?.value
   const auditContext = createRequestAuditContext(request, accessToken)
   const { path } = await context.params
@@ -32,11 +47,16 @@ async function handler(request: NextRequest, context: ProxyContext) {
     return jsonNoStore({ error: 'unauthorized' }, { status: 401 })
   }
   if (isBinaryDocumentPayload(target.targetPath, request)) {
-    auditDenial(request.method, 415, 'binary_document_payload_not_allowed', auditContext, resourceType)
+    auditDenial(
+      request.method,
+      415,
+      'binary_document_payload_not_allowed',
+      auditContext,
+      resourceType,
+    )
     return jsonNoStore({ error: 'unsupported_media_type' }, { status: 415 })
   }
 
-  const config = getPatientWebConfig()
   const csrf = validateUnsafeRequest(request, request.cookies.get(COOKIE_NAMES.csrf)?.value, {
     csrfSecret: config.csrfSecret,
     allowedOrigins: config.allowedOrigins,
