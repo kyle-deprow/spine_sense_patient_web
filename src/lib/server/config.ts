@@ -191,8 +191,11 @@ export function getPatientWebConfig(): PatientWebConfig {
   const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET ?? ''
   const googleOauthBaaConfirmed = parseBooleanEnv('GOOGLE_OAUTH_BAA_CONFIRMED')
   const frontDoorOriginGuard = getFrontDoorOriginGuardConfig()
+  const isExplicitLocalEnvironment = LOCAL_ORIGIN_ENVIRONMENTS.has(
+    process.env.ENVIRONMENT?.trim() || 'unknown',
+  )
   if (
-    process.env.NODE_ENV === 'production' &&
+    !isExplicitLocalEnvironment &&
     (googleClientId || googleClientSecret) &&
     !googleOauthBaaConfirmed
   ) {

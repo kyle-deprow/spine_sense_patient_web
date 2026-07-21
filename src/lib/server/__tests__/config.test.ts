@@ -14,6 +14,7 @@ describe('patient web config', () => {
 
   it('accepts Azure Bicep boolean casing for Google OAuth BAA confirmation', () => {
     vi.stubEnv('NODE_ENV', 'production')
+    vi.stubEnv('ENVIRONMENT', 'production')
     vi.stubEnv('GOOGLE_CLIENT_ID', 'google-web-client-id')
     vi.stubEnv('GOOGLE_CLIENT_SECRET', 'google-web-client-secret')
     vi.stubEnv('GOOGLE_OAUTH_BAA_CONFIRMED', 'True')
@@ -23,6 +24,7 @@ describe('patient web config', () => {
 
   it('fails closed when Google OAuth is configured without production BAA confirmation', () => {
     vi.stubEnv('NODE_ENV', 'production')
+    vi.stubEnv('ENVIRONMENT', 'production')
     vi.stubEnv('GOOGLE_CLIENT_ID', 'google-web-client-id')
     vi.stubEnv('GOOGLE_CLIENT_SECRET', 'google-web-client-secret')
     vi.stubEnv('GOOGLE_OAUTH_BAA_CONFIRMED', 'false')
@@ -31,6 +33,43 @@ describe('patient web config', () => {
       'Google OAuth production traffic requires GOOGLE_OAUTH_BAA_CONFIRMED=true',
     )
   })
+
+  it('does not claim a BAA is required for an explicitly local production build runtime', () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    vi.stubEnv('ENVIRONMENT', 'local')
+    vi.stubEnv('BACKEND_INTERNAL_URL', 'http://127.0.0.1:8010')
+    vi.stubEnv('PATIENT_WEB_ALLOWED_ORIGINS', 'http://127.0.0.1:43101')
+    vi.stubEnv('GOOGLE_CLIENT_ID', 'google-web-client-id')
+    vi.stubEnv('GOOGLE_CLIENT_SECRET', 'google-web-client-secret')
+    vi.stubEnv('GOOGLE_OAUTH_BAA_CONFIRMED', 'false')
+
+    expect(getPatientWebConfig().environment).toBe('local')
+  })
+
+  it.each([undefined, '', '   '])(
+    'fails closed on Google OAuth when the raw environment is unknown (%s)',
+    (environment) => {
+      const originalEnvironment = process.env.ENVIRONMENT
+      if (environment === undefined) delete process.env.ENVIRONMENT
+      else vi.stubEnv('ENVIRONMENT', environment)
+      vi.stubEnv('NODE_ENV', 'production')
+      vi.stubEnv('PATIENT_WEB_ALLOWED_ORIGINS', 'https://patient.example.test')
+      vi.stubEnv('GOOGLE_CLIENT_ID', 'google-web-client-id')
+      vi.stubEnv('GOOGLE_CLIENT_SECRET', 'google-web-client-secret')
+      vi.stubEnv('GOOGLE_OAUTH_BAA_CONFIRMED', 'false')
+
+      try {
+        expect(() => getPatientWebConfig()).toThrow(
+          'Google OAuth production traffic requires GOOGLE_OAUTH_BAA_CONFIRMED=true',
+        )
+      } finally {
+        if (environment === undefined) {
+          if (originalEnvironment === undefined) delete process.env.ENVIRONMENT
+          else process.env.ENVIRONMENT = originalEnvironment
+        }
+      }
+    },
+  )
 
   it('fails closed when the Google OAuth BAA flag is not a boolean', () => {
     vi.stubEnv('GOOGLE_OAUTH_BAA_CONFIRMED', 'yes')
