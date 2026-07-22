@@ -767,6 +767,10 @@ async function warmCsrfSession(page: Page) {
 }
 
 async function gotoWelcome(page: Page) {
+  const isBrowserNavigationErrorPage = async () =>
+    page
+      .evaluate(() => location.protocol === 'chrome-error:')
+      .catch(() => page.url().startsWith('chrome-error://'))
   const isWelcomeVisible = async () =>
     (await page
       .getByTestId('welcome-screen')
@@ -782,26 +786,36 @@ async function gotoWelcome(page: Page) {
       .isVisible({ timeout: 1000 })
       .catch(() => false))
 
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    await page.goto('/', { waitUntil: 'commit', timeout: 45_000 }).catch(() => undefined)
+  const startedAt = Date.now()
+  const pageBudgetMs = TRANSITION_BUDGETS_MS.page
+  const navigationTimeoutMs = Math.min(45_000, Math.max(10_000, pageBudgetMs))
+
+  for (let attempt = 0; Date.now() - startedAt < pageBudgetMs; attempt += 1) {
+    await page.goto('/', { waitUntil: 'commit', timeout: navigationTimeoutMs }).catch(() => undefined)
     if (await isWelcomeVisible()) {
       return
+    }
+    if (!(await isBrowserNavigationErrorPage()) && attempt >= 5) {
+      break
     }
     await page.waitForTimeout(1500)
   }
 
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    await page.goto('/welcome', { waitUntil: 'commit', timeout: 45_000 }).catch(() => undefined)
+  for (let attempt = 0; Date.now() - startedAt < pageBudgetMs; attempt += 1) {
+    await page.goto('/welcome', { waitUntil: 'commit', timeout: navigationTimeoutMs }).catch(() => undefined)
     if (await isWelcomeVisible()) {
       return
+    }
+    if (!(await isBrowserNavigationErrorPage()) && attempt >= 2) {
+      break
     }
     await page.waitForTimeout(1500)
   }
 
-  await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => undefined)
+  await page.goto('/', { waitUntil: 'domcontentloaded', timeout: navigationTimeoutMs }).catch(() => undefined)
   const visible = await expect
     .poll(isWelcomeVisible, {
-      timeout: 60_000,
+      timeout: Math.max(1_000, pageBudgetMs - (Date.now() - startedAt)),
       message: 'Expected the welcome screen or Start My Assessment CTA to be visible',
     })
     .toBe(true)
