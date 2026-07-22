@@ -20,7 +20,10 @@ const GATEWAY_CLEANUP_URL = process.env.PATIENT_WEB_GATEWAY_E2E_CLEANUP_URL
 const TEST_SUPPORT_TOKEN = process.env.PATIENT_WEB_TEST_SUPPORT_TOKEN
 const EXPECT_SECURE_COOKIES = process.env.PATIENT_WEB_EXPECT_SECURE_COOKIES === 'true'
 const ENABLE_FULL_ASSESSMENT_STRESS = process.env.PATIENT_WEB_FULL_ASSESSMENT_STRESS !== 'false'
-const FULL_FLOW_TIMEOUT_MS = 15 * 60 * 1000
+const FULL_FLOW_TIMEOUT_MS = readPositiveIntegerEnv(
+  'PATIENT_WEB_E2E_FULL_FLOW_TIMEOUT_MS',
+  15 * 60 * 1000,
+)
 const ENABLE_TRANSITION_PROFILING = process.env.PATIENT_WEB_E2E_PROFILE_TRANSITIONS !== 'false'
 const ASSESSMENT_REPORT_PROXY_PATH_RE =
   /^\/api\/proxy\/api\/v1\/patients\/me\/assessments\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/reports$/i
