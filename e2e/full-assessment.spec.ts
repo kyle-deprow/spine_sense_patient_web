@@ -92,6 +92,14 @@ type AssessmentReportGenerationPayload = {
   expires_in_seconds?: unknown
 }
 
+type AssessmentReportRequestPayload = {
+  format?: unknown
+  variant?: unknown
+  includeDocuments?: unknown
+  includeTrends?: unknown
+  delivery?: unknown
+}
+
 type TransitionProfileKind = 'page' | 'question' | 'stage' | 'analysis' | 'report'
 
 type TransitionProfileSample = {
@@ -550,6 +558,18 @@ function isAssessmentReportGenerationResponse(response: PlaywrightResponse): boo
 }
 
 async function expectRenderedAssessmentPdf(request: APIRequestContext, response: PlaywrightResponse): Promise<void> {
+  let requestPayload: AssessmentReportRequestPayload
+  try {
+    requestPayload = response.request().postDataJSON() as AssessmentReportRequestPayload
+  } catch {
+    requestPayload = {}
+  }
+  expect(requestPayload.format).toBe('pdf')
+  expect(requestPayload.variant).toBe('summary')
+  expect(requestPayload.includeDocuments).toBe(false)
+  expect(requestPayload.includeTrends).toBe(false)
+  expect(requestPayload.delivery).toBe('download_url')
+
   const payload = (await response.json()) as AssessmentReportGenerationPayload
   expect(typeof payload.id).toBe('string')
   expect(payload.format).toBe('pdf')
@@ -584,6 +604,23 @@ async function expectRenderedAssessmentPdf(request: APIRequestContext, response:
       .endsWith('%%EOF'),
   ).toBe(true)
   expect(createHash('sha256').update(pdf).digest('hex')).toBe(payload.sha256)
+}
+
+async function expectOptionalReportSwitchCanOnlySubmitWhenAvailable(
+  switchLocator: Locator,
+  label: string,
+): Promise<void> {
+  await expect(switchLocator, `${label} option must start unchecked`).not.toBeChecked()
+  if (await switchLocator.isDisabled()) {
+    await expect(switchLocator, `${label} option must be disabled when unavailable`).toBeDisabled()
+    return
+  }
+
+  await expect(switchLocator, `${label} option must be enabled when available`).toBeEnabled()
+  await switchLocator.click()
+  await expect(switchLocator, `${label} option must be selectable when available`).toBeChecked()
+  await switchLocator.click()
+  await expect(switchLocator, `${label} option must be clearable before core download`).not.toBeChecked()
 }
 
 async function postTestSupport(
@@ -2260,12 +2297,14 @@ test.describe('patient web full assessment flow', () => {
     await expect(page.getByTestId('results-share')).toBeVisible()
     await expect(page.getByTestId('results-share')).toBeEnabled()
     await expect(page.getByTestId('results-share')).toHaveAttribute('aria-label', 'Open PDF report options')
+
+    logMilestone('results visible; generating and downloading PDF report')
     await page.getByTestId('results-share').click()
     await expect(page.getByTestId('results-report-options')).toBeVisible()
     const includeDocuments = page.getByTestId('results-report-options-include-documents').getByRole('switch')
-    await expect(includeDocuments).toBeChecked()
-    await includeDocuments.click()
-    await expect(includeDocuments).not.toBeChecked()
+    const includeTrends = page.getByTestId('results-report-options-include-trends').getByRole('switch')
+    await expectOptionalReportSwitchCanOnlySubmitWhenAvailable(includeDocuments, 'Document summaries')
+    await expectOptionalReportSwitchCanOnlySubmitWhenAvailable(includeTrends, 'Symptom trends')
     await expect(page.getByTestId('results-report-options-generate')).toHaveAttribute('aria-label', 'Generate PDF')
     const reportResponse = await profiler.measure('results.report_generation', 'report', () =>
       clickAndWaitForResponse({
