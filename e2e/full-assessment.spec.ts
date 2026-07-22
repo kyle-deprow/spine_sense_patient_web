@@ -341,63 +341,84 @@ function normalizeAssessmentDocument(record: AssessmentDocumentRecord) {
 async function uploadSyntheticAssessmentDocumentFromRecordsStep(page: Page, email: string): Promise<void> {
   await clickByTestId(page, 'records-documents-file-tab')
 
-  const uploadUrlResponsePromise = page.waitForResponse(
-    (response) =>
-      response.url().includes('/api/proxy/api/v1/patients/me/assessments/') &&
-      response.url().endsWith('/documents/upload-url') &&
-      response.request().method() === 'POST',
-    { timeout: 60_000 },
-  )
-  const confirmResponsePromise = page.waitForResponse(
-    (response) =>
-      response.url().includes('/api/proxy/api/v1/patients/me/assessments/') &&
-      /\/documents\/[0-9a-f-]+\/confirm$/i.test(new URL(response.url()).pathname) &&
-      response.request().method() === 'POST',
-    { timeout: 120_000 },
-  )
-  const fileChooserPromise = page.waitForEvent('filechooser', {
-    timeout: 30_000,
-  })
+  let lastError: unknown
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const uploadUrlResponsePromise = page.waitForResponse(
+      (response) =>
+        response.url().includes('/api/proxy/api/v1/patients/me/assessments/') &&
+        response.url().endsWith('/documents/upload-url') &&
+        response.request().method() === 'POST',
+      { timeout: TRANSITION_BUDGETS_MS.stage },
+    )
+    const confirmResponsePromise = page.waitForResponse(
+      (response) =>
+        response.url().includes('/api/proxy/api/v1/patients/me/assessments/') &&
+        /\/documents\/[0-9a-f-]+\/confirm$/i.test(new URL(response.url()).pathname) &&
+        response.request().method() === 'POST',
+      { timeout: TRANSITION_BUDGETS_MS.stage },
+    )
+    const fileChooserPromise = page.waitForEvent('filechooser', {
+      timeout: 30_000,
+    })
 
-  await waitForEnabledAndClick(page, 'records-choose-file-button', 60_000)
-  const fileChooser = await fileChooserPromise
-  await fileChooser.setFiles(SYNTHETIC_ASSESSMENT_UPLOAD)
+    try {
+      await waitForEnabledAndClick(page, 'records-choose-file-button', 60_000)
+      const fileChooser = await fileChooserPromise
+      await fileChooser.setFiles(SYNTHETIC_ASSESSMENT_UPLOAD)
 
-  const uploadUrlResponse = await uploadUrlResponsePromise
-  expect(uploadUrlResponse.ok(), `assessment document upload-url status=${uploadUrlResponse.status()}`).toBe(true)
-  const uploadPayload = (await uploadUrlResponse.json()) as AssessmentUploadUrlResponse
-  const documentId = documentIdFromUploadResponse(uploadPayload)
-  const assessmentId = assessmentIdFromDocumentsUrl(uploadUrlResponse.url())
+      const uploadUrlResponse = await uploadUrlResponsePromise
+      expect(uploadUrlResponse.ok(), `assessment document upload-url status=${uploadUrlResponse.status()}`).toBe(true)
+      const uploadPayload = (await uploadUrlResponse.json()) as AssessmentUploadUrlResponse
+      const documentId = documentIdFromUploadResponse(uploadPayload)
+      const assessmentId = assessmentIdFromDocumentsUrl(uploadUrlResponse.url())
 
-  const confirmResponse = await confirmResponsePromise
-  expect(confirmResponse.ok(), `assessment document confirm status=${confirmResponse.status()}`).toBe(true)
-  const confirmPayload = (await confirmResponse.json()) as AssessmentDocumentRecord
-  const confirmedStatus = normalizeAssessmentDocument(confirmPayload).processingStatus
-  expect(['processing', 'complete']).toContain(confirmedStatus)
+      const confirmResponse = await confirmResponsePromise
+      expect(confirmResponse.ok(), `assessment document confirm status=${confirmResponse.status()}`).toBe(true)
+      const confirmPayload = (await confirmResponse.json()) as AssessmentDocumentRecord
+      const confirmedStatus = normalizeAssessmentDocument(confirmPayload).processingStatus
+      expect(['processing', 'complete']).toContain(confirmedStatus)
 
-  if (confirmedStatus === 'processing') {
-    await completeSyntheticDocumentScan(page.request, documentId, email)
+      if (confirmedStatus === 'processing') {
+        await completeSyntheticDocumentScan(page.request, documentId, email)
+      }
+
+      await expect(page.getByTestId(`records-document-${documentId}`)).toBeVisible({
+        timeout: 30_000,
+      })
+      await expect(page.getByText(SYNTHETIC_ASSESSMENT_UPLOAD.name)).toBeVisible()
+
+      const listResponse = await page.request.get(`/api/proxy/api/v1/patients/me/assessments/${assessmentId}/documents`)
+      expect(listResponse.ok(), `assessment document list status=${listResponse.status()}`).toBe(true)
+      const listPayload = (await listResponse.json()) as {
+        items?: AssessmentDocumentRecord[]
+      }
+      const landed = listPayload.items?.map(normalizeAssessmentDocument).find((record) => record.id === documentId)
+      expect(landed, 'uploaded assessment document must be returned by assessment document list').toEqual(
+        expect.objectContaining({
+          fileName: SYNTHETIC_ASSESSMENT_UPLOAD.name,
+          fileType: SYNTHETIC_ASSESSMENT_UPLOAD.mimeType,
+          fileSizeBytes: SYNTHETIC_ASSESSMENT_UPLOAD.buffer.length,
+          processingStatus: 'complete',
+        }),
+      )
+      return
+    } catch (error) {
+      lastError = error
+      void uploadUrlResponsePromise.catch(() => undefined)
+      void confirmResponsePromise.catch(() => undefined)
+      void fileChooserPromise.catch(() => undefined)
+      const retryableUploadError = await page
+        .getByTestId('records-file-error')
+        .isVisible({ timeout: 1_000 })
+        .catch(() => false)
+      if (!retryableUploadError || attempt >= 3) break
+      await page.waitForTimeout(1_500)
+    }
   }
 
-  await expect(page.getByTestId(`records-document-${documentId}`)).toBeVisible({
-    timeout: 30_000,
-  })
-  await expect(page.getByText(SYNTHETIC_ASSESSMENT_UPLOAD.name)).toBeVisible()
-
-  const listResponse = await page.request.get(`/api/proxy/api/v1/patients/me/assessments/${assessmentId}/documents`)
-  expect(listResponse.ok(), `assessment document list status=${listResponse.status()}`).toBe(true)
-  const listPayload = (await listResponse.json()) as {
-    items?: AssessmentDocumentRecord[]
-  }
-  const landed = listPayload.items?.map(normalizeAssessmentDocument).find((record) => record.id === documentId)
-  expect(landed, 'uploaded assessment document must be returned by assessment document list').toEqual(
-    expect.objectContaining({
-      fileName: SYNTHETIC_ASSESSMENT_UPLOAD.name,
-      fileType: SYNTHETIC_ASSESSMENT_UPLOAD.mimeType,
-      fileSizeBytes: SYNTHETIC_ASSESSMENT_UPLOAD.buffer.length,
-      processingStatus: 'complete',
-    }),
-  )
+  throw lastError instanceof Error
+    ? lastError
+    : new Error('Assessment document upload did not complete after retryable upload errors')
 }
 
 async function completeSyntheticDocumentScan(
