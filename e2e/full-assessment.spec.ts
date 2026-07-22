@@ -771,6 +771,10 @@ async function gotoWelcome(page: Page) {
     page
       .evaluate(() => location.protocol === 'chrome-error:')
       .catch(() => page.url().startsWith('chrome-error://'))
+  const isBlankAppDocument = async () =>
+    page
+      .evaluate(() => location.protocol !== 'chrome-error:' && document.body.innerText.trim().length === 0)
+      .catch(() => false)
   const isWelcomeVisible = async () =>
     (await page
       .getByTestId('welcome-screen')
@@ -795,7 +799,8 @@ async function gotoWelcome(page: Page) {
     if (await isWelcomeVisible()) {
       return
     }
-    if (!(await isBrowserNavigationErrorPage()) && attempt >= 5) {
+    const recoverableLaunchMiss = (await isBrowserNavigationErrorPage()) || (await isBlankAppDocument())
+    if (!recoverableLaunchMiss && attempt >= 5) {
       break
     }
     await page.waitForTimeout(1500)
@@ -806,21 +811,30 @@ async function gotoWelcome(page: Page) {
     if (await isWelcomeVisible()) {
       return
     }
-    if (!(await isBrowserNavigationErrorPage()) && attempt >= 2) {
+    const recoverableLaunchMiss = (await isBrowserNavigationErrorPage()) || (await isBlankAppDocument())
+    if (!recoverableLaunchMiss && attempt >= 2) {
       break
     }
     await page.waitForTimeout(1500)
   }
 
-  await page.goto('/', { waitUntil: 'domcontentloaded', timeout: navigationTimeoutMs }).catch(() => undefined)
-  const visible = await expect
-    .poll(isWelcomeVisible, {
-      timeout: Math.max(1_000, pageBudgetMs - (Date.now() - startedAt)),
-      message: 'Expected the welcome screen or Start My Assessment CTA to be visible',
-    })
-    .toBe(true)
-    .then(() => true)
-    .catch(() => false)
+  let visible = false
+  while (Date.now() - startedAt < pageBudgetMs) {
+    await page.goto('/', { waitUntil: 'domcontentloaded', timeout: navigationTimeoutMs }).catch(() => undefined)
+    visible = await expect
+      .poll(isWelcomeVisible, {
+        timeout: Math.min(10_000, Math.max(1_000, pageBudgetMs - (Date.now() - startedAt))),
+        message: 'Expected the welcome screen or Start My Assessment CTA to be visible',
+      })
+      .toBe(true)
+      .then(() => true)
+      .catch(() => false)
+    if (visible) break
+    if (!(await isBrowserNavigationErrorPage()) && !(await isBlankAppDocument())) {
+      break
+    }
+    await page.waitForTimeout(1500)
+  }
   if (!visible) {
     const diagnostic = await page
       .evaluate(() => ({
