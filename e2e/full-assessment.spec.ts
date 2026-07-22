@@ -98,8 +98,8 @@ type AssessmentReportGenerationPayload = {
 type AssessmentReportRequestPayload = {
   format?: unknown
   variant?: unknown
-  includeDocuments?: unknown
-  includeTrends?: unknown
+  include_documents?: unknown
+  include_trends?: unknown
   delivery?: unknown
 }
 
@@ -595,8 +595,8 @@ async function expectRenderedAssessmentPdf(request: APIRequestContext, response:
   }
   expect(requestPayload.format).toBe('pdf')
   expect(requestPayload.variant).toBe('summary')
-  expect(requestPayload.includeDocuments).toBe(false)
-  expect(requestPayload.includeTrends).toBe(false)
+  expect(requestPayload.include_documents).toBe(false)
+  expect(requestPayload.include_trends).toBe(false)
   expect(requestPayload.delivery).toBe('download_url')
 
   const payload = (await response.json()) as AssessmentReportGenerationPayload
