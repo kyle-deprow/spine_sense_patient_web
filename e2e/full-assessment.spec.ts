@@ -2320,7 +2320,7 @@ test.describe('patient web full assessment flow', () => {
         testId: 'results-report-options-generate',
         matches: isAssessmentReportGenerationResponse,
         retryErrorTestId: 'results-report-error',
-        timeout: 120_000,
+        timeout: TRANSITION_BUDGETS_MS.report,
         attempts: 2,
       }),
     )
