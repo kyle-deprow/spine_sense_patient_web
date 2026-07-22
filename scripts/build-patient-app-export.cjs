@@ -44,7 +44,6 @@ const args = [
   outputDir,
   '--max-workers',
   '1',
-  '--no-minify',
   ...process.argv.slice(2),
 ];
 

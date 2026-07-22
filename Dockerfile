@@ -1,6 +1,6 @@
 # SpineSense Patient Web — Next.js gateway for the exported patient app
 
-FROM node:20-alpine AS base
+FROM node:24-alpine AS base
 WORKDIR /workspace
 RUN corepack enable pnpm
 
@@ -29,7 +29,7 @@ RUN mkdir -p public
 RUN pnpm build
 
 # ── Production ───────────────────────────────────────────────────
-FROM node:20-alpine AS runner
+FROM node:24-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1

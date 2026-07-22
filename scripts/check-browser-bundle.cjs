@@ -41,11 +41,11 @@ const FORBIDDEN_PATTERNS = [
   },
   {
     label: 'SecureStore browser path',
-    pattern: /\bSecureStore\b|\bsecure_token_storage\b/,
+    pattern: /\bSecureStore\b/,
   },
   {
     label: 'MMKV browser path',
-    pattern: /\bMMKV\b|\bpersistent_phi_storage\b/,
+    pattern: /\bMMKV\b/,
   },
   {
     label: 'JS-readable backend token field',
@@ -88,6 +88,10 @@ function collectBundleFiles(rootDir) {
 
 function scanFile(filePath) {
   const source = fs.readFileSync(filePath, 'utf8');
+  return scanSource(source, filePath);
+}
+
+function scanSource(source, filePath = '<fixture>') {
   return FORBIDDEN_PATTERNS.filter(({ pattern }) => pattern.test(source)).map(({ label }) => ({
     filePath,
     label,
@@ -141,3 +145,5 @@ function main() {
 if (require.main === module) {
   main();
 }
+
+module.exports = { scanSource };

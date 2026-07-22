@@ -21,6 +21,18 @@ describe('patient web Permissions-Policy', () => {
     )
   })
 
+  it('includes the Sharp native runtime in the standalone production trace', () => {
+    expect(nextConfig.outputFileTracingIncludes?.['/*']).toContain(
+      './node_modules/.pnpm/@img+sharp-libvips-*/**/*',
+    )
+    expect(nextConfig.outputFileTracingIncludes?.['/*']).toContain(
+      './node_modules/.pnpm/@img+sharp-*/node_modules/@img/sharp-libvips-*/**/*',
+    )
+    expect(nextConfig.outputFileTracingIncludes?.['/*']).toContain(
+      './node_modules/.pnpm/sharp@0.35.0/node_modules/@img/sharp-libvips-*/**/*',
+    )
+  })
+
   it.each(['development', 'test', 'e2e', 'staging', 'production', 'preview', ''])(
     'does not gate the microphone header on the %j app environment',
     (environment) => {
