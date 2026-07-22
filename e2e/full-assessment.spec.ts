@@ -376,10 +376,10 @@ function expectQuestionnaireMutationContracts(
       requiredKeys: ['answers', 'expected_revision'],
       fixtureAnswers: adaptiveAnswers,
     },
-    '/adaptive/complete': {
-      allowedKeys: ['expected_revision'],
-      requiredKeys: ['expected_revision'],
-      fixtureAnswers: null,
+    '/adaptive/complete-with-answers': {
+      allowedKeys: ['answers', 'expected_revision', 'question_notes'],
+      requiredKeys: ['answers', 'expected_revision'],
+      fixtureAnswers: adaptiveAnswers,
     },
   } as const
 
@@ -418,13 +418,21 @@ function expectQuestionnaireMutationContracts(
       if (isRecord(payload.answers) && contract.fixtureAnswers != null) {
         for (const [questionId, value] of Object.entries(payload.answers)) {
           expect(
-            !(path.endsWith('/adaptive/answers') && SCREENING_GOAL_QUESTION_IDS.has(questionId)),
+            !(
+              (path.endsWith('/adaptive/answers') ||
+                path.endsWith('/adaptive/complete-with-answers')) &&
+              SCREENING_GOAL_QUESTION_IDS.has(questionId)
+            ),
             `${path} must not submit screening goal ${questionId} as an adaptive follow-up`,
           ).toBe(true)
           if (path.endsWith('/screening/answers') && screeningGoalSubmissionCounts.has(questionId)) {
             screeningGoalSubmissionCounts.set(questionId, (screeningGoalSubmissionCounts.get(questionId) ?? 0) + 1)
           }
-          if (path.endsWith('/adaptive/answers') && SCREENING_GOAL_QUESTION_IDS.has(questionId)) {
+          if (
+            (path.endsWith('/adaptive/answers') ||
+              path.endsWith('/adaptive/complete-with-answers')) &&
+            SCREENING_GOAL_QUESTION_IDS.has(questionId)
+          ) {
             adaptiveGoalSubmissionIds.add(questionId)
           }
           expect(

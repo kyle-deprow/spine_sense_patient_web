@@ -69,7 +69,7 @@ export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
     prefix: '/api/v1/patients/me/assessments',
     methods: ['POST'],
     pathPattern: new RegExp(
-      `${ASSESSMENT_RE}\\/(?:story|screening\\/complete|prefill|adaptive\\/prepare|adaptive\\/complete|analysis\\/run|documents|documents\\/upload-url|documents\\/text)$`,
+      `${ASSESSMENT_RE}\\/(?:story|screening\\/complete|prefill|adaptive\\/prepare|adaptive\\/complete|adaptive\\/complete-with-answers|analysis\\/run|documents|documents\\/upload-url|documents\\/text)$`,
       'i',
     ),
   },

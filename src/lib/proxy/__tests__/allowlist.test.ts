@@ -49,6 +49,16 @@ describe('proxy allowlist', () => {
     })
   })
 
+  it('allows combined adaptive answer save and completion through the assessment proxy', () => {
+    const assessmentId = '10000000-0000-4000-8000-000000000001'
+    const targetPath = `/api/v1/patients/me/assessments/${assessmentId}/adaptive/complete-with-answers`
+
+    expect(validateProxyTarget(targetPath.slice(1).split('/'), 'POST', `/api/proxy${targetPath}`)).toEqual({
+      ok: true,
+      targetPath,
+    })
+  })
+
   it('blocks retired story voice aliases and arbitrary question-note live transcription child routes', () => {
     const assessmentId = '10000000-0000-4000-8000-000000000001'
     const cases = [
