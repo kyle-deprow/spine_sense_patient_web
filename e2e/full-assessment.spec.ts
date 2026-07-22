@@ -1322,8 +1322,6 @@ async function clickScreeningSubmitIfPresent(page: Page, timeout = 30_000): Prom
     if (!(await isScreeningSubmitButton(page))) return false
     await expect(footerSubmit).toBeEnabled({ timeout })
     await footerSubmit.click()
-    await page.waitForTimeout(500)
-    if (!(await footerSubmit.isVisible({ timeout: 500 }).catch(() => false))) return true
     return true
   }
 
@@ -1331,8 +1329,6 @@ async function clickScreeningSubmitIfPresent(page: Page, timeout = 30_000): Prom
   if (await submit.isVisible({ timeout }).catch(() => false)) {
     await expect(submit).toBeEnabled({ timeout })
     await submit.click({ timeout: 10_000 })
-    await page.waitForTimeout(500)
-    if (!(await submit.isVisible({ timeout: 500 }).catch(() => false))) return true
     return true
   }
 
@@ -1357,12 +1353,17 @@ async function submitScreening(page: Page, profiler: TransitionProfiler) {
   await expect(page.getByTestId('screening-nav-next')).toBeVisible({
     timeout: 30_000,
   })
+  const finalQuestionId = await currentVisibleScreeningQuestionId(page).catch(() => null)
+  expect(finalQuestionId, 'Screening submit must start from the final screening question').toBe(
+    FINAL_SCREENING_QUESTION_ID,
+  )
 
   for (let attempt = 0; attempt < 5; attempt += 1) {
     let clickedSubmit = false
     const nextStage = await profiler
       .measure('screening.submit_to_post_screening', 'stage', async () => {
         clickedSubmit = await clickScreeningSubmitIfPresent(page)
+        if (!clickedSubmit) return null
         return waitForAnyVisibleTestId(page, POST_SCREENING_STAGE_TEST_IDS, 20_000).catch(() => null)
       })
       .catch((error) => {
@@ -1371,6 +1372,8 @@ async function submitScreening(page: Page, profiler: TransitionProfiler) {
       })
     if (nextStage != null) return
     expect(clickedSubmit).toBe(true)
+    await expect(page.getByTestId('screening-nav-next')).toBeVisible({ timeout: 5_000 })
+    await expect(page.getByTestId('screening-nav-next')).toBeEnabled({ timeout: 30_000 })
   }
 
   await profiler.measure('screening.submit_to_post_screening.final_wait', 'stage', () =>
