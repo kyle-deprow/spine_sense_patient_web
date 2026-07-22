@@ -6,8 +6,10 @@ import {
   type Locator,
   type Page,
   type Response as PlaywrightResponse,
+  type TestInfo,
 } from '@playwright/test'
 import { createHash } from 'node:crypto'
+import { performance } from 'node:perf_hooks'
 
 import { fullAssessmentScenario } from './fixtures/fullAssessmentScenario'
 
@@ -19,6 +21,7 @@ const TEST_SUPPORT_TOKEN = process.env.PATIENT_WEB_TEST_SUPPORT_TOKEN
 const EXPECT_SECURE_COOKIES = process.env.PATIENT_WEB_EXPECT_SECURE_COOKIES === 'true'
 const ENABLE_FULL_ASSESSMENT_STRESS = process.env.PATIENT_WEB_FULL_ASSESSMENT_STRESS !== 'false'
 const FULL_FLOW_TIMEOUT_MS = 15 * 60 * 1000
+const ENABLE_TRANSITION_PROFILING = process.env.PATIENT_WEB_E2E_PROFILE_TRANSITIONS !== 'false'
 const ASSESSMENT_REPORT_PROXY_PATH_RE =
   /^\/api\/proxy\/api\/v1\/patients\/me\/assessments\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/reports$/i
 const STRESS_RELOAD_AFTER_SCREENING_QUESTION_ID = fullAssessmentScenario.stress.reloadAfterScreeningQuestionId
@@ -89,6 +92,16 @@ type AssessmentReportGenerationPayload = {
   expires_in_seconds?: unknown
 }
 
+type TransitionProfileKind = 'page' | 'question' | 'stage' | 'analysis' | 'report'
+
+type TransitionProfileSample = {
+  label: string
+  kind: TransitionProfileKind
+  durationMs: number
+  budgetMs: number
+  status: 'ok' | 'slow'
+}
+
 const SCREENING_ANSWERS_BY_ID = new Map(fullAssessmentScenario.screening.map((answer) => [answer.id, answer]))
 const SCREENING_TEXT_ANSWERS_BY_ID = new Map(fullAssessmentScenario.screeningText.map((answer) => [answer.id, answer]))
 const ADAPTIVE_ANSWERS_BY_ID = new Map(fullAssessmentScenario.adaptive.map((answer) => [answer.id, answer]))
@@ -103,6 +116,72 @@ const SCREENING_GOAL_QUESTION_IDS: ReadonlySet<string> = new Set([
   ...fullAssessmentScenario.requiredScreeningGoalQuestionIds,
   ...fullAssessmentScenario.optionalScreeningGoalQuestionIds,
 ])
+
+function readPositiveIntegerEnv(name: string, defaultValue: number): number {
+  const raw = process.env[name]
+  if (raw == null || raw.trim().length === 0) return defaultValue
+
+  const value = Number(raw)
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer number of milliseconds`)
+  }
+  return value
+}
+
+const TRANSITION_BUDGETS_MS: Record<TransitionProfileKind, number> = {
+  page: readPositiveIntegerEnv('PATIENT_WEB_E2E_PAGE_BUDGET_MS', 8_000),
+  question: readPositiveIntegerEnv('PATIENT_WEB_E2E_QUESTION_BUDGET_MS', 5_000),
+  stage: readPositiveIntegerEnv('PATIENT_WEB_E2E_STAGE_BUDGET_MS', 20_000),
+  analysis: readPositiveIntegerEnv('PATIENT_WEB_E2E_ANALYSIS_BUDGET_MS', 480_000),
+  report: readPositiveIntegerEnv('PATIENT_WEB_E2E_REPORT_BUDGET_MS', 120_000),
+}
+
+class TransitionProfiler {
+  private readonly samples: TransitionProfileSample[] = []
+
+  async measure<T>(label: string, kind: TransitionProfileKind, action: () => Promise<T>): Promise<T> {
+    if (!ENABLE_TRANSITION_PROFILING) {
+      return action()
+    }
+
+    const startedAt = performance.now()
+    let actionFailed = false
+    try {
+      return await action()
+    } catch (error) {
+      actionFailed = true
+      throw error
+    } finally {
+      const durationMs = Math.round((performance.now() - startedAt) * 10) / 10
+      const budgetMs = TRANSITION_BUDGETS_MS[kind]
+      const status = durationMs > budgetMs ? 'slow' : 'ok'
+      this.samples.push({ label, kind, durationMs, budgetMs, status })
+      console.log(
+        `[perf] label=${label} kind=${kind} duration_ms=${durationMs.toFixed(1)} budget_ms=${budgetMs} status=${status}`,
+      )
+      if (!actionFailed) {
+        expect(durationMs, `${label} exceeded ${budgetMs}ms budget (${durationMs.toFixed(1)}ms)`).toBeLessThanOrEqual(
+          budgetMs,
+        )
+      }
+    }
+  }
+
+  async attach(testInfo: TestInfo): Promise<void> {
+    if (!ENABLE_TRANSITION_PROFILING) return
+    await testInfo.attach('transition-profile.json', {
+      body: JSON.stringify(
+        {
+          budgetsMs: TRANSITION_BUDGETS_MS,
+          samples: this.samples,
+        },
+        null,
+        2,
+      ),
+      contentType: 'application/json',
+    })
+  }
+}
 
 function logMilestone(message: string): void {
   console.log(`[milestone] ${message}`)
@@ -188,7 +267,7 @@ function captureQuestionnaireMutations(page: Page): QuestionnaireMutation[] {
   const mutations: QuestionnaireMutation[] = []
   page.on('request', (request) => {
     const path = new URL(request.url()).pathname
-    if (!/(screening|adaptive)\/(answers|complete)$/.test(path)) return
+    if (!/(screening|adaptive)\/(answers|complete|complete-with-answers)$/.test(path)) return
 
     let payload: unknown = null
     try {
@@ -1191,7 +1270,7 @@ const POST_SCREENING_STAGE_TEST_IDS = [
   'home-screen',
 ] as const
 
-async function submitScreening(page: Page) {
+async function submitScreening(page: Page, profiler: TransitionProfiler) {
   const existingStage = await waitForAnyVisibleTestId(page, POST_SCREENING_STAGE_TEST_IDS, 1000).catch(() => null)
   if (existingStage != null) return
 
@@ -1200,13 +1279,23 @@ async function submitScreening(page: Page) {
   })
 
   for (let attempt = 0; attempt < 5; attempt += 1) {
-    const clickedSubmit = await clickScreeningSubmitIfPresent(page)
-    const nextStage = await waitForAnyVisibleTestId(page, POST_SCREENING_STAGE_TEST_IDS, 20_000).catch(() => null)
+    let clickedSubmit = false
+    const nextStage = await profiler
+      .measure('screening.submit_to_post_screening', 'stage', async () => {
+        clickedSubmit = await clickScreeningSubmitIfPresent(page)
+        return waitForAnyVisibleTestId(page, POST_SCREENING_STAGE_TEST_IDS, 20_000).catch(() => null)
+      })
+      .catch((error) => {
+        if (attempt === 4) throw error
+        return null
+      })
     if (nextStage != null) return
     expect(clickedSubmit).toBe(true)
   }
 
-  await waitForAnyVisibleTestId(page, POST_SCREENING_STAGE_TEST_IDS, 120_000)
+  await profiler.measure('screening.submit_to_post_screening.final_wait', 'stage', () =>
+    waitForAnyVisibleTestId(page, POST_SCREENING_STAGE_TEST_IDS, 120_000),
+  )
 }
 
 function answerCandidateTestIds(prefix: string, id: string, value: string | number): string[] {
@@ -1296,12 +1385,6 @@ async function answerOneValue(page: Page, prefix: string, id: string, value: str
   throw new Error(`No visible control found for ${prefix}-${id}=${normalized}`)
 }
 
-async function isEnabled(page: Page, testId: string): Promise<boolean> {
-  const locator = await actionableLocatorForTestId(page, testId)
-  if (!(await locator.isVisible({ timeout: 500 }).catch(() => false))) return false
-  return locator.isEnabled({ timeout: 500 }).catch(() => false)
-}
-
 async function answerQuestion(page: Page, prefix: string, answer: AssessmentAnswer) {
   for (const value of answerValues(answer.value)) {
     await answerOneValue(page, prefix, answer.id, value)
@@ -1333,17 +1416,11 @@ async function currentVisibleScreeningQuestionId(page: Page): Promise<string> {
     throw new Error('No current visible screening question container was found')
   }
 
-  return visibleQuestionIds[0]!
-}
-
-async function currentVisibleScreeningAnswer(page: Page): Promise<AssessmentAnswer> {
-  const questionId = await currentVisibleScreeningQuestionId(page)
-  const answer = SCREENING_ANSWERS_BY_ID.get(questionId)
-  if (answer == null) {
-    throw new Error(`No screening fixture answer is defined for current question ${questionId}`)
+  const questionId = visibleQuestionIds[0]
+  if (questionId == null) {
+    throw new Error('No current visible screening question id was resolved')
   }
-
-  return answer
+  return questionId
 }
 
 async function waitForScreeningNavIdle(page: Page, timeout = 30_000) {
@@ -1506,7 +1583,7 @@ async function stressBacktrackOneScreeningQuestion(
   await expectNoAssessmentBlockingState(page)
 }
 
-async function answerScreening(page: Page) {
+async function answerScreening(page: Page, profiler: TransitionProfiler) {
   await expect(page.getByTestId('screening-nav-next')).toBeVisible({
     timeout: 60_000,
   })
@@ -1604,7 +1681,9 @@ async function answerScreening(page: Page) {
       return
     }
 
-    await clickScreeningNextAndWaitForAdvance(page, questionId)
+    await profiler.measure(`screening.question.${questionId}`, 'question', () =>
+      clickScreeningNextAndWaitForAdvance(page, questionId),
+    )
     await expectNoAssessmentBlockingState(page)
 
     if (
@@ -1710,6 +1789,7 @@ async function answerIssuedAdaptiveQuestion(
 async function completeAdaptiveIfPresent(
   page: Page,
   generatedAdaptiveAnswers: Map<string, unknown>,
+  profiler: TransitionProfiler,
 ): Promise<string | null> {
   const adaptiveScreen = page.getByTestId('adaptive-screen')
   let initialStage = await waitForAssessmentStage(page, [
@@ -1720,20 +1800,20 @@ async function completeAdaptiveIfPresent(
   ])
   for (let retryAttempt = 0; retryAttempt < 3; retryAttempt += 1) {
     if (initialStage === 'adaptive-loading-error-state') {
-      await waitForEnabledAndClick(page, 'adaptive-loading-retry')
-      initialStage = await waitForRetryOutcome(page, 'adaptive-loading-error-state', [
-        'adaptive-loading-state',
-        'adaptive-screen',
-        'adaptive-error-state',
-      ])
+      initialStage = await profiler.measure('adaptive.retry_loading', 'stage', async () => {
+        await waitForEnabledAndClick(page, 'adaptive-loading-retry')
+        return waitForRetryOutcome(page, 'adaptive-loading-error-state', [
+          'adaptive-loading-state',
+          'adaptive-screen',
+          'adaptive-error-state',
+        ])
+      })
     }
 
     if (initialStage === 'adaptive-loading-state') {
-      initialStage = await waitForAssessmentStage(page, [
-        'adaptive-loading-error-state',
-        'adaptive-screen',
-        'adaptive-error-state',
-      ])
+      initialStage = await profiler.measure('adaptive.loading_to_question', 'stage', () =>
+        waitForAssessmentStage(page, ['adaptive-loading-error-state', 'adaptive-screen', 'adaptive-error-state']),
+      )
       continue
     }
 
@@ -1750,38 +1830,53 @@ async function completeAdaptiveIfPresent(
     }
     await answerIssuedAdaptiveQuestion(page, generatedAdaptiveAnswers)
     const currentQuestionTestId = await visibleDynamicQuestionTestId(page, 'adaptive-question')
-    await waitForEnabledAndClick(page, 'adaptive-submit')
-    const nextStage = await waitForDynamicQuestionAdvance(
-      page,
-      'adaptive-screen',
-      'adaptive-question',
-      currentQuestionTestId,
-      'adaptive-submit',
-      ['adaptive-loading-state', 'adaptive-error-state', 'review-screen'],
-    )
+    if (currentQuestionTestId == null) {
+      throw new Error('Adaptive screen is visible without a current question test id')
+    }
+    const questionLabel = currentQuestionTestId.replace(/^adaptive-question-/, 'adaptive.question.')
+    const nextStage = await profiler.measure(questionLabel, 'question', async () => {
+      await waitForEnabledAndClick(page, 'adaptive-submit')
+      return waitForDynamicQuestionAdvance(
+        page,
+        'adaptive-screen',
+        'adaptive-question',
+        currentQuestionTestId,
+        'adaptive-submit',
+        ['adaptive-loading-state', 'adaptive-error-state', 'review-screen'],
+      )
+    })
+    if (nextStage === 'adaptive-loading-state') {
+      const resolvedStage = await profiler.measure('adaptive.loading_to_next_stage', 'stage', () =>
+        waitForAssessmentStage(page, ['adaptive-screen', 'adaptive-error-state', 'review-screen']),
+      )
+      if (resolvedStage !== 'adaptive-screen') return resolvedStage
+      continue
+    }
     if (nextStage !== 'adaptive-screen') return nextStage
   }
 
   throw new Error('Adaptive questionnaire did not exit after 20 questions')
 }
 
-async function waitForAnalysisReadyAndConfirm(page: Page) {
-  const analysisStage = await waitForAnyVisibleTestId(
-    page,
-    ['results-ready-confirm', 'assessment-processing-failed'],
-    480_000,
-  )
-  if (analysisStage === 'assessment-processing-failed') {
-    const failureReason = await page
-      .getByTestId('processing-failure-reason')
-      .textContent({ timeout: 1000 })
-      .catch(() => null)
-    throw new Error(
-      `Assessment analysis failed during full E2E${failureReason ? `: ${sanitizeDiagnostic(failureReason)}` : ''}`,
+async function waitForAnalysisReadyAndConfirm(page: Page, profiler: TransitionProfiler) {
+  await profiler.measure('processing.to_results_ready', 'analysis', async () => {
+    const analysisStage = await waitForAnyVisibleTestId(
+      page,
+      ['results-ready-confirm', 'assessment-processing-failed'],
+      480_000,
     )
-  }
+    if (analysisStage === 'assessment-processing-failed') {
+      const failureReason = await page
+        .getByTestId('processing-failure-reason')
+        .textContent({ timeout: 1000 })
+        .catch(() => null)
+      throw new Error(
+        `Assessment analysis failed during full E2E${failureReason ? `: ${sanitizeDiagnostic(failureReason)}` : ''}`,
+      )
+    }
 
-  await waitForEnabledAndClick(page, 'results-ready-confirm', 30_000)
+    await waitForEnabledAndClick(page, 'results-ready-confirm', 30_000)
+  })
 }
 
 async function completeProfileIfPresent(page: Page) {
@@ -1978,19 +2073,22 @@ test.describe('patient web full assessment flow', () => {
     await page.emulateMedia({ reducedMotion: 'no-preference' })
     const questionnaireMutations = captureQuestionnaireMutations(page)
     const generatedAdaptiveAnswers = new Map<string, unknown>()
+    const profiler = new TransitionProfiler()
 
+    try {
     let email = uniqueSyntheticEmail()
     const { registration, onboarding } = fullAssessmentScenario
 
     logMilestone('reset complete; warming csrf')
-    await warmCsrfSession(page)
+    await profiler.measure('session.csrf_warm', 'stage', () => warmCsrfSession(page))
     logMilestone('csrf warm; opening welcome')
-    await gotoWelcome(page)
+    await profiler.measure('launch.welcome', 'page', () => gotoWelcome(page))
     logMilestone('welcome visible; opening registration')
-    await clickWelcomeGetStarted(page)
-
-    await expect(page.getByTestId('register-screen')).toBeVisible({
-      timeout: 30_000,
+    await profiler.measure('welcome.to_registration', 'page', async () => {
+      await clickWelcomeGetStarted(page)
+      await expect(page.getByTestId('register-screen')).toBeVisible({
+        timeout: 30_000,
+      })
     })
     logMilestone('registration screen visible; submitting registration')
     await fillByTestId(page, 'register-first-name', registration.firstName)
@@ -2001,12 +2099,14 @@ test.describe('patient web full assessment flow', () => {
     await clickIfPresent(page, 'register-consent-storage')
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const registerResponse = await clickAndWaitForResponseOrSuccess({
-        page,
-        testId: 'register-submit',
-        successTestId: 'verify-screen',
-        matches: (response) => response.url().includes('/api/auth/register') && response.request().method() === 'POST',
-      })
+      const registerResponse = await profiler.measure(`registration.to_verify.attempt_${attempt + 1}`, 'page', () =>
+        clickAndWaitForResponseOrSuccess({
+          page,
+          testId: 'register-submit',
+          successTestId: 'verify-screen',
+          matches: (response) => response.url().includes('/api/auth/register') && response.request().method() === 'POST',
+        }),
+      )
       if (registerResponse != null) {
         expect(registerResponse.ok()).toBeTruthy()
         await expectNoTokenLeak(await registerResponse.text())
@@ -2042,12 +2142,14 @@ test.describe('patient web full assessment flow', () => {
     const verificationCode = await getRegistrationVerificationCode(request, email)
     await fillByTestId(page, 'verify-otp-digit-0', verificationCode)
     logMilestone('verification code entered; submitting verification')
-    const verifyResponse = await clickAndWaitForResponse({
-      page,
-      testId: 'verify-submit',
-      matches: (response) =>
-        response.url().includes('/api/auth/verify/registration/confirm') && response.request().method() === 'POST',
-    })
+    const verifyResponse = await profiler.measure('verification.to_authenticated_session', 'page', () =>
+      clickAndWaitForResponse({
+        page,
+        testId: 'verify-submit',
+        matches: (response) =>
+          response.url().includes('/api/auth/verify/registration/confirm') && response.request().method() === 'POST',
+      }),
+    )
     expect(verifyResponse.ok()).toBeTruthy()
     await expectNoTokenLeak(await verifyResponse.text())
     expect(page.url()).not.toContain('verification')
@@ -2055,23 +2157,29 @@ test.describe('patient web full assessment flow', () => {
     await expectAuthenticatedCookieSession(page)
 
     logMilestone('authenticated cookies verified; waiting for consent')
-    await expectConsentScreenAfterVerification(page)
+    await profiler.measure('authenticated_session.to_consent', 'page', () => expectConsentScreenAfterVerification(page))
     logMilestone('consent screen visible; accepting consent')
-    await acceptConsentIfPresent(page)
 
-    logMilestone('consent accepted; continuing welcome intro')
-    await continueWelcomeIntroIfPresent(page)
-    await expect(page.getByTestId('onboarding-layout')).toBeVisible({
-      timeout: 60_000,
+    await profiler.measure('consent.to_onboarding', 'page', async () => {
+      await acceptConsentIfPresent(page)
+      logMilestone('consent accepted; continuing welcome intro')
+      await continueWelcomeIntroIfPresent(page)
+      await expect(page.getByTestId('onboarding-layout')).toBeVisible({
+        timeout: 60_000,
+      })
     })
     logMilestone('onboarding layout visible; filling onboarding')
-    await completeProfileIfPresent(page)
-    await expectChiefComplaintAfterProfileSave(page)
+    await profiler.measure('onboarding.profile_to_chief_complaint', 'page', async () => {
+      await completeProfileIfPresent(page)
+      await expectChiefComplaintAfterProfileSave(page)
+    })
     await clickByTestId(page, 'chief-complaint-text-option')
     await expect(page.getByTestId('step-chief-complaint-text')).toBeVisible()
     await fillByTestId(page, 'narrative-input', onboarding.chiefComplaint)
-    await clickChiefComplaintSave(page)
-    await expectTreatmentHistoryAfterStorySave(page)
+    await profiler.measure('onboarding.chief_complaint_to_history', 'page', async () => {
+      await clickChiefComplaintSave(page)
+      await expectTreatmentHistoryAfterStorySave(page)
+    })
     await clickByTestId(page, 'medical-history-conditions-none')
     const negativeMedicalHistoryAnswers = page.getByRole('button', {
       name: 'No',
@@ -2084,33 +2192,43 @@ test.describe('patient web full assessment flow', () => {
       await page.waitForTimeout(500)
     }
     await clickByTestId(page, 'medical-history-nicotine-no')
-    await waitForEnabledAndClick(page, 'medical-history-continue-btn')
+    await profiler.measure('onboarding.history_to_records', 'page', async () => {
+      await waitForEnabledAndClick(page, 'medical-history-continue-btn')
+      await expectImagingRecordsAfterHistorySave(page)
+    })
 
-    await expectImagingRecordsAfterHistorySave(page)
     logMilestone('imaging records visible; uploading synthetic assessment document')
     await uploadSyntheticAssessmentDocumentFromRecordsStep(page, email)
-    await clickRecordsContinue(page)
 
-    const firstAssessmentScreen = await waitForAssessmentEntry(page)
+    const firstAssessmentScreen = await profiler.measure('onboarding.records_to_assessment_entry', 'stage', async () => {
+      await clickRecordsContinue(page)
+      return waitForAssessmentEntry(page)
+    })
     if (firstAssessmentScreen === 'story-capture' || firstAssessmentScreen === 'story-screen') {
       await clickByTestId(page, 'story-capture-text-tab')
       await fillByTestId(page, 'story-capture-text-input', fullAssessmentScenario.assessmentStory)
       await page.getByTestId('story-capture-text-input').blur()
-      await waitForEnabledAndClick(page, 'story-capture-continue-btn')
-
-      await expect(page.getByTestId('documents-screen')).toBeVisible({
-        timeout: 60_000,
+      await profiler.measure('assessment.story_to_documents', 'page', async () => {
+        await waitForEnabledAndClick(page, 'story-capture-continue-btn')
+        await expect(page.getByTestId('documents-screen')).toBeVisible({
+          timeout: 60_000,
+        })
       })
-      await clickByTestId(page, 'documents-skip-btn')
+      await profiler.measure('assessment.documents_to_screening', 'page', async () => {
+        await clickByTestId(page, 'documents-skip-btn')
+        await expect(page.getByTestId('screening-screen')).toBeVisible({
+          timeout: 60_000,
+        })
+      })
     }
 
     await expect(page.getByTestId('screening-screen')).toBeVisible({
       timeout: 60_000,
     })
-    await answerScreening(page)
-    await submitScreening(page)
+    await answerScreening(page, profiler)
+    await submitScreening(page, profiler)
 
-    const postAdaptiveStage = await completeAdaptiveIfPresent(page, generatedAdaptiveAnswers)
+    const postAdaptiveStage = await completeAdaptiveIfPresent(page, generatedAdaptiveAnswers, profiler)
     if (postAdaptiveStage !== 'review-screen') {
       throw new Error(`Expected review-screen after adaptive flow, got ${postAdaptiveStage}`)
     }
@@ -2122,12 +2240,13 @@ test.describe('patient web full assessment flow', () => {
     await expect(page.getByTestId('review-ready-title')).toBeVisible()
     await expect(page.getByText('ASSESSMENT COMPLETE')).toBeVisible()
     await expect(page.getByText(/build your personalized clinical picture/i)).toBeVisible()
-    await waitForEnabledAndClick(page, 'review-submit')
-
-    await expect(page.getByTestId('assessment-processing')).toBeVisible({
-      timeout: 30_000,
+    await profiler.measure('review.to_processing', 'page', async () => {
+      await waitForEnabledAndClick(page, 'review-submit')
+      await expect(page.getByTestId('assessment-processing')).toBeVisible({
+        timeout: 30_000,
+      })
     })
-    await waitForAnalysisReadyAndConfirm(page)
+    await waitForAnalysisReadyAndConfirm(page, profiler)
     await expect(page.getByTestId('results-screen')).toBeVisible({
       timeout: 480_000,
     })
@@ -2148,14 +2267,16 @@ test.describe('patient web full assessment flow', () => {
     await includeDocuments.click()
     await expect(includeDocuments).not.toBeChecked()
     await expect(page.getByTestId('results-report-options-generate')).toHaveAttribute('aria-label', 'Generate PDF')
-    const reportResponse = await clickAndWaitForResponse({
-      page,
-      testId: 'results-report-options-generate',
-      matches: isAssessmentReportGenerationResponse,
-      retryErrorTestId: 'results-report-error',
-      timeout: 120_000,
-      attempts: 2,
-    })
+    const reportResponse = await profiler.measure('results.report_generation', 'report', () =>
+      clickAndWaitForResponse({
+        page,
+        testId: 'results-report-options-generate',
+        matches: isAssessmentReportGenerationResponse,
+        retryErrorTestId: 'results-report-error',
+        timeout: 120_000,
+        attempts: 2,
+      }),
+    )
     if (reportResponse.status() !== 201) {
       const reportError = await reportResponse
         .json()
@@ -2166,13 +2287,17 @@ test.describe('patient web full assessment flow', () => {
     await expectRenderedAssessmentPdf(request, reportResponse)
     await expect(page.getByTestId('results-report-error')).toBeHidden()
     await expectNoBrowserStorage(page)
-    await waitForEnabledAndClick(page, 'tab-home', 30_000)
-
-    await expect(page.locator('[data-testid="home-screen"]:visible')).toBeVisible({ timeout: 60_000 })
+    await profiler.measure('results.to_home', 'page', async () => {
+      await waitForEnabledAndClick(page, 'tab-home', 30_000)
+      await expect(page.locator('[data-testid="home-screen"]:visible')).toBeVisible({ timeout: 60_000 })
+    })
     await expect(page.getByTestId('assessment-entry-banner')).toBeHidden()
     await expect(page.locator('[data-testid="clinical-summary-card"]:visible')).toBeVisible()
     await expect(page.locator('[data-testid="summary-headline"]:visible')).toBeVisible()
     await expect(page.locator('[data-testid="active-problems-card"]:visible')).toBeVisible()
     await expectNoBrowserStorage(page)
+    } finally {
+      await profiler.attach(test.info())
+    }
   })
 })
