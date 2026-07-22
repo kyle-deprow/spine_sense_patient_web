@@ -473,7 +473,12 @@ function expectQuestionnaireMutationContracts(
     },
   } as const
 
-  for (const suffix of Object.keys(contracts) as Array<keyof typeof contracts>) {
+  const requiredMutationSuffixes: readonly (keyof typeof contracts)[] = [
+    '/screening/answers',
+    '/screening/complete',
+    '/adaptive/complete-with-answers',
+  ]
+  for (const suffix of requiredMutationSuffixes) {
     expect(
       mutations.some(({ path }) => path.endsWith(suffix)),
       `${suffix} must be exercised`,
