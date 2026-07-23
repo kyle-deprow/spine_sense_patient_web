@@ -31,6 +31,9 @@ const TRANSIENT_UPLOAD_ERROR_CODES = new Set([
   "UND_ERR_CONNECT_TIMEOUT",
 ]);
 const TRANSIENT_UPLOAD_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
+const TRANSIENT_SUPPORT_HTTP_STATUSES = new Set([
+  404, 408, 429, 500, 502, 503, 504,
+]);
 const SYNTHETIC_RUN_NAMESPACE = (process.env.PATIENT_WEB_E2E_RUN_ID ?? "local")
   .toLowerCase()
   .replace(/[^a-z0-9]+/g, "-")
@@ -188,7 +191,7 @@ async function supportPost(
       const text = await response.text();
       if (
         response.ok ||
-        !TRANSIENT_UPLOAD_HTTP_STATUSES.has(response.status) ||
+        !TRANSIENT_SUPPORT_HTTP_STATUSES.has(response.status) ||
         attempt === 3
       ) {
         return { ok: response.ok, status: response.status, text };
