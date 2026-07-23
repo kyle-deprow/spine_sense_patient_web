@@ -24,6 +24,7 @@ import {
 import {
   auditLog,
   createRequestAuditContext,
+  isRoutineAuditEnabled,
   sessionCorrelationFromToken,
   type AuditContext,
 } from "@/lib/server/audit";
@@ -275,6 +276,13 @@ function auditGenericCall(
   auditContext: AuditContext,
   actorId?: string,
 ): void {
+  if (
+    disposition === "allowed" &&
+    reason === "backend_success" &&
+    !isRoutineAuditEnabled()
+  ) {
+    return;
+  }
   auditLog({
     ts: new Date().toISOString(),
     event: `auth.generic.${disposition}`,

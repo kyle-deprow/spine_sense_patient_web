@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 import { createCsrfToken, CSRF_HEADER } from "@/lib/auth/csrf";
@@ -42,9 +42,11 @@ function makeAuthRequest(
     accessToken?: string;
     auditActorId?: string;
     registrationVerificationToken?: string;
+    origin?: string;
   } = {},
 ): NextRequest {
   const method = options.method ?? "POST";
+  const origin = options.origin ?? ORIGIN;
   const csrf = createCsrfToken(CSRF_SECRET, "auth-route-test-nonce");
   const cookies = [`spine_patient_csrf=${csrf}`];
   if (options.accessToken)
@@ -68,11 +70,11 @@ function makeAuthRequest(
       "Content-Type": "application/json",
       Cookie: cookies.join("; "),
       [CSRF_HEADER]: csrf,
-      Origin: ORIGIN,
+      Origin: origin,
     },
   };
   return new NextRequest(
-    `http://localhost${pathname}`,
+    `${origin}${pathname}`,
     method === "GET" ? init : { ...init, body: JSON.stringify(body) },
   );
 }
@@ -89,6 +91,10 @@ describe("auth catch-all route handler", () => {
     vi.stubEnv("PATIENT_WEB_ALLOWED_ORIGINS", ORIGIN);
     mockedBackendFetch.mockReset();
     mockedAuditLog.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("audits an allowed registration verification call with a server request ID", async () => {
@@ -211,6 +217,63 @@ describe("auth catch-all route handler", () => {
     const records = mockedAuditLog.mock.calls.map(([record]) => record);
     expect(records).toHaveLength(2);
     expect(records[0]?.requestId).toBe(records[1]?.requestId);
+  });
+
+  it("keeps token issuance audit records in production without routine success logs", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("ENVIRONMENT", "production");
+    vi.stubEnv("PATIENT_WEB_ALLOWED_ORIGINS", "https://patient.example.test");
+    vi.stubEnv("PATIENT_WEB_CLIENT_IP_MODE", "unavailable");
+    vi.stubEnv("PATIENT_WEB_CREDENTIAL_RATE_LIMIT_STORE", "redis");
+    vi.stubEnv(
+      "REDIS_URL",
+      "rediss://:test-password@redis.example.test:6380/0",
+    );
+    mockedBackendFetch.mockResolvedValueOnce(
+      Response.json({
+        success: true,
+        access_token: "issued-private-access-token",
+        refresh_token: "issued-private-refresh-token",
+      }),
+    );
+    mockedBackendFetch.mockResolvedValueOnce(
+      Response.json({ user_id: ACTOR_ID }),
+    );
+
+    const request = makeAuthRequest(
+      "/api/auth/verify/registration/confirm",
+      {
+        email: "patient@example.test",
+        code: "private-registration-code",
+      },
+      { origin: "https://patient.example.test" },
+    );
+    const response = await POST(
+      request,
+      makeContext(["verify", "registration", "confirm"]),
+    );
+
+    expect(response.status).toBe(200);
+    const records = mockedAuditLog.mock.calls.map(([record]) => record);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toEqual(
+      expect.objectContaining({
+        event: "auth.token.issued",
+        method: "POST",
+        resourceType: "auth.registration_verification",
+        actorId: ACTOR_ID,
+        status: 200,
+        reason: "backend_token_pair",
+        sessionCorrelation: sessionCorrelationFromToken(
+          "issued-private-access-token",
+        ),
+      }),
+    );
+    const auditOutput = JSON.stringify(mockedAuditLog.mock.calls);
+    expect(auditOutput).not.toContain("patient@example.test");
+    expect(auditOutput).not.toContain("private-registration-code");
+    expect(auditOutput).not.toContain("issued-private-access-token");
+    expect(auditOutput).not.toContain("issued-private-refresh-token");
   });
 
   it("audits generic verification token issuance without exposing tokens or PHI", async () => {

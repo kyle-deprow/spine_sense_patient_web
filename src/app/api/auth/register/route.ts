@@ -7,7 +7,11 @@ import {
   readRequestJson,
 } from "@/lib/server/auth";
 import { setRegistrationVerificationCookie } from "@/lib/auth/cookies";
-import { auditLog, createAuditContext } from "@/lib/server/audit";
+import {
+  auditLog,
+  createAuditContext,
+  isRoutineAuditEnabled,
+} from "@/lib/server/audit";
 import { BackendUnavailableError } from "@/lib/server/backend";
 import { jsonNoStore } from "@/lib/server/responses";
 import { checkCredentialRateLimit } from "@/lib/server/rate-limit";
@@ -132,12 +136,14 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  auditLog({
-    ts: new Date().toISOString(),
-    event: "auth.register.attempt",
-    method: "POST",
-    ...auditContext,
-  });
+  if (isRoutineAuditEnabled()) {
+    auditLog({
+      ts: new Date().toISOString(),
+      event: "auth.register.attempt",
+      method: "POST",
+      ...auditContext,
+    });
+  }
 
   const body = await readRequestJson(request);
   if (body == null) {
@@ -197,7 +203,7 @@ export async function POST(request: NextRequest) {
     throw err;
   }
 
-  if (response.ok) {
+  if (response.ok && isRoutineAuditEnabled()) {
     auditLog({
       ts: new Date().toISOString(),
       event: "auth.register.success",

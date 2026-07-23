@@ -25,6 +25,7 @@ import {
   auditLog,
   backendAuthenticatedActorId,
   createAuditContext,
+  isRoutineAuditEnabled,
   type AuditContext,
 } from "@/lib/server/audit";
 import type { BackendLoginResponse, BackendTokenPair } from "@/types/auth";
@@ -190,15 +191,17 @@ export async function forwardCredentialAuth(
       actorId,
     });
     issueCsrfCookie(response);
-    auditLog({
-      ts: new Date().toISOString(),
-      event: successEvent,
-      method: "POST",
-      status: backendResponse.status,
-      ...auditContext,
-      actorId,
-      sessionCorrelation: issued.sessionCorrelation,
-    });
+    if (isRoutineAuditEnabled()) {
+      auditLog({
+        ts: new Date().toISOString(),
+        event: successEvent,
+        method: "POST",
+        status: backendResponse.status,
+        ...auditContext,
+        actorId,
+        sessionCorrelation: issued.sessionCorrelation,
+      });
+    }
     auditLog({
       ts: new Date().toISOString(),
       event: "auth.token.issued",
