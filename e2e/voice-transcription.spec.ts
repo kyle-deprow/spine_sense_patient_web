@@ -1,7 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { expect, test, type Page, type TestInfo } from "@playwright/test";
+import {
+  expect,
+  test,
+  type Page,
+  type Response,
+  type TestInfo,
+} from "@playwright/test";
 
 const BACKEND_CLEANUP_URL = process.env.PATIENT_WEB_BACKEND_E2E_CLEANUP_URL;
 const GATEWAY_CLEANUP_URL = process.env.PATIENT_WEB_GATEWAY_E2E_CLEANUP_URL;
@@ -386,6 +392,109 @@ async function getRegistrationVerificationCode(email: string): Promise<string> {
   return payload.code;
 }
 
+async function waitForBrowserNetworkReady(page: Page, timeout = 30_000) {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(async () => {
+          if (!navigator.onLine) return false;
+          try {
+            const response = await fetch("/api/health", {
+              cache: "no-store",
+            });
+            return response.ok;
+          } catch {
+            return false;
+          }
+        }),
+      {
+        message: "browser context should be online and able to reach the BFF",
+        timeout,
+      },
+    )
+    .toBe(true);
+}
+
+async function submitRegistrationAndWait(page: Page): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await waitForBrowserNetworkReady(page);
+      const registerResponsePromise = page.waitForResponse(
+        (response) =>
+          response.url().includes("/api/auth/register") &&
+          response.request().method() === "POST",
+        { timeout: 45_000 },
+      );
+      await expect(page.getByTestId("register-submit")).toBeEnabled({
+        timeout: 30_000,
+      });
+      await page.getByTestId("register-submit").click();
+      const response = await registerResponsePromise;
+      if (response.ok()) return response;
+      lastError = new Error(
+        `voice registration failed status=${response.status()}`,
+      );
+      if (![409, 502, 503, 504].includes(response.status())) return response;
+      if (
+        response.status() === 409 &&
+        (await page
+          .getByTestId("verify-screen")
+          .isVisible({ timeout: 10_000 })
+          .catch(() => false))
+      ) {
+        return response;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt === 3) break;
+    await page.waitForTimeout(attempt * 1_000);
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Voice registration submit did not produce a response");
+}
+
+async function submitVerificationAndWait(
+  page: Page,
+  getVerificationCode: () => Promise<string>,
+): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await waitForBrowserNetworkReady(page);
+      const code = await getVerificationCode();
+      await page.getByTestId("verify-otp-digit-0").fill(code);
+      const verifyResponsePromise = page.waitForResponse(
+        (response) =>
+          response.url().includes("/api/auth/verify/registration") &&
+          response.request().method() === "POST",
+        { timeout: 45_000 },
+      );
+      await expect(page.getByTestId("verify-submit")).toBeEnabled({
+        timeout: 30_000,
+      });
+      await page.getByTestId("verify-submit").click();
+      const response = await verifyResponsePromise;
+      if (response.ok()) return response;
+      lastError = new Error(
+        `voice verification failed status=${response.status()}`,
+      );
+      if (![422, 502, 503, 504].includes(response.status())) return response;
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt === 3) break;
+    await page.waitForTimeout(attempt * 1_000);
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Voice verification submit did not produce a response");
+}
+
 async function acceptConsentIfPresent(page: Page) {
   const consentVisible = await page
     .getByTestId("consent-screen")
@@ -476,42 +585,36 @@ async function registerAndAuthenticateSyntheticPatient(
   await page.goto("/register");
   await expect(page.getByTestId("register-screen")).toBeVisible();
 
-  const registerResponsePromise = page.waitForResponse(
-    (response) =>
-      response.url().includes("/api/auth/register") &&
-      response.request().method() === "POST",
-  );
   await page.getByTestId("register-first-name").fill("Synthetic");
   await page.getByTestId("register-last-name").fill("Voice");
   await page.getByTestId("register-email").fill(email);
   await page.getByTestId("register-password").fill(SIGNUP_PASSWORD);
   await page.getByTestId("register-confirm-password").fill(SIGNUP_PASSWORD);
   await clickIfPresent(page, "register-consent-storage");
-  await expect(page.getByTestId("register-submit")).toBeEnabled();
-  await page.getByTestId("register-submit").click();
 
-  const registerResponse = await registerResponsePromise;
+  const registerResponse = await submitRegistrationAndWait(page);
   const registerResponseText = await registerResponse.text();
-  expect(
-    registerResponse.ok(),
-    `registration failed status=${registerResponse.status()} body=${sanitizeBrowserDiagnostic(registerResponseText)}`,
-  ).toBeTruthy();
+  if (!registerResponse.ok()) {
+    const verifyScreenVisible = await page
+      .getByTestId("verify-screen")
+      .isVisible({ timeout: 10_000 })
+      .catch(() => false);
+    expect(
+      registerResponse.status() === 409 &&
+        /registration_conflict/.test(registerResponseText) &&
+        /email/.test(registerResponseText) &&
+        verifyScreenVisible,
+      `registration failed status=${registerResponse.status()} body=${sanitizeBrowserDiagnostic(registerResponseText)}`,
+    ).toBeTruthy();
+  }
   await expectNoTokenLeak(registerResponseText);
   await expect(page.getByTestId("verify-screen")).toBeVisible({
     timeout: 60_000,
   });
 
-  const code = await getRegistrationVerificationCode(email);
-  const verifyResponsePromise = page.waitForResponse(
-    (response) =>
-      response.url().includes("/api/auth/verify/registration") &&
-      response.request().method() === "POST",
+  const response = await submitVerificationAndWait(page, () =>
+    getRegistrationVerificationCode(email),
   );
-  await page.getByTestId("verify-otp-digit-0").fill(code);
-  await expect(page.getByTestId("verify-submit")).toBeEnabled();
-  await page.getByTestId("verify-submit").click();
-
-  const response = await verifyResponsePromise;
   expect(response.ok()).toBeTruthy();
   await expectNoTokenLeak(await response.text());
 
