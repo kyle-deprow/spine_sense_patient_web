@@ -1014,30 +1014,66 @@ async function requestQuestionNoteLiveTranscriptionSession(
   expectedRevision: number,
 ): Promise<LiveTranscriptionSession> {
   const path = `/api/proxy/api/v1/patients/me/assessments/${assessmentId}/questions/${questionId}/note/live-transcription-session`;
-  const csrfToken = await csrfTokenForApiPath(page, path);
-  return page.evaluate(
-    async ({ csrfToken, path, expectedRevision }) => {
-      const response = await fetch(path, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "content-type": "application/json",
-          "x-csrf-token": csrfToken,
-        },
-        body: JSON.stringify({
-          expected_revision: expectedRevision,
-          content_type: "audio/wav",
-        }),
-      });
-      if (!response.ok) {
-        throw new Error(
-          `live transcription session failed status=${response.status}`,
-        );
+  let lastFailure = "network_error";
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await waitForBrowserNetworkReady(page);
+    const csrfToken = await csrfTokenForApiPath(page, path);
+    const response = await page.evaluate(
+      async ({ csrfToken, path, expectedRevision }) => {
+        try {
+          const browserResponse = await fetch(path, {
+            method: "POST",
+            credentials: "include",
+            headers: {
+              "content-type": "application/json",
+              "x-csrf-token": csrfToken,
+            },
+            body: JSON.stringify({
+              expected_revision: expectedRevision,
+              content_type: "audio/wav",
+            }),
+          });
+          return {
+            networkError: false,
+            ok: browserResponse.ok,
+            status: browserResponse.status,
+            text: await browserResponse.text(),
+          };
+        } catch {
+          return {
+            networkError: true,
+            ok: false,
+            status: 0,
+            text: "",
+          };
+        }
+      },
+      { csrfToken, path, expectedRevision },
+    );
+    if (response.networkError) {
+      lastFailure = "network_error";
+      if (attempt < 3) {
+        await page.waitForTimeout(attempt * 1_000);
+        continue;
       }
-      return (await response.json()) as LiveTranscriptionSession;
-    },
-    { csrfToken, path, expectedRevision },
-  );
+      break;
+    }
+    if (!response.ok) {
+      lastFailure = `status_${response.status}`;
+      if ([408, 429, 500, 502, 503, 504].includes(response.status)) {
+        if (attempt < 3) {
+          await page.waitForTimeout(attempt * 1_000);
+          continue;
+        }
+      }
+      throw new Error(
+        `live transcription session failed status=${response.status} body=${sanitizeBrowserDiagnostic(response.text)}`,
+      );
+    }
+    return parseJsonBody(response.text) as LiveTranscriptionSession;
+  }
+
+  throw new Error(`live transcription session failed reason=${lastFailure}`);
 }
 
 async function streamFixtureToLiveTranscription(
