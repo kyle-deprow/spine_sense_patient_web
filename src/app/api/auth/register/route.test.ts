@@ -190,6 +190,36 @@ describe("register route handler", () => {
     expect(setCookie).toContain("SameSite=strict");
   });
 
+  it("keeps abandoned-registration retries neutral while preserving the verification cookie", async () => {
+    mockedBackendFetch.mockResolvedValue(
+      Response.json({
+        email_verified: false,
+        message: "Verification code sent. Check your inbox.",
+        verification_token: "private-registration-challenge-token",
+      }),
+    );
+
+    const response = await POST(
+      makeRegisterRequest({
+        email: "patient@example.test",
+        password: "Password123!!",
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      email_verified: false,
+      message: "Verification code sent. Check your inbox.",
+      registration_verification_pending: true,
+    });
+    const setCookie = response.headers.getSetCookie().join("\n");
+    expect(setCookie).toContain(
+      "spine_patient_registration_verify=private-registration-challenge-token",
+    );
+    expect(setCookie).toContain("HttpOnly");
+    expect(setCookie).toContain("SameSite=strict");
+  });
+
   it("rejects invalid JSON before backend forwarding", async () => {
     const response = await POST(makeInvalidJsonRequest());
 
