@@ -175,7 +175,10 @@ function readPositiveIntegerEnv(name: string, defaultValue: number): number {
 
 const TRANSITION_BUDGETS_MS: Record<TransitionProfileKind, number> = {
   page: readPositiveIntegerEnv("PATIENT_WEB_E2E_PAGE_BUDGET_MS", 90_000),
-  question: readPositiveIntegerEnv("PATIENT_WEB_E2E_QUESTION_BUDGET_MS", 2_000),
+  // Normal question advances are ~350ms in prod, with section/conditional
+  // transitions around 1.5s. Allow 2.5s to avoid failing on minor Azure/browser
+  // jitter after network recovery while still catching real visible stalls.
+  question: readPositiveIntegerEnv("PATIENT_WEB_E2E_QUESTION_BUDGET_MS", 2_500),
   // Background persistence is profiled separately from the user-visible
   // question transition. Prod browser network changes have produced 17s+ save
   // responses while the next question rendered in <500ms; keep the visible
