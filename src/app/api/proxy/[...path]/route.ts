@@ -20,9 +20,24 @@ import {
   jsonNoStore,
 } from '@/lib/server/responses'
 
+export const runtime = 'nodejs'
+
 type ProxyContext = {
   params: Promise<{ path: string[] }>
 }
+
+type StreamingRequestInit = RequestInit & {
+  duplex?: 'half'
+}
+
+const DEFAULT_CSRF_CONTENT_TYPES = new Set(['application/json'])
+const STORY_AUDIO_CSRF_CONTENT_TYPES = new Set([
+  'application/json',
+  'audio/webm',
+  'audio/mp4',
+  'audio/m4a',
+  'audio/wav',
+])
 
 async function handler(request: NextRequest, context: ProxyContext) {
   let config
@@ -60,6 +75,9 @@ async function handler(request: NextRequest, context: ProxyContext) {
   const csrf = validateUnsafeRequest(request, request.cookies.get(COOKIE_NAMES.csrf)?.value, {
     csrfSecret: config.csrfSecret,
     allowedOrigins: config.allowedOrigins,
+    allowedContentTypes: isIntakeStoryAudioTranscriptionPath(target.targetPath)
+      ? STORY_AUDIO_CSRF_CONTENT_TYPES
+      : DEFAULT_CSRF_CONTENT_TYPES,
   })
   if (!csrf.ok) {
     auditDenial(request.method, csrf.status, csrf.code, auditContext, resourceType)
@@ -68,16 +86,23 @@ async function handler(request: NextRequest, context: ProxyContext) {
 
   const headers = buildProxyRequestHeaders(request, accessToken)
   headers.set('X-Request-Id', auditContext.requestId)
-  const backendRequest: RequestInit = {
+  const backendRequest: StreamingRequestInit = {
     method: request.method,
     headers,
   }
   if (shouldForwardBody(request.method)) {
-    const body = await request.arrayBuffer()
-    if (body.byteLength > 0) {
-      backendRequest.body = body
+    if (isStreamingAudioTranscriptionPayload(target.targetPath, request)) {
+      if (request.body !== null) {
+        backendRequest.body = request.body
+        backendRequest.duplex = 'half'
+      }
     } else {
-      headers.delete('content-type')
+      const body = await request.arrayBuffer()
+      if (body.byteLength > 0) {
+        backendRequest.body = body
+      } else {
+        headers.delete('content-type')
+      }
     }
   }
 
@@ -149,6 +174,22 @@ function isBinaryDocumentPayload(targetPath: string, request: NextRequest): bool
     contentType.startsWith('application/pdf') ||
     contentType.startsWith('multipart/form-data')
   )
+}
+
+function isStreamingAudioTranscriptionPayload(targetPath: string, request: NextRequest): boolean {
+  if (!isIntakeStoryAudioTranscriptionPath(targetPath)) return false
+  if (request.method.toUpperCase() !== 'POST') return false
+  const contentType = request.headers.get('content-type')?.toLowerCase() ?? ''
+  return (
+    contentType.startsWith('audio/webm') ||
+    contentType.startsWith('audio/mp4') ||
+    contentType.startsWith('audio/m4a') ||
+    contentType.startsWith('audio/wav')
+  )
+}
+
+function isIntakeStoryAudioTranscriptionPath(targetPath: string): boolean {
+  return /^\/api\/v1\/patients\/me\/intake\/story\/transcriptions\/audio\/?$/i.test(targetPath)
 }
 
 export { handler as DELETE, handler as GET, handler as PATCH, handler as POST, handler as PUT }

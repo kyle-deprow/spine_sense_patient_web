@@ -3,6 +3,7 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 export const CSRF_HEADER = 'x-csrf-token'
 const JSON_CONTENT_TYPES = new Set(['application/json'])
+const DEFAULT_UNSAFE_CONTENT_TYPES = JSON_CONTENT_TYPES
 
 export type CsrfValidationResult = { ok: true } | { ok: false; status: 403 | 415; code: string }
 
@@ -28,11 +29,14 @@ export function verifyCsrfToken(secret: string, token: string): boolean {
 export function validateUnsafeRequest(
   request: Request,
   csrfCookieValue: string | undefined,
-  options: { csrfSecret: string; allowedOrigins: string[] },
+  options: { csrfSecret: string; allowedOrigins: string[]; allowedContentTypes?: ReadonlySet<string> },
 ): CsrfValidationResult {
   if (isSafeMethod(request.method)) return { ok: true }
 
-  const contentTypeResult = validateJsonContentType(request.headers.get('content-type'))
+  const contentTypeResult = validateContentType(
+    request.headers.get('content-type'),
+    options.allowedContentTypes ?? DEFAULT_UNSAFE_CONTENT_TYPES,
+  )
   if (!contentTypeResult.ok) return contentTypeResult
 
   const originResult = validateOriginHeaders(request, options.allowedOrigins)
@@ -85,9 +89,16 @@ export function validateOriginHeaders(
 }
 
 export function validateJsonContentType(contentType: string | null): CsrfValidationResult {
+  return validateContentType(contentType, JSON_CONTENT_TYPES)
+}
+
+function validateContentType(
+  contentType: string | null,
+  allowedContentTypes: ReadonlySet<string>,
+): CsrfValidationResult {
   if (!contentType) return { ok: false, status: 415, code: 'content_type_required' }
   const [mediaType] = contentType.split(';', 1)
-  if (!mediaType || !JSON_CONTENT_TYPES.has(mediaType.trim().toLowerCase())) {
+  if (!mediaType || !allowedContentTypes.has(mediaType.trim().toLowerCase())) {
     return { ok: false, status: 415, code: 'content_type_unsupported' }
   }
   return { ok: true }

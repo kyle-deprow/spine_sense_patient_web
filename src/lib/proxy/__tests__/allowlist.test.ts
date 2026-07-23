@@ -97,6 +97,7 @@ describe('proxy allowlist', () => {
     const cases = [
       '/api/v1/patients/me/intake/story/audio-uploads',
       '/api/v1/patients/me/intake/story/transcriptions',
+      '/api/v1/patients/me/intake/story/transcriptions/audio',
     ] as const
 
     for (const targetPath of cases) {
@@ -118,6 +119,7 @@ describe('proxy allowlist', () => {
       '/api/v1/patients/me/intake/story/recordings/10000000-0000-4000-8000-000000000001/transcription/extra',
       '/api/v1/patients/me/intake/story/audio-uploads/extra',
       '/api/v1/patients/me/intake/story/transcriptions/extra',
+      '/api/v1/patients/me/intake/story/transcriptions/audio/extra',
     ] as const
 
     for (const targetPath of cases) {
@@ -133,6 +135,7 @@ describe('proxy allowlist', () => {
     const cases = [
       ['GET', '/api/v1/patients/me/intake/story/audio-uploads'],
       ['GET', '/api/v1/patients/me/intake/story/transcriptions'],
+      ['GET', '/api/v1/patients/me/intake/story/transcriptions/audio'],
     ] as const
 
     for (const [method, targetPath] of cases) {

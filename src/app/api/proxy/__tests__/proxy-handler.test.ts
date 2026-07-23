@@ -495,6 +495,9 @@ describe('proxy route handler', () => {
     ).toBe(false)
     expect(isLongRunningBackendCall('/api/v1/patients/me/assessments')).toBe(false)
     expect(isLongRunningBackendCall('/api/v1/patients/me/intake/story/transcriptions')).toBe(true)
+    expect(isLongRunningBackendCall('/api/v1/patients/me/intake/story/transcriptions/audio')).toBe(
+      true,
+    )
     expect(isLongRunningBackendCall('/api/v1/patients/me/intake/story/audio-uploads')).toBe(false)
     expect(isLongRunningBackendCall('/api/v1/patients/me/intake/story/transcriptions/extra')).toBe(
       false,
@@ -517,6 +520,44 @@ describe('proxy route handler', () => {
         '/api/v1/patients/me/miscribe/recordings/10000000-0000-7000-8000-000000000001/process',
       ),
     ).toBe(false)
+  })
+
+  it('streams completed intake story audio through the proxy without buffering', async () => {
+    mockedBackendFetch.mockResolvedValue(
+      Response.json({ narrative: 'synthetic transcript', input_method: 'voice' }, { status: 201 }),
+    )
+    const csrf = createCsrfToken(CSRF_SECRET, 'story-audio-stream')
+    const targetPath = '/api/v1/patients/me/intake/story/transcriptions/audio'
+    const request = makeProxyRequest(
+      `/api/proxy${targetPath}`,
+      'POST',
+      { spine_patient_sess: 'access-token', spine_patient_csrf: csrf },
+      {
+        'Content-Type': 'audio/webm',
+        [CSRF_HEADER]: csrf,
+        Origin: ORIGIN,
+      },
+      new Blob([new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, 0x00])], { type: 'audio/webm' }),
+    )
+
+    const response = await POST(
+      request,
+      makeContext(['api', 'v1', 'patients', 'me', 'intake', 'story', 'transcriptions', 'audio']),
+    )
+
+    expect(response.status).toBe(201)
+    expect(mockedBackendFetch).toHaveBeenCalledWith(
+      targetPath,
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.any(ReadableStream),
+        duplex: 'half',
+      }),
+      { timeoutMs: LONG_BACKEND_TIMEOUT_MS },
+    )
+    const requestInit = mockedBackendFetch.mock.calls[0]?.[1]
+    expect(requestInit?.body).not.toBeInstanceOf(ArrayBuffer)
+    expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain('synthetic transcript')
   })
 
   it('returns 405 when HTTP method is not allowed for the matched route', async () => {

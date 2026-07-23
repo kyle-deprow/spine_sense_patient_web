@@ -26,7 +26,8 @@ const ASSESSMENT_QUESTION_NOTE_LIVE_TRANSCRIPTION_SESSION_RE = new RegExp(
   'i',
 )
 const INTAKE_STORY_AUDIO_UPLOADS_RE = /^\/api\/v1\/patients\/me\/intake\/story\/audio-uploads$/i
-const INTAKE_STORY_TRANSCRIPTIONS_RE = /^\/api\/v1\/patients\/me\/intake\/story\/transcriptions$/i
+const INTAKE_STORY_TRANSCRIPTIONS_RE =
+  /^\/api\/v1\/patients\/me\/intake\/story\/transcriptions(?:\/audio)?$/i
 const INTAKE_ALLOWED_RE =
   /^\/api\/v1\/patients\/me\/intake(?:\/(?:route|progress|progress\/latest|progress\/complete|steps|steps\/[^/]+|complete))?$/i
 const REPORT_RE = `^\\/api\\/v1\\/patients\\/me\\/reports\\/${UUID_RE}`
