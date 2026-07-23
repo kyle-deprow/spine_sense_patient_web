@@ -1,363 +1,410 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { NextRequest } from 'next/server'
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { NextRequest } from "next/server";
 
-import { CSRF_HEADER, createCsrfToken } from '@/lib/auth/csrf'
-import { BackendUnavailableError, backendFetch } from '@/lib/server/backend'
-import { auditLog } from '@/lib/server/audit'
-import { clearRateLimitStore } from '@/lib/server/rate-limit'
+import { CSRF_HEADER, createCsrfToken } from "@/lib/auth/csrf";
+import { BackendUnavailableError, backendFetch } from "@/lib/server/backend";
+import { auditLog } from "@/lib/server/audit";
+import { clearRateLimitStore } from "@/lib/server/rate-limit";
 
-vi.mock('@/lib/server/backend', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/server/backend')>()
+vi.mock("@/lib/server/backend", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/server/backend")>();
   return {
     ...actual,
     backendFetch: vi.fn(),
-  }
-})
+  };
+});
 
-vi.mock('@/lib/server/audit', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/server/audit')>()
-  return { ...actual, auditLog: vi.fn() }
-})
+vi.mock("@/lib/server/audit", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/server/audit")>();
+  return { ...actual, auditLog: vi.fn() };
+});
 
-const mockedBackendFetch = vi.mocked(backendFetch)
-const mockedAuditLog = vi.mocked(auditLog)
+const mockedBackendFetch = vi.mocked(backendFetch);
+const mockedAuditLog = vi.mocked(auditLog);
 
-const CSRF_SECRET = 'test-patient-web-csrf-secret-at-least-32-bytes'
-const ORIGIN = 'http://localhost'
+const CSRF_SECRET = "test-patient-web-csrf-secret-at-least-32-bytes";
+const ORIGIN = "http://localhost";
 
 // Import after mocking so the route module picks up the mocked backendFetch.
-const { POST } = await import('@/app/api/auth/register/route')
+const { POST } = await import("@/app/api/auth/register/route");
 
-function makeRegisterRequest(body: unknown, ip = '203.0.113.10'): NextRequest {
-  const csrf = createCsrfToken(CSRF_SECRET, `register-route-test-${ip.replaceAll('.', '-')}`)
-  return new NextRequest('http://localhost/api/auth/register', {
-    method: 'POST',
+function makeRegisterRequest(body: unknown, ip = "203.0.113.10"): NextRequest {
+  const csrf = createCsrfToken(
+    CSRF_SECRET,
+    `register-route-test-${ip.replaceAll(".", "-")}`,
+  );
+  return new NextRequest("http://localhost/api/auth/register", {
+    method: "POST",
     headers: {
-      'Content-Type': 'application/json',
+      "Content-Type": "application/json",
       Cookie: `spine_patient_csrf=${csrf}`,
       [CSRF_HEADER]: csrf,
       Origin: ORIGIN,
-      'x-forwarded-for': ip,
+      "x-forwarded-for": ip,
     },
     body: JSON.stringify(body),
-  })
+  });
 }
 
-function makeInvalidJsonRequest(ip = '203.0.113.11'): NextRequest {
-  const csrf = createCsrfToken(CSRF_SECRET, `register-route-test-${ip.replaceAll('.', '-')}`)
-  return new NextRequest('http://localhost/api/auth/register', {
-    method: 'POST',
+function makeInvalidJsonRequest(ip = "203.0.113.11"): NextRequest {
+  const csrf = createCsrfToken(
+    CSRF_SECRET,
+    `register-route-test-${ip.replaceAll(".", "-")}`,
+  );
+  return new NextRequest("http://localhost/api/auth/register", {
+    method: "POST",
     headers: {
-      'Content-Type': 'application/json',
+      "Content-Type": "application/json",
       Cookie: `spine_patient_csrf=${csrf}`,
       [CSRF_HEADER]: csrf,
       Origin: ORIGIN,
-      'x-forwarded-for': ip,
+      "x-forwarded-for": ip,
     },
-    body: '{',
-  })
+    body: "{",
+  });
 }
 
-describe('register route handler', () => {
+describe("register route handler", () => {
   beforeEach(async () => {
-    vi.stubEnv('ENVIRONMENT', 'test')
-    vi.stubEnv('PATIENT_WEB_CSRF_SECRET', CSRF_SECRET)
-    vi.stubEnv('PATIENT_WEB_ALLOWED_ORIGINS', ORIGIN)
-    mockedBackendFetch.mockReset()
-    mockedAuditLog.mockReset()
-    await clearRateLimitStore()
-  })
+    vi.stubEnv("ENVIRONMENT", "test");
+    vi.stubEnv("PATIENT_WEB_CSRF_SECRET", CSRF_SECRET);
+    vi.stubEnv("PATIENT_WEB_ALLOWED_ORIGINS", ORIGIN);
+    mockedBackendFetch.mockReset();
+    mockedAuditLog.mockReset();
+    await clearRateLimitStore();
+  });
 
-  it('normalizes current app registration fields before forwarding to the backend', async () => {
-    const actorId = '10000000-0000-4000-8000-000000000001'
+  it("normalizes current app registration fields before forwarding to the backend", async () => {
+    const actorId = "10000000-0000-4000-8000-000000000001";
     mockedBackendFetch.mockResolvedValue(
       Response.json({
         id: actorId,
         user_id: actorId,
-        email: 'patient@example.test',
+        email: "patient@example.test",
       }),
-    )
+    );
 
     const response = await POST(
       makeRegisterRequest({
-        email: 'patient@example.test',
-        password: 'Password123!!',
-        firstName: 'Synthetic',
-        lastName: 'Patient',
-        dateOfBirth: '1990-01-15',
-        phone: '5551234567',
-        role: 'admin',
-        access_token: 'must-not-forward',
+        email: "patient@example.test",
+        password: "Password123!!",
+        firstName: "Synthetic",
+        lastName: "Patient",
+        dateOfBirth: "1990-01-15",
+        phone: "5551234567",
+        role: "admin",
+        access_token: "must-not-forward",
       }),
-    )
+    );
 
-    expect(response.status).toBe(200)
+    expect(response.status).toBe(200);
     expect(mockedBackendFetch).toHaveBeenCalledWith(
-      '/api/v1/auth/register/patient',
+      "/api/v1/auth/register/patient",
       expect.objectContaining({
-        method: 'POST',
+        method: "POST",
         body: JSON.stringify({
-          email: 'patient@example.test',
-          password: 'Password123!!',
-          first_name: 'Synthetic',
-          last_name: 'Patient',
-          date_of_birth: '1990-01-15',
-          phone: '5551234567',
+          email: "patient@example.test",
+          password: "Password123!!",
+          first_name: "Synthetic",
+          last_name: "Patient",
+          date_of_birth: "1990-01-15",
+          phone: "5551234567",
         }),
       }),
-    )
-    expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain('Synthetic')
-    expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain('Password123!!')
+    );
+    expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain(
+      "Synthetic",
+    );
+    expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain(
+      "Password123!!",
+    );
     expect(mockedAuditLog).toHaveBeenCalledWith(
-      expect.objectContaining({ event: 'auth.register.success', actorId }),
-    )
-    expect(response.headers.getSetCookie().join('\n')).toContain('spine_patient_audit_actor=;')
-  })
+      expect.objectContaining({ event: "auth.register.success", actorId }),
+    );
+    expect(response.headers.getSetCookie().join("\n")).toContain(
+      "spine_patient_audit_actor=;",
+    );
+  });
 
-  it('prefers backend-native snake_case fields when both shapes are present', async () => {
-    mockedBackendFetch.mockResolvedValue(Response.json({ id: 'patient-2' }))
+  it("prefers backend-native snake_case fields when both shapes are present", async () => {
+    mockedBackendFetch.mockResolvedValue(Response.json({ id: "patient-2" }));
 
     const response = await POST(
       makeRegisterRequest(
         {
-          email: 'patient@example.test',
-          password: 'Password123!!',
-          firstName: 'Camel',
-          first_name: 'Snake',
-          lastName: 'Case',
-          last_name: 'Contract',
-          dateOfBirth: '1980-01-01',
-          date_of_birth: '1981-02-03',
-          phoneNumber: '5550001111',
-          phone: '',
+          email: "patient@example.test",
+          password: "Password123!!",
+          firstName: "Camel",
+          first_name: "Snake",
+          lastName: "Case",
+          last_name: "Contract",
+          dateOfBirth: "1980-01-01",
+          date_of_birth: "1981-02-03",
+          phoneNumber: "5550001111",
+          phone: "",
         },
-        '203.0.113.12',
+        "203.0.113.12",
       ),
-    )
+    );
 
-    expect(response.status).toBe(200)
-    const requestBody = mockedBackendFetch.mock.calls[0]?.[1]?.body
+    expect(response.status).toBe(200);
+    const requestBody = mockedBackendFetch.mock.calls[0]?.[1]?.body;
     expect(requestBody).toBe(
       JSON.stringify({
-        email: 'patient@example.test',
-        password: 'Password123!!',
-        first_name: 'Snake',
-        last_name: 'Contract',
-        date_of_birth: '1981-02-03',
+        email: "patient@example.test",
+        password: "Password123!!",
+        first_name: "Snake",
+        last_name: "Contract",
+        date_of_birth: "1981-02-03",
       }),
-    )
-  })
+    );
+  });
 
-  it('rejects invalid JSON before backend forwarding', async () => {
-    const response = await POST(makeInvalidJsonRequest())
+  it("moves the registration verification challenge into an HttpOnly cookie", async () => {
+    mockedBackendFetch.mockResolvedValue(
+      Response.json({
+        id: "patient-verify",
+        email: "patient@example.test",
+        verification_token: "private-registration-challenge-token",
+      }),
+    );
 
-    expect(response.status).toBe(400)
-    await expect(response.json()).resolves.toEqual({ error: 'invalid_json' })
-    expect(mockedBackendFetch).not.toHaveBeenCalled()
-  })
+    const response = await POST(
+      makeRegisterRequest({
+        email: "patient@example.test",
+        password: "Password123!!",
+      }),
+    );
 
-  it('returns a sanitized 503 with zero backend calls when configuration is invalid', async () => {
-    vi.stubEnv('PATIENT_WEB_ALLOWED_ORIGINS', '')
-
-    const response = await POST(makeRegisterRequest({ email: 'patient@example.test' }))
-
-    expect(response.status).toBe(503)
+    expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
-      error: 'service_unavailable',
-    })
-    expect(response.headers.get('Cache-Control')).toBe('no-store')
-    expect(mockedBackendFetch).not.toHaveBeenCalled()
-  })
+      id: "patient-verify",
+      email: "patient@example.test",
+      registration_verification_pending: true,
+    });
+    const setCookie = response.headers.getSetCookie().join("\n");
+    expect(setCookie).toContain(
+      "spine_patient_registration_verify=private-registration-challenge-token",
+    );
+    expect(setCookie).toContain("HttpOnly");
+    expect(setCookie).toContain("SameSite=strict");
+  });
+
+  it("rejects invalid JSON before backend forwarding", async () => {
+    const response = await POST(makeInvalidJsonRequest());
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "invalid_json" });
+    expect(mockedBackendFetch).not.toHaveBeenCalled();
+  });
+
+  it("returns a sanitized 503 with zero backend calls when configuration is invalid", async () => {
+    vi.stubEnv("PATIENT_WEB_ALLOWED_ORIGINS", "");
+
+    const response = await POST(
+      makeRegisterRequest({ email: "patient@example.test" }),
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: "service_unavailable",
+    });
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(mockedBackendFetch).not.toHaveBeenCalled();
+  });
 
   it.each([
-    { Origin: 'https://evil.example.test' },
-    { Origin: ORIGIN, Referer: 'https://evil.example.test/path' },
-  ])('returns no-store 403 without forwarding invalid origin metadata', async (originHeaders) => {
-    const csrf = createCsrfToken(CSRF_SECRET, 'register-origin-negative')
-    const response = await POST(
-      new NextRequest('http://localhost/api/auth/register', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Cookie: `spine_patient_csrf=${csrf}`,
-          [CSRF_HEADER]: csrf,
-          ...originHeaders,
-        },
-        body: JSON.stringify({ email: 'patient@example.test' }),
-      }),
-    )
+    { Origin: "https://evil.example.test" },
+    { Origin: ORIGIN, Referer: "https://evil.example.test/path" },
+  ])(
+    "returns no-store 403 without forwarding invalid origin metadata",
+    async (originHeaders) => {
+      const csrf = createCsrfToken(CSRF_SECRET, "register-origin-negative");
+      const response = await POST(
+        new NextRequest("http://localhost/api/auth/register", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: `spine_patient_csrf=${csrf}`,
+            [CSRF_HEADER]: csrf,
+            ...originHeaders,
+          },
+          body: JSON.stringify({ email: "patient@example.test" }),
+        }),
+      );
 
-    expect(response.status).toBe(403)
-    expect(response.headers.get('Cache-Control')).toBe('no-store')
-    expect(mockedBackendFetch).not.toHaveBeenCalled()
-  })
+      expect(response.status).toBe(403);
+      expect(response.headers.get("Cache-Control")).toBe("no-store");
+      expect(mockedBackendFetch).not.toHaveBeenCalled();
+    },
+  );
 
-  it('returns 503 when the backend is unavailable', async () => {
-    mockedBackendFetch.mockRejectedValue(new BackendUnavailableError())
+  it("returns 503 when the backend is unavailable", async () => {
+    mockedBackendFetch.mockRejectedValue(new BackendUnavailableError());
 
     const response = await POST(
       makeRegisterRequest(
         {
-          email: 'patient@example.test',
-          password: 'Password123!!',
-          firstName: 'Synthetic',
-          lastName: 'Patient',
-          dateOfBirth: '1990-01-15',
+          email: "patient@example.test",
+          password: "Password123!!",
+          firstName: "Synthetic",
+          lastName: "Patient",
+          dateOfBirth: "1990-01-15",
         },
-        '203.0.113.13',
+        "203.0.113.13",
       ),
-    )
+    );
 
-    expect(response.status).toBe(503)
+    expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({
-      error: 'service_unavailable',
-    })
-  })
+      error: "service_unavailable",
+    });
+  });
 
-  it('preserves an allowlisted email registration conflict without backend detail', async () => {
+  it("preserves an allowlisted email registration conflict without backend detail", async () => {
     mockedBackendFetch.mockResolvedValue(
       Response.json(
         {
-          detail: 'Email already registered',
-          registration_conflict: 'email',
-          submitted_email: 'must-not-forward@example.test',
+          detail: "Email already registered",
+          registration_conflict: "email",
+          submitted_email: "must-not-forward@example.test",
         },
         { status: 409 },
       ),
-    )
+    );
 
     const response = await POST(
       makeRegisterRequest(
         {
-          email: 'patient@example.test',
-          password: 'Password123!!',
-          firstName: 'Synthetic',
-          lastName: 'Patient',
-          dateOfBirth: '1990-01-15',
+          email: "patient@example.test",
+          password: "Password123!!",
+          firstName: "Synthetic",
+          lastName: "Patient",
+          dateOfBirth: "1990-01-15",
         },
-        '203.0.113.14',
+        "203.0.113.14",
       ),
-    )
+    );
 
-    expect(response.status).toBe(409)
+    expect(response.status).toBe(409);
     await expect(response.json()).resolves.toEqual({
-      error: 'conflict',
-      registration_conflict: 'email',
-    })
-  })
+      error: "conflict",
+      registration_conflict: "email",
+    });
+  });
 
-  it('preserves an allowlisted phone registration conflict', async () => {
+  it("preserves an allowlisted phone registration conflict", async () => {
     mockedBackendFetch.mockResolvedValue(
       Response.json(
         {
-          detail: 'Phone already registered',
-          registration_conflict: 'phone',
+          detail: "Phone already registered",
+          registration_conflict: "phone",
         },
         { status: 409 },
       ),
-    )
+    );
 
     const response = await POST(
       makeRegisterRequest(
         {
-          email: 'patient@example.test',
-          password: 'Password123!!',
-          firstName: 'Synthetic',
-          lastName: 'Patient',
-          phone: '5551234567',
+          email: "patient@example.test",
+          password: "Password123!!",
+          firstName: "Synthetic",
+          lastName: "Patient",
+          phone: "5551234567",
         },
-        '203.0.113.18',
+        "203.0.113.18",
       ),
-    )
+    );
 
-    expect(response.status).toBe(409)
+    expect(response.status).toBe(409);
     await expect(response.json()).resolves.toEqual({
-      error: 'conflict',
-      registration_conflict: 'phone',
-    })
-  })
+      error: "conflict",
+      registration_conflict: "phone",
+    });
+  });
 
-  it('strips unknown registration conflict discriminators', async () => {
+  it("strips unknown registration conflict discriminators", async () => {
     mockedBackendFetch.mockResolvedValue(
       Response.json(
         {
-          detail: 'internal uniqueness detail',
-          registration_conflict: 'medical_record_number',
+          detail: "internal uniqueness detail",
+          registration_conflict: "medical_record_number",
         },
         { status: 409 },
       ),
-    )
+    );
 
     const response = await POST(
       makeRegisterRequest(
         {
-          email: 'patient@example.test',
-          password: 'Password123!!',
-          firstName: 'Synthetic',
-          lastName: 'Patient',
+          email: "patient@example.test",
+          password: "Password123!!",
+          firstName: "Synthetic",
+          lastName: "Patient",
         },
-        '203.0.113.19',
+        "203.0.113.19",
       ),
-    )
+    );
 
-    expect(response.status).toBe(409)
-    await expect(response.json()).resolves.toEqual({ error: 'conflict' })
-  })
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({ error: "conflict" });
+  });
 
-  it('allows ten attempts in a short window before returning an actionable rate limit', async () => {
-    const ip = '203.0.113.16'
+  it("allows ten attempts in a short window before returning an actionable rate limit", async () => {
+    const ip = "203.0.113.16";
     mockedBackendFetch.mockResolvedValue(
-      Response.json({ detail: 'Email already registered' }, { status: 409 }),
-    )
+      Response.json({ detail: "Email already registered" }, { status: 409 }),
+    );
 
     const body = {
-      email: 'patient@example.test',
-      password: 'Password123!!',
-      firstName: 'Synthetic',
-      lastName: 'Patient',
-    }
+      email: "patient@example.test",
+      password: "Password123!!",
+      firstName: "Synthetic",
+      lastName: "Patient",
+    };
 
     for (let attempt = 0; attempt < 10; attempt += 1) {
-      const response = await POST(makeRegisterRequest(body, ip))
-      expect(response.status).toBe(409)
+      const response = await POST(makeRegisterRequest(body, ip));
+      expect(response.status).toBe(409);
     }
 
-    const limitedResponse = await POST(makeRegisterRequest(body, ip))
+    const limitedResponse = await POST(makeRegisterRequest(body, ip));
 
-    expect(limitedResponse.status).toBe(429)
-    expect(limitedResponse.headers.get('Retry-After')).toBe('900')
+    expect(limitedResponse.status).toBe(429);
+    expect(limitedResponse.headers.get("Retry-After")).toBe("900");
     await expect(limitedResponse.json()).resolves.toEqual({
-      error: 'too_many_requests',
-    })
-    expect(mockedBackendFetch).toHaveBeenCalledTimes(10)
+      error: "too_many_requests",
+    });
+    expect(mockedBackendFetch).toHaveBeenCalledTimes(10);
     expect(mockedAuditLog).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        event: 'auth.register.failure',
-        reason: 'rate_limited',
+        event: "auth.register.failure",
+        reason: "rate_limited",
         status: 429,
       }),
-    )
-  })
+    );
+  });
 
-  it('maps backend registration server failures to a server error, not auth_failed', async () => {
+  it("maps backend registration server failures to a server error, not auth_failed", async () => {
     mockedBackendFetch.mockResolvedValue(
-      Response.json({ detail: 'internal error' }, { status: 500 }),
-    )
+      Response.json({ detail: "internal error" }, { status: 500 }),
+    );
 
     const response = await POST(
       makeRegisterRequest(
         {
-          email: 'patient@example.test',
-          password: 'Password123!!',
-          firstName: 'Synthetic',
-          lastName: 'Patient',
-          dateOfBirth: '1990-01-15',
+          email: "patient@example.test",
+          password: "Password123!!",
+          firstName: "Synthetic",
+          lastName: "Patient",
+          dateOfBirth: "1990-01-15",
         },
-        '203.0.113.15',
+        "203.0.113.15",
       ),
-    )
+    );
 
-    expect(response.status).toBe(502)
-    await expect(response.json()).resolves.toEqual({ error: 'server_error' })
-  })
-})
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({ error: "server_error" });
+  });
+});

@@ -1,56 +1,58 @@
 #!/usr/bin/env node
 
-const { spawnSync } = require('node:child_process');
-const fs = require('node:fs');
-const path = require('node:path');
+const { spawnSync } = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const outputDir =
   process.env.PATIENT_WEB_PATIENT_APP_EXPORT_DIR ??
-  path.resolve(__dirname, '..', 'patient-app-export');
-const patientAppDir = path.resolve(__dirname, '..', '..', 'spine_sense_app');
-const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+  path.resolve(__dirname, "..", "patient-app-export");
+const patientAppDir = path.resolve(__dirname, "..", "..", "spine_sense_app");
+const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const vectorIconFontsDir = path.join(
   patientAppDir,
-  'node_modules',
-  '@expo',
-  'vector-icons',
-  'build',
-  'vendor',
-  'react-native-vector-icons',
-  'Fonts',
+  "node_modules",
+  "@expo",
+  "vector-icons",
+  "build",
+  "vendor",
+  "react-native-vector-icons",
+  "Fonts",
 );
 const vectorIconFontAssetRe =
   /\/assets\/node_modules\/[^"'`)\s]+\/Fonts\/([A-Za-z0-9_]+)\.[a-f0-9]+\.ttf/g;
-
 
 fs.rmSync(outputDir, { recursive: true, force: true });
 fs.mkdirSync(outputDir, { recursive: true });
 
 const env = {
   ...process.env,
-  SPINESENSE_PATIENT_WEB_EXPORT: '1',
-  SPINESENSE_WEB_OUTPUT: 'single',
-  SPINESENSE_SKIP_REANIMATED_BABEL_PLUGIN: '1',
-  EXPO_PUBLIC_ENVIRONMENT: process.env.PATIENT_APP_ENVIRONMENT ?? 'production',
-  EXPO_PUBLIC_API_BASE_URL: process.env.PATIENT_APP_API_BASE_URL ?? '/api/proxy/api/v1',
+  SPINESENSE_PATIENT_WEB_EXPORT: "1",
+  SPINESENSE_WEB_OUTPUT: "single",
+  SPINESENSE_SKIP_REANIMATED_BABEL_PLUGIN: "1",
+  EXPO_PUBLIC_ENVIRONMENT: process.env.PATIENT_APP_ENVIRONMENT ?? "production",
+  EXPO_PUBLIC_API_BASE_URL:
+    process.env.PATIENT_APP_API_BASE_URL ?? "/api/proxy/api/v1",
+  EXPO_PUBLIC_EPIC_FHIR_ENABLED:
+    process.env.PATIENT_APP_EPIC_FHIR_ENABLED ?? "false",
 };
 
 const args = [
-  '--dir',
+  "--dir",
   patientAppDir,
-  'build:web',
-  '--',
-  '--output-dir',
+  "build:web",
+  "--",
+  "--output-dir",
   outputDir,
-  '--max-workers',
-  '1',
+  "--max-workers",
+  "1",
   ...process.argv.slice(2),
 ];
 
 const result = spawnSync(pnpm, args, {
   cwd: process.cwd(),
   env,
-  stdio: 'inherit',
+  stdio: "inherit",
 });
 
 if (result.error) {
@@ -62,8 +64,10 @@ if ((result.status ?? 1) !== 0) {
   process.exit(result.status ?? 1);
 }
 
-if (!fs.existsSync(path.join(outputDir, 'index.html'))) {
-  console.error(`Patient app export did not produce index.html at ${outputDir}`);
+if (!fs.existsSync(path.join(outputDir, "index.html"))) {
+  console.error(
+    `Patient app export did not produce index.html at ${outputDir}`,
+  );
   process.exit(1);
 }
 
@@ -84,12 +88,12 @@ function walkFiles(dir) {
 function collectRequestedVectorIconFonts() {
   const requested = new Map();
   for (const filePath of walkFiles(outputDir)) {
-    if (!['.html', '.js', '.css'].includes(path.extname(filePath))) continue;
-    const contents = fs.readFileSync(filePath, 'utf8');
+    if (![".html", ".js", ".css"].includes(path.extname(filePath))) continue;
+    const contents = fs.readFileSync(filePath, "utf8");
     for (const match of contents.matchAll(vectorIconFontAssetRe)) {
       const requestPath = match[0];
       const family = match[1];
-      if (typeof family === 'string') {
+      if (typeof family === "string") {
         requested.set(requestPath, family);
       }
     }
@@ -104,7 +108,9 @@ function copyVectorIconFontAssets() {
   for (const [requestPath, family] of requested.entries()) {
     const source = path.join(vectorIconFontsDir, `${family}.ttf`);
     if (!fs.existsSync(source)) {
-      console.error(`Expo web bundle requested ${requestPath}, but source font is missing: ${source}`);
+      console.error(
+        `Expo web bundle requested ${requestPath}, but source font is missing: ${source}`,
+      );
       process.exit(1);
     }
 
@@ -113,18 +119,22 @@ function copyVectorIconFontAssets() {
     fs.copyFileSync(source, target);
   }
 
-  console.log(`Copied ${requested.size} Expo vector icon font asset(s) into ${outputDir}`);
+  console.log(
+    `Copied ${requested.size} Expo vector icon font asset(s) into ${outputDir}`,
+  );
 }
 
 function resolveExportTarget(requestPath) {
-  const target = path.resolve(outputDir, requestPath.replace(/^\/+/, ''));
+  const target = path.resolve(outputDir, requestPath.replace(/^\/+/, ""));
   const relativeTarget = path.relative(outputDir, target);
   if (
-    relativeTarget === '' ||
-    relativeTarget.startsWith('..') ||
+    relativeTarget === "" ||
+    relativeTarget.startsWith("..") ||
     path.isAbsolute(relativeTarget)
   ) {
-    console.error(`Refusing to copy Expo font outside patient app export: ${requestPath}`);
+    console.error(
+      `Refusing to copy Expo font outside patient app export: ${requestPath}`,
+    );
     process.exit(1);
   }
   return target;
