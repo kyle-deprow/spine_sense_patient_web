@@ -2922,15 +2922,61 @@ async function completeAdaptiveIfPresent(
       "adaptive-question",
       currentQuestionTestId,
       "adaptive-submit",
-      ["adaptive-loading-state", "adaptive-error-state", "review-screen"],
+      [
+        "adaptive-loading-state",
+        "adaptive-error-state",
+        "adaptive-sync-retry",
+        "review-screen",
+      ],
     );
     profiler.recordElapsed(
       nextStage === "adaptive-screen"
         ? questionLabel
-        : "adaptive.submit_to_next_stage",
-      nextStage === "adaptive-screen" ? "question" : "stage",
+        : nextStage === "adaptive-sync-retry"
+          ? "adaptive.pending_save_retry_prompt"
+          : "adaptive.submit_to_next_stage",
+      nextStage === "adaptive-screen"
+        ? "question"
+        : nextStage === "adaptive-sync-retry"
+          ? "recovery"
+          : "stage",
       transitionStartedAt,
     );
+    if (nextStage === "adaptive-sync-retry") {
+      const retryStartedAt = performance.now();
+      await waitForEnabledAndClick(page, "adaptive-sync-retry");
+      const recoveredStage = await waitForDynamicQuestionAdvance(
+        page,
+        "adaptive-screen",
+        "adaptive-question",
+        currentQuestionTestId,
+        "adaptive-submit",
+        ["adaptive-loading-state", "adaptive-error-state", "review-screen"],
+      );
+      profiler.recordElapsed(
+        recoveredStage === "adaptive-screen"
+          ? `${questionLabel}.retry`
+          : "adaptive.pending_save_retry_to_next_stage",
+        recoveredStage === "adaptive-screen" ? "question" : "recovery",
+        retryStartedAt,
+      );
+      if (recoveredStage === "adaptive-loading-state") {
+        const resolvedStage = await profiler.measure(
+          "adaptive.loading_to_next_stage",
+          "stage",
+          () =>
+            waitForAssessmentStage(page, [
+              "adaptive-screen",
+              "adaptive-error-state",
+              "review-screen",
+            ]),
+        );
+        if (resolvedStage !== "adaptive-screen") return resolvedStage;
+        continue;
+      }
+      if (recoveredStage !== "adaptive-screen") return recoveredStage;
+      continue;
+    }
     if (nextStage === "adaptive-loading-state") {
       const resolvedStage = await profiler.measure(
         "adaptive.loading_to_next_stage",
