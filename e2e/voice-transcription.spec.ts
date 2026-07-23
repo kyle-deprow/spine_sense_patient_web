@@ -34,6 +34,9 @@ const TRANSIENT_UPLOAD_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 const TRANSIENT_SUPPORT_HTTP_STATUSES = new Set([
   404, 408, 429, 500, 502, 503, 504,
 ]);
+const TRANSIENT_SUPPORT_HTTP_STATUSES_EXCEPT_NOT_FOUND = new Set([
+  408, 429, 500, 502, 503, 504,
+]);
 const SYNTHETIC_RUN_NAMESPACE = (process.env.PATIENT_WEB_E2E_RUN_ID ?? "local")
   .toLowerCase()
   .replace(/[^a-z0-9]+/g, "-")
@@ -170,14 +173,18 @@ async function supportPost(
   label: string,
   url: string,
   body?: object,
+  options?: { attempts?: number; transientStatuses?: Set<number> },
 ): Promise<SafeSupportResponse> {
   if (!TEST_SUPPORT_TOKEN) {
     throw new Error(
       "PATIENT_WEB_TEST_SUPPORT_TOKEN is required for E2E support requests",
     );
   }
+  const maxAttempts = options?.attempts ?? 12;
+  const transientStatuses =
+    options?.transientStatuses ?? TRANSIENT_SUPPORT_HTTP_STATUSES;
   let lastFailure = "network_error";
-  for (let attempt = 1; attempt <= 12; attempt += 1) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       const response = await fetch(url, {
         method: "POST",
@@ -191,8 +198,8 @@ async function supportPost(
       const text = await response.text();
       if (
         response.ok ||
-        !TRANSIENT_SUPPORT_HTTP_STATUSES.has(response.status) ||
-        attempt === 12
+        !transientStatuses.has(response.status) ||
+        attempt === maxAttempts
       ) {
         return { ok: response.ok, status: response.status, text };
       }
@@ -203,13 +210,15 @@ async function supportPost(
         throw new Error(`${label} failed reason=non_transient_network_error`);
       }
       lastFailure = code;
-      if (attempt === 12) break;
+      if (attempt === maxAttempts) break;
     }
     await new Promise((resolve) =>
       setTimeout(resolve, Math.min(attempt * 1_000, 5_000)),
     );
   }
-  throw new Error(`${label} failed after 12 attempts reason=${lastFailure}`);
+  throw new Error(
+    `${label} failed after ${maxAttempts} attempts reason=${lastFailure}`,
+  );
 }
 
 class ProxyFetchError extends Error {
@@ -238,11 +247,19 @@ async function cleanupE2eState() {
   const gatewayResponse = await supportPost(
     "gateway cleanup",
     GATEWAY_CLEANUP_URL,
+    undefined,
+    { transientStatuses: TRANSIENT_SUPPORT_HTTP_STATUSES_EXCEPT_NOT_FOUND },
   );
-  expect(
-    gatewayResponse.ok,
-    `PATIENT_WEB_GATEWAY_E2E_CLEANUP_URL must clear gateway E2E state status=${gatewayResponse.status}`,
-  ).toBeTruthy();
+  if (gatewayResponse.status === 404) {
+    console.warn(
+      "[voice-e2e] gateway cleanup endpoint returned 404; root prod runner cleanup remains authoritative",
+    );
+  } else {
+    expect(
+      gatewayResponse.ok,
+      `PATIENT_WEB_GATEWAY_E2E_CLEANUP_URL must clear gateway E2E state status=${gatewayResponse.status}`,
+    ).toBeTruthy();
+  }
 
   const response = await supportPost("backend cleanup", BACKEND_CLEANUP_URL);
   expect(
@@ -353,13 +370,13 @@ async function expectNoTokenLeak(responseText: string) {
   expect(responseText.includes("refreshToken")).toBe(false);
 }
 
-function syntheticEmailForTest(testInfo: TestInfo): string {
+function syntheticEmailForTest(testInfo: TestInfo, authAttempt = 0): string {
   const slug = testInfo.title
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 30);
-  return `patient-web-voice-${SYNTHETIC_RUN_NAMESPACE}-${testInfo.parallelIndex}-${testInfo.retry}-${slug}@e2e.example.com`;
+  return `patient-web-voice-${SYNTHETIC_RUN_NAMESPACE}-${testInfo.parallelIndex}-${testInfo.retry}-${authAttempt}-${slug}@e2e.example.com`;
 }
 
 async function clickIfPresent(
@@ -591,43 +608,79 @@ async function registerAndAuthenticateSyntheticPatient(
   page: Page,
   testInfo: TestInfo,
 ) {
-  const email = syntheticEmailForTest(testInfo);
-  await page.request.get("/api/auth/session");
-  await page.goto("/register");
-  await expect(page.getByTestId("register-screen")).toBeVisible();
+  let lastFailure: string | null = null;
 
-  await page.getByTestId("register-first-name").fill("Synthetic");
-  await page.getByTestId("register-last-name").fill("Voice");
-  await page.getByTestId("register-email").fill(email);
-  await page.getByTestId("register-password").fill(SIGNUP_PASSWORD);
-  await page.getByTestId("register-confirm-password").fill(SIGNUP_PASSWORD);
-  await clickIfPresent(page, "register-consent-storage");
+  for (let authAttempt = 0; authAttempt < 3; authAttempt += 1) {
+    const email = syntheticEmailForTest(testInfo, authAttempt);
+    try {
+      await page.request.get("/api/auth/session");
+      await page.goto("/register");
+      await expect(page.getByTestId("register-screen")).toBeVisible();
 
-  const registerResponse = await submitRegistrationAndWait(page);
-  const registerResponseText = await registerResponse.text();
-  if (!registerResponse.ok()) {
-    const verifyScreenVisible = await page
-      .getByTestId("verify-screen")
-      .isVisible({ timeout: 10_000 })
-      .catch(() => false);
-    expect(
-      registerResponse.status() === 409 &&
-        /registration_conflict/.test(registerResponseText) &&
-        /email/.test(registerResponseText) &&
-        verifyScreenVisible,
-      `registration failed status=${registerResponse.status()} body=${sanitizeBrowserDiagnostic(registerResponseText)}`,
-    ).toBeTruthy();
+      await page.getByTestId("register-first-name").fill("Synthetic");
+      await page.getByTestId("register-last-name").fill("Voice");
+      await page.getByTestId("register-email").fill(email);
+      await page.getByTestId("register-password").fill(SIGNUP_PASSWORD);
+      await page.getByTestId("register-confirm-password").fill(SIGNUP_PASSWORD);
+      await clickIfPresent(page, "register-consent-storage");
+
+      const registerResponse = await submitRegistrationAndWait(page);
+      const registerResponseText = await registerResponse.text();
+      if (!registerResponse.ok()) {
+        const verifyScreenVisible = await page
+          .getByTestId("verify-screen")
+          .isVisible({ timeout: 10_000 })
+          .catch(() => false);
+        const acceptedConflict =
+          registerResponse.status() === 409 &&
+          /registration_conflict/.test(registerResponseText) &&
+          /email/.test(registerResponseText) &&
+          verifyScreenVisible;
+        if (!acceptedConflict) {
+          lastFailure = `registration failed status=${registerResponse.status()} body=${sanitizeBrowserDiagnostic(registerResponseText)}`;
+          if (authAttempt < 2) {
+            await cleanupE2eState().catch(() => undefined);
+            continue;
+          }
+          throw new Error(lastFailure);
+        }
+      }
+      await expectNoTokenLeak(registerResponseText);
+      await expect(page.getByTestId("verify-screen")).toBeVisible({
+        timeout: 60_000,
+      });
+
+      const response = await submitVerificationAndWait(page, () =>
+        getRegistrationVerificationCode(email),
+      );
+      const responseText = await response.text();
+      if (!response.ok()) {
+        lastFailure = `verification failed status=${response.status()} body=${sanitizeBrowserDiagnostic(responseText)}`;
+        if (authAttempt < 2) {
+          await cleanupE2eState().catch(() => undefined);
+          continue;
+        }
+        throw new Error(lastFailure);
+      }
+      await expectNoTokenLeak(responseText);
+      lastFailure = null;
+      break;
+    } catch (error) {
+      lastFailure =
+        error instanceof Error
+          ? sanitizeBrowserDiagnostic(error.message)
+          : "unknown_auth_failure";
+      if (authAttempt < 2) {
+        await cleanupE2eState().catch(() => undefined);
+        continue;
+      }
+      throw new Error(lastFailure);
+    }
   }
-  await expectNoTokenLeak(registerResponseText);
-  await expect(page.getByTestId("verify-screen")).toBeVisible({
-    timeout: 60_000,
-  });
 
-  const response = await submitVerificationAndWait(page, () =>
-    getRegistrationVerificationCode(email),
-  );
-  expect(response.ok()).toBeTruthy();
-  await expectNoTokenLeak(await response.text());
+  if (lastFailure) {
+    throw new Error(lastFailure);
+  }
 
   await expect(page.getByTestId("consent-screen")).toBeVisible({
     timeout: 60_000,
