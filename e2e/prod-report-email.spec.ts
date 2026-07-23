@@ -96,11 +96,7 @@ async function loginCanary(page: Page) {
 }
 
 async function openCanaryResults(page: Page) {
-  await gotoHydratedRoute(
-    page,
-    `/results?assessmentId=${CANARY_ASSESSMENT_ID}`,
-    "results-screen",
-  );
+  await gotoHydratedRoute(page, "/assessment", "results-screen");
   await expect(page.getByTestId("results-diagnosis")).toBeVisible({
     timeout: 90_000,
   });
