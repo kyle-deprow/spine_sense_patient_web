@@ -3,16 +3,14 @@ import {
   test,
   type APIRequestContext,
   type Page,
+  type Response,
 } from "@playwright/test";
 
-const BACKEND_CLEANUP_URL =
-  process.env.PATIENT_WEB_BACKEND_E2E_CLEANUP_URL;
+const BACKEND_CLEANUP_URL = process.env.PATIENT_WEB_BACKEND_E2E_CLEANUP_URL;
 const BACKEND_REGISTRATION_CODE_URL =
   process.env.PATIENT_WEB_BACKEND_REGISTRATION_CODE_URL;
-const TEST_SUPPORT_TOKEN =
-  process.env.PATIENT_WEB_TEST_SUPPORT_TOKEN;
-const GATEWAY_CLEANUP_URL =
-  process.env.PATIENT_WEB_GATEWAY_E2E_CLEANUP_URL;
+const TEST_SUPPORT_TOKEN = process.env.PATIENT_WEB_TEST_SUPPORT_TOKEN;
+const GATEWAY_CLEANUP_URL = process.env.PATIENT_WEB_GATEWAY_E2E_CLEANUP_URL;
 const EXPECT_SECURE_COOKIES =
   process.env.PATIENT_WEB_EXPECT_SECURE_COOKIES === "true";
 const SIGNUP_PASSWORD =
@@ -38,22 +36,22 @@ async function cleanupE2eState(request: APIRequestContext) {
     );
   }
   if (!TEST_SUPPORT_TOKEN) {
-    throw new Error("PATIENT_WEB_TEST_SUPPORT_TOKEN is required for patient web E2E cleanup");
+    throw new Error(
+      "PATIENT_WEB_TEST_SUPPORT_TOKEN is required for patient web E2E cleanup",
+    );
   }
 
-  const gatewayResponse = await request.post(
-    GATEWAY_CLEANUP_URL,
-    { headers: { authorization: `Bearer ${TEST_SUPPORT_TOKEN}` } },
-  );
+  const gatewayResponse = await request.post(GATEWAY_CLEANUP_URL, {
+    headers: { authorization: `Bearer ${TEST_SUPPORT_TOKEN}` },
+  });
   expect(
     gatewayResponse.ok(),
     `PATIENT_WEB_GATEWAY_E2E_CLEANUP_URL must clear gateway E2E state status=${gatewayResponse.status()}`,
   ).toBeTruthy();
 
-  const response = await request.post(
-    BACKEND_CLEANUP_URL,
-    { headers: { authorization: `Bearer ${TEST_SUPPORT_TOKEN}` } },
-  );
+  const response = await request.post(BACKEND_CLEANUP_URL, {
+    headers: { authorization: `Bearer ${TEST_SUPPORT_TOKEN}` },
+  });
   const responseText = await response.text();
   expect(
     response.ok(),
@@ -76,11 +74,20 @@ function sanitizeBrowserDiagnostic(value: string): string {
     .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, "[email]")
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [token]")
     .replace(/\b(cookie|set-cookie)\b\s*[:=]\s*[^\n\r]+/gi, "$1=[redacted]")
-    .replace(/\b(authorization|x-csrf-token|csrf-token)\b\s*[:=]\s*[^;\n\r]+/gi, "$1=[redacted]")
+    .replace(
+      /\b(authorization|x-csrf-token|csrf-token)\b\s*[:=]\s*[^;\n\r]+/gi,
+      "$1=[redacted]",
+    )
     .replace(/"(cookie|set-cookie)"\s*:\s*"[^"]*"/gi, '"$1":"[redacted]"')
     .replace(/"(cookie|set-cookie)"\s*:\s*\[[^\]]*\]/gi, '"$1":["[redacted]"]')
-    .replace(/"(authorization|x-csrf-token|csrf-token)"\s*:\s*"[^"]*"/gi, '"$1":"[redacted]"')
-    .replace(/\b(password|verification_code|verificationCode|mfa_code|mfaCode)\b\s*[:=]\s*[^,\s)]+/gi, "$1=[redacted]")
+    .replace(
+      /"(authorization|x-csrf-token|csrf-token)"\s*:\s*"[^"]*"/gi,
+      '"$1":"[redacted]"',
+    )
+    .replace(
+      /\b(password|verification_code|verificationCode|mfa_code|mfaCode)\b\s*[:=]\s*[^,\s)]+/gi,
+      "$1=[redacted]",
+    )
     .replace(/"[^"]*token[^"]*"\s*:\s*"[^"]+"/gi, (match) =>
       match.replace(/:\s*"[^"]+"/, ':"[token]"'),
     )
@@ -100,7 +107,9 @@ function sanitizeBrowserDiagnosticStack(error: Error): string | null {
     .slice(0, 6)
     .map(sanitizeBrowserDiagnostic);
   if (frames.length === 0) return null;
-  return [sanitizeBrowserDiagnostic(error.name || "Error"), ...frames].join("\n");
+  return [sanitizeBrowserDiagnostic(error.name || "Error"), ...frames].join(
+    "\n",
+  );
 }
 
 function installPhiSafeDiagnostics(page: Page) {
@@ -124,6 +133,61 @@ function installPhiSafeDiagnostics(page: Page) {
       `[response:${response.status()}] ${sanitizeBrowserDiagnostic(url.pathname)}`,
     );
   });
+}
+
+async function waitForBrowserNetworkReady(page: Page, timeout = 30_000) {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(async () => {
+          if (!navigator.onLine) return false;
+          try {
+            const response = await fetch("/api/health", {
+              cache: "no-store",
+            });
+            return response.ok;
+          } catch {
+            return false;
+          }
+        }),
+      {
+        message: "browser context should be online and able to reach the BFF",
+        timeout,
+      },
+    )
+    .toBe(true);
+}
+
+async function gotoHydratedRoute(
+  page: Page,
+  path: string,
+  screenTestId: string,
+): Promise<Response | null> {
+  let lastResponse: Response | null = null;
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      lastResponse = await page.goto(path, {
+        waitUntil: "domcontentloaded",
+        timeout: 45_000,
+      });
+      expect(lastResponse?.ok()).toBeTruthy();
+      await waitForBrowserNetworkReady(page);
+      await expect(page.getByTestId(screenTestId)).toBeVisible({
+        timeout: 30_000,
+      });
+      return lastResponse;
+    } catch (error) {
+      lastError = error;
+      if (attempt === 3) break;
+      await page.waitForTimeout(2_000);
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`Route ${path} did not hydrate ${screenTestId}`);
 }
 
 function cookieHasExpectedShape(
@@ -171,7 +235,9 @@ async function getRegistrationVerificationCode(
     );
   }
   if (!TEST_SUPPORT_TOKEN) {
-    throw new Error("PATIENT_WEB_TEST_SUPPORT_TOKEN is required for registration-code lookup");
+    throw new Error(
+      "PATIENT_WEB_TEST_SUPPORT_TOKEN is required for registration-code lookup",
+    );
   }
 
   const response = await request.post(BACKEND_REGISTRATION_CODE_URL, {
@@ -193,7 +259,11 @@ async function getRegistrationVerificationCode(
   return payload.code;
 }
 
-async function clickIfPresent(page: Page, testId: string, timeout = 1000): Promise<boolean> {
+async function clickIfPresent(
+  page: Page,
+  testId: string,
+  timeout = 1000,
+): Promise<boolean> {
   const locator = page.getByTestId(testId);
   const visible = await locator.isVisible({ timeout }).catch(() => false);
   if (!visible) return false;
@@ -230,26 +300,36 @@ async function expectNoBrowserStorage(page: Page) {
 }
 
 async function logoutViaBff(page: Page) {
-  const status = await page.evaluate(async () => {
-    const csrfCookie = document.cookie
-      .split(";")
-      .map((entry) => entry.trim())
-      .find((entry) => entry.startsWith("spine_patient_csrf="))
-      ?.slice("spine_patient_csrf=".length);
+  let status: number | "missing_csrf" | "fetch_failed" = "fetch_failed";
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await waitForBrowserNetworkReady(page);
+    status = await page.evaluate(async () => {
+      const csrfCookie = document.cookie
+        .split(";")
+        .map((entry) => entry.trim())
+        .find((entry) => entry.startsWith("spine_patient_csrf="))
+        ?.slice("spine_patient_csrf=".length);
 
-    if (!csrfCookie) return "missing_csrf";
+      if (!csrfCookie) return "missing_csrf";
 
-    const response = await fetch("/api/auth/logout", {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "content-type": "application/json",
-        "x-csrf-token": decodeURIComponent(csrfCookie),
-      },
-      body: "{}",
+      try {
+        const response = await fetch("/api/auth/logout", {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "content-type": "application/json",
+            "x-csrf-token": decodeURIComponent(csrfCookie),
+          },
+          body: "{}",
+        });
+        return response.status;
+      } catch {
+        return "fetch_failed";
+      }
     });
-    return response.status;
-  });
+    if (status !== "fetch_failed") break;
+    await page.waitForTimeout(attempt * 1_000);
+  }
 
   const cookies = await page.context().cookies();
   if (status === "missing_csrf") {
@@ -265,6 +345,34 @@ async function logoutViaBff(page: Page) {
   expect(hasCookie(cookies, "spine_patient_csrf")).toBe(false);
 }
 
+async function submitRegistrationAndWait(page: Page): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await waitForBrowserNetworkReady(page);
+      const registerResponsePromise = page.waitForResponse(
+        (response) =>
+          response.url().includes("/api/auth/register") &&
+          response.request().method() === "POST",
+        { timeout: 45_000 },
+      );
+      await expect(page.getByTestId("register-submit")).toBeEnabled({
+        timeout: 30_000,
+      });
+      await page.getByTestId("register-submit").click();
+      return await registerResponsePromise;
+    } catch (error) {
+      lastError = error;
+      if (attempt === 3) break;
+      await page.waitForTimeout(attempt * 1_000);
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Registration submit did not produce a response");
+}
+
 test.describe("patient app web deployment", () => {
   test.beforeEach(async ({ page }) => {
     installPhiSafeDiagnostics(page);
@@ -273,7 +381,7 @@ test.describe("patient app web deployment", () => {
   test("serves the app shell with browser hardening headers", async ({
     page,
   }) => {
-    const response = await page.goto("/login");
+    const response = await gotoHydratedRoute(page, "/login", "login-screen");
     expect(response?.ok()).toBeTruthy();
     expect(response?.headers()["cache-control"]).toContain("no-store");
     const csp = response?.headers()["content-security-policy"] ?? "";
@@ -294,24 +402,16 @@ test.describe("patient app web deployment", () => {
 
     try {
       await page.request.get("/api/auth/session");
-      await page.goto("/register");
-      await expect(page.getByTestId("register-screen")).toBeVisible();
+      await gotoHydratedRoute(page, "/register", "register-screen");
 
-      const registerResponsePromise = page.waitForResponse(
-        (response) =>
-          response.url().includes("/api/auth/register") &&
-          response.request().method() === "POST",
-      );
       await page.getByTestId("register-first-name").fill("Synthetic");
       await page.getByTestId("register-last-name").fill("Patient");
       await page.getByTestId("register-email").fill(email);
       await page.getByTestId("register-password").fill(SIGNUP_PASSWORD);
       await page.getByTestId("register-confirm-password").fill(SIGNUP_PASSWORD);
       await clickIfPresent(page, "register-consent-storage");
-      await expect(page.getByTestId("register-submit")).toBeEnabled();
-      await page.getByTestId("register-submit").click();
 
-      const registerResponse = await registerResponsePromise;
+      const registerResponse = await submitRegistrationAndWait(page);
       const registerResponseText = await registerResponse.text();
       expect(
         registerResponse.ok(),
@@ -346,8 +446,7 @@ test.describe("patient app web deployment", () => {
     page,
   }) => {
     await page.request.get("/api/auth/session");
-    await page.goto("/login");
-    await expect(page.getByTestId("login-screen")).toBeVisible();
+    await gotoHydratedRoute(page, "/login", "login-screen");
 
     await page.getByTestId("login-forgot-password").click();
     await expect(page.getByTestId("reset-password-screen")).toBeVisible();
@@ -376,24 +475,16 @@ test.describe("patient app web deployment", () => {
 
     try {
       await page.request.get("/api/auth/session");
-      await page.goto("/register");
-      await expect(page.getByTestId("register-screen")).toBeVisible();
+      await gotoHydratedRoute(page, "/register", "register-screen");
 
-      const registerResponsePromise = page.waitForResponse(
-        (response) =>
-          response.url().includes("/api/auth/register") &&
-          response.request().method() === "POST",
-      );
       await page.getByTestId("register-first-name").fill("Synthetic");
       await page.getByTestId("register-last-name").fill("Verified");
       await page.getByTestId("register-email").fill(email);
       await page.getByTestId("register-password").fill(SIGNUP_PASSWORD);
       await page.getByTestId("register-confirm-password").fill(SIGNUP_PASSWORD);
       await clickIfPresent(page, "register-consent-storage");
-      await expect(page.getByTestId("register-submit")).toBeEnabled();
-      await page.getByTestId("register-submit").click();
 
-      const registerResponse = await registerResponsePromise;
+      const registerResponse = await submitRegistrationAndWait(page);
       const registerResponseText = await registerResponse.text();
       expect(
         registerResponse.ok(),
@@ -423,7 +514,9 @@ test.describe("patient app web deployment", () => {
 
       const browserVisibleCookies = await page.evaluate(() => document.cookie);
       expect(browserVisibleCookies.includes("spine_patient_sess")).toBe(false);
-      expect(browserVisibleCookies.includes("spine_patient_refresh")).toBe(false);
+      expect(browserVisibleCookies.includes("spine_patient_refresh")).toBe(
+        false,
+      );
 
       const cookies = await page.context().cookies();
       expect(
