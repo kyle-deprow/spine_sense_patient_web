@@ -462,11 +462,17 @@ async function submitVerificationAndWait(
   getVerificationCode: () => Promise<string>,
 ): Promise<Response> {
   let lastError: unknown;
+  let lastVerificationCode: string | null = null;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
       await waitForBrowserNetworkReady(page);
-      const code = await getVerificationCode();
-      await page.getByTestId("verify-otp-digit-0").fill(code);
+      try {
+        lastVerificationCode = await getVerificationCode();
+      } catch (error) {
+        lastError = error;
+        if (lastVerificationCode == null) throw error;
+      }
+      await page.getByTestId("verify-otp-digit-0").fill(lastVerificationCode);
       const verifyResponsePromise = page.waitForResponse(
         (response) =>
           response.url().includes("/api/auth/verify/registration") &&

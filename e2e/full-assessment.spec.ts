@@ -1660,6 +1660,7 @@ async function submitVerificationWithTransientRetry(
   getVerificationCode: () => Promise<string>,
 ): Promise<PlaywrightResponse | null> {
   let lastError: unknown;
+  let lastVerificationCode: string | null = null;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     if (await isPostVerificationState(page)) return null;
     await expect(page.getByTestId("verify-screen")).toBeVisible({
@@ -1674,8 +1675,13 @@ async function submitVerificationWithTransientRetry(
       });
     }
     try {
-      const verificationCode = await getVerificationCode();
-      await fillVerificationCode(page, verificationCode);
+      try {
+        lastVerificationCode = await getVerificationCode();
+      } catch (error) {
+        lastError = error;
+        if (lastVerificationCode == null) throw error;
+      }
+      await fillVerificationCode(page, lastVerificationCode);
       const response = await clickAndWaitForResponse({
         page,
         testId: "verify-submit",
