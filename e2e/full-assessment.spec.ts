@@ -2092,6 +2092,24 @@ async function waitForScreeningNavIdle(page: Page, timeout = 30_000) {
   await expect(next).not.toContainText(/Saving/i, { timeout });
 }
 
+function isScreeningAnswersResponse(response: PlaywrightResponse): boolean {
+  const url = new URL(response.url());
+  return (
+    url.pathname.endsWith("/screening/answers") &&
+    response.request().method() === "PATCH"
+  );
+}
+
+async function waitForScreeningAnswerSave(
+  responsePromise: Promise<PlaywrightResponse>,
+) {
+  const response = await responsePromise;
+  expect(
+    response.ok(),
+    `screening answer save failed with status ${response.status()}`,
+  ).toBe(true);
+}
+
 async function isScreeningSubmitButton(page: Page): Promise<boolean> {
   const next = page.getByTestId("screening-nav-next");
   if (!(await next.isVisible({ timeout: 500 }).catch(() => false)))
@@ -2408,6 +2426,13 @@ async function answerScreening(page: Page, profiler: TransitionProfiler) {
       return;
     }
 
+    const screeningAnswerSaveResponse = page.waitForResponse(
+      isScreeningAnswersResponse,
+      {
+        timeout: TRANSITION_BUDGETS_MS.sync,
+      },
+    );
+
     await profiler.measure(
       `screening.question.${questionId}.visual`,
       "question",
@@ -2416,7 +2441,10 @@ async function answerScreening(page: Page, profiler: TransitionProfiler) {
     await profiler.measure(
       `screening.question.${questionId}.sync`,
       "sync",
-      () => waitForScreeningNavIdle(page),
+      async () => {
+        await waitForScreeningAnswerSave(screeningAnswerSaveResponse);
+        await waitForScreeningNavIdle(page);
+      },
     );
     await expectNoAssessmentBlockingState(page);
 
