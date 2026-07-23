@@ -588,7 +588,7 @@ async function csrfTokenForApiPath(
 async function patientProxyJson<T = unknown>(
   page: Page,
   path: string,
-  options: { method: "PATCH" | "POST"; body: object },
+  options: { method: "PATCH" | "POST" | "PUT"; body: object },
 ): Promise<T> {
   let lastFailure = "network_error";
   for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -672,26 +672,30 @@ async function completeSyntheticOnboardingThroughApi(page: Page) {
     },
   });
 
-  await patientProxyJson(page, "/api/proxy/api/v1/patients/me/intake/profile", {
-    method: "POST",
-    body: {
-      step_data: {
-        dateOfBirth: profileDateOfBirth,
-        sexAtBirth: onboarding.sexAtBirth,
-        heightFt: onboarding.heightFeet,
-        heightIn: onboarding.heightInches,
-        weight: onboarding.weightPounds,
-        occupation: onboarding.occupation,
-        activityLevel: onboarding.activityLevel,
+  await patientProxyJson(
+    page,
+    "/api/proxy/api/v1/patients/me/intake/steps/profile",
+    {
+      method: "PUT",
+      body: {
+        step_data: {
+          dateOfBirth: profileDateOfBirth,
+          sexAtBirth: onboarding.sexAtBirth,
+          heightFt: onboarding.heightFeet,
+          heightIn: onboarding.heightInches,
+          weight: onboarding.weightPounds,
+          occupation: onboarding.occupation,
+          activityLevel: onboarding.activityLevel,
+        },
       },
     },
-  });
+  );
 
   await patientProxyJson(
     page,
-    "/api/proxy/api/v1/patients/me/intake/chief-complaint",
+    "/api/proxy/api/v1/patients/me/intake/steps/chief-complaint",
     {
-      method: "POST",
+      method: "PUT",
       body: {
         step_data: {
           narrative: onboarding.chiefComplaint,
@@ -703,9 +707,9 @@ async function completeSyntheticOnboardingThroughApi(page: Page) {
 
   await patientProxyJson(
     page,
-    "/api/proxy/api/v1/patients/me/intake/treatment-history",
+    "/api/proxy/api/v1/patients/me/intake/steps/treatment-history",
     {
-      method: "POST",
+      method: "PUT",
       body: {
         step_data: onboarding.intakeStepData["treatment-history"],
       },
@@ -714,9 +718,9 @@ async function completeSyntheticOnboardingThroughApi(page: Page) {
 
   await patientProxyJson(
     page,
-    "/api/proxy/api/v1/patients/me/intake/imaging-records",
+    "/api/proxy/api/v1/patients/me/intake/steps/imaging-records",
     {
-      method: "POST",
+      method: "PUT",
       body: {
         step_data: {
           skipped: true,
