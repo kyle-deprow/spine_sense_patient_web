@@ -702,7 +702,18 @@ async function clickRecordsContinue(page: Page) {
   await complete.click({ timeout: 10_000 });
 }
 
+async function continueWelcomeIntroIfPresent(page: Page) {
+  const welcomeBegin = page.getByRole("button", { name: /let's begin/i });
+  if (!(await welcomeBegin.isVisible({ timeout: 5_000 }).catch(() => false))) {
+    return;
+  }
+
+  await expect(welcomeBegin).toBeEnabled({ timeout: 30_000 });
+  await welcomeBegin.click({ timeout: 10_000 });
+}
+
 async function completeSyntheticOnboardingThroughUi(page: Page) {
+  await continueWelcomeIntroIfPresent(page);
   await expect(page.getByTestId("onboarding-layout")).toBeVisible({
     timeout: 60_000,
   });
