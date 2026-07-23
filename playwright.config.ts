@@ -8,13 +8,17 @@ const outputDir =
   "/tmp/spine-sense-patient-web-test-results";
 const includeFullAssessment =
   process.env.PATIENT_WEB_INCLUDE_FULL_ASSESSMENT === "true";
+const includeProdReportEmail =
+  process.env.PATIENT_WEB_INCLUDE_PROD_REPORT_EMAIL === "true";
 const fakeAudioFile = path.resolve(
   __dirname,
   "e2e/fixtures/synthetic-voice.wav",
 );
 const baseProjectGrepInvert = includeFullAssessment
   ? /@voice-transcription/
-  : /@full-assessment|@voice-transcription/;
+  : includeProdReportEmail
+    ? /@full-assessment|@voice-transcription/
+    : /@full-assessment|@voice-transcription|@prod-report-email/;
 
 export default defineConfig({
   testDir: "./e2e",
