@@ -90,13 +90,18 @@ async function loginCanary(page: Page) {
   if (!response.ok()) {
     throw new Error(`canary login failed status=${response.status()}`);
   }
-  await expect(page.getByTestId("home-screen")).toBeVisible({
-    timeout: 90_000,
-  });
+  await expect(
+    page
+      .getByTestId("home-screen")
+      .or(page.getByTestId("results-screen"))
+      .first(),
+  ).toBeVisible({ timeout: 90_000 });
 }
 
 async function openCanaryResults(page: Page) {
-  await gotoHydratedRoute(page, "/assessment", "results-screen");
+  if (!(await page.getByTestId("results-screen").isVisible())) {
+    await gotoHydratedRoute(page, "/assessment", "results-screen");
+  }
   await expect(page.getByTestId("results-diagnosis")).toBeVisible({
     timeout: 90_000,
   });
