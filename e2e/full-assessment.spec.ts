@@ -1634,7 +1634,7 @@ async function fillVerificationCode(
 
 async function submitVerificationWithTransientRetry(
   page: Page,
-  verificationCode: string,
+  getVerificationCode: () => Promise<string>,
 ): Promise<PlaywrightResponse> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -1649,25 +1649,34 @@ async function submitVerificationWithTransientRetry(
         timeout: 60_000,
       });
     }
+    const verificationCode = await getVerificationCode();
     await fillVerificationCode(page, verificationCode);
     try {
-      return await clickAndWaitForResponse({
+      const response = await clickAndWaitForResponse({
         page,
         testId: "verify-submit",
         matches: (response) =>
           response.url().includes("/api/auth/verify/registration/confirm") &&
           response.request().method() === "POST",
       });
+      if (response.ok()) return response;
+
+      lastError = new Error(
+        `verification submit failed status=${response.status()}`,
+      );
+      if (![422, 502, 503, 504].includes(response.status())) {
+        return response;
+      }
     } catch (error) {
       lastError = error;
-      if (attempt >= 3) break;
-      if (await isOfflineBannerVisible(page)) {
-        await page
-          .reload({ waitUntil: "domcontentloaded", timeout: 45_000 })
-          .catch(() => undefined);
-      }
-      await page.waitForTimeout(1500);
     }
+    if (attempt >= 3) break;
+    if (await isOfflineBannerVisible(page)) {
+      await page
+        .reload({ waitUntil: "domcontentloaded", timeout: 45_000 })
+        .catch(() => undefined);
+    }
+    await page.waitForTimeout(1500);
   }
   throw lastError instanceof Error
     ? lastError
@@ -3253,16 +3262,14 @@ test.describe("patient web full assessment flow", () => {
       logMilestone("verification screen visible; checking browser storage");
       await expectNoBrowserStorage(page);
 
-      const verificationCode = await getRegistrationVerificationCode(
-        request,
-        email,
-      );
-      await fillVerificationCode(page, verificationCode);
-      logMilestone("verification code entered; submitting verification");
+      logMilestone("submitting verification");
       const verifyResponse = await profiler.measure(
         "verification.to_authenticated_session",
         "page",
-        () => submitVerificationWithTransientRetry(page, verificationCode),
+        () =>
+          submitVerificationWithTransientRetry(page, () =>
+            getRegistrationVerificationCode(request, email),
+          ),
       );
       expect(verifyResponse.ok()).toBeTruthy();
       await expectNoTokenLeak(await verifyResponse.text());
