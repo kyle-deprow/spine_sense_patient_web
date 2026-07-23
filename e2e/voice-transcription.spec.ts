@@ -729,6 +729,7 @@ async function registerAndAuthenticateSyntheticPatient(
   });
   await acceptConsentIfPresent(page);
   await completeSyntheticOnboardingGate(page);
+  await waitForHomeScreen(page);
 
   const cookies = await page.context().cookies();
   expect(
@@ -815,9 +816,7 @@ function expectNoBulkUpload(traffic: TrafficCapture) {
 async function startAssessmentFromActiveUi(
   page: Page,
 ): Promise<AssessmentRecord> {
-  await expect(page.getByTestId("home-screen")).toBeVisible({
-    timeout: 60_000,
-  });
+  await waitForHomeScreen(page);
   const createResponsePromise = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" &&
@@ -832,6 +831,32 @@ async function startAssessmentFromActiveUi(
   const createResponse = await createResponsePromise;
   expect(createResponse.status()).toBe(201);
   return (await createResponse.json()) as AssessmentRecord;
+}
+
+async function waitForHomeScreen(page: Page) {
+  let lastFailure: string | null = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await waitForBrowserNetworkReady(page);
+      if (attempt > 1) {
+        await page.goto("/", { waitUntil: "domcontentloaded" });
+      }
+      await expect(page.getByTestId("home-screen")).toBeVisible({
+        timeout: 60_000,
+      });
+      return;
+    } catch (error) {
+      lastFailure =
+        error instanceof Error
+          ? sanitizeBrowserDiagnostic(error.message)
+          : "unknown_home_screen_failure";
+      if (attempt === 3) break;
+      await page.waitForTimeout(attempt * 1_000);
+    }
+  }
+  if (lastFailure) {
+    throw new Error(lastFailure);
+  }
 }
 
 async function getAuthoritativeScreeningState(
@@ -1087,53 +1112,76 @@ async function proxyJson<T>(
   path: string,
   options: { method: "POST"; body: object },
 ): Promise<T> {
-  const csrfToken = await csrfTokenForApiPath(page, path);
-  const response = await page.evaluate(
-    async ({ path, method, body, csrfToken }) => {
-      try {
-        const browserResponse = await fetch(path, {
-          method,
-          credentials: "include",
-          headers: {
-            "content-type": "application/json",
-            "x-csrf-token": csrfToken,
-          },
-          body: JSON.stringify(body),
-        });
-        return {
-          networkError: false,
-          ok: browserResponse.ok,
-          status: browserResponse.status,
-          text: await browserResponse.text(),
-        };
-      } catch {
-        return {
-          networkError: true,
-          ok: false,
-          status: 0,
-          text: "",
-        };
-      }
-    },
-    { path, method: options.method, body: options.body, csrfToken },
-  );
-  recordTraffic(traffic, options.method, new URL(path, page.url()).toString());
-  if (response.networkError) {
-    throw new Error("onboarding story request failed reason=network_error");
-  }
-  const body = parseJsonBody(response.text);
-  if (!response.ok) {
-    throw new ProxyFetchError(
-      "onboarding story request failed status=" +
-        response.status +
-        " category=" +
-        safeProxyFailureCategory(body),
-      response.status,
-      body,
-      null,
+  let lastNetworkError = false;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await waitForBrowserNetworkReady(page);
+    const csrfToken = await csrfTokenForApiPath(page, path);
+    const response = await page.evaluate(
+      async ({ path, method, body, csrfToken }) => {
+        try {
+          const browserResponse = await fetch(path, {
+            method,
+            credentials: "include",
+            headers: {
+              "content-type": "application/json",
+              "x-csrf-token": csrfToken,
+            },
+            body: JSON.stringify(body),
+          });
+          return {
+            networkError: false,
+            ok: browserResponse.ok,
+            status: browserResponse.status,
+            text: await browserResponse.text(),
+          };
+        } catch {
+          return {
+            networkError: true,
+            ok: false,
+            status: 0,
+            text: "",
+          };
+        }
+      },
+      { path, method: options.method, body: options.body, csrfToken },
     );
+    recordTraffic(
+      traffic,
+      options.method,
+      new URL(path, page.url()).toString(),
+    );
+    if (response.networkError) {
+      lastNetworkError = true;
+      if (attempt < 3) {
+        await page.waitForTimeout(attempt * 1_000);
+        continue;
+      }
+      break;
+    }
+    const body = parseJsonBody(response.text);
+    if (!response.ok) {
+      if ([408, 429, 500, 502, 503, 504].includes(response.status)) {
+        if (attempt < 3) {
+          await page.waitForTimeout(attempt * 1_000);
+          continue;
+        }
+      }
+      throw new ProxyFetchError(
+        "onboarding story request failed status=" +
+          response.status +
+          " category=" +
+          safeProxyFailureCategory(body),
+        response.status,
+        body,
+        null,
+      );
+    }
+    return body as T;
   }
-  return body as T;
+
+  throw new Error(
+    `onboarding story request failed reason=${lastNetworkError ? "network_error" : "transient_http_error"}`,
+  );
 }
 
 async function uploadOnboardingStoryFixtureThroughCompletedFilePath(
