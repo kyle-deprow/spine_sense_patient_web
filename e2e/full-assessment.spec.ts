@@ -2805,20 +2805,22 @@ async function completeAdaptiveIfPresent(
       /^adaptive-question-/,
       "adaptive.question.",
     );
-    const nextStage = await profiler.measure(
-      questionLabel,
-      "question",
-      async () => {
-        await waitForEnabledAndClick(page, "adaptive-submit");
-        return waitForDynamicQuestionAdvance(
-          page,
-          "adaptive-screen",
-          "adaptive-question",
-          currentQuestionTestId,
-          "adaptive-submit",
-          ["adaptive-loading-state", "adaptive-error-state", "review-screen"],
-        );
-      },
+    const transitionStartedAt = performance.now();
+    await waitForEnabledAndClick(page, "adaptive-submit");
+    const nextStage = await waitForDynamicQuestionAdvance(
+      page,
+      "adaptive-screen",
+      "adaptive-question",
+      currentQuestionTestId,
+      "adaptive-submit",
+      ["adaptive-loading-state", "adaptive-error-state", "review-screen"],
+    );
+    profiler.recordElapsed(
+      nextStage === "adaptive-screen"
+        ? questionLabel
+        : "adaptive.submit_to_next_stage",
+      nextStage === "adaptive-screen" ? "question" : "stage",
+      transitionStartedAt,
     );
     if (nextStage === "adaptive-loading-state") {
       const resolvedStage = await profiler.measure(
