@@ -9,6 +9,8 @@ import {
   type TestInfo,
 } from "@playwright/test";
 
+import { fullAssessmentScenario } from "./fixtures/fullAssessmentScenario";
+
 const BACKEND_CLEANUP_URL = process.env.PATIENT_WEB_BACKEND_E2E_CLEANUP_URL;
 const GATEWAY_CLEANUP_URL = process.env.PATIENT_WEB_GATEWAY_E2E_CLEANUP_URL;
 const BACKEND_REGISTRATION_CODE_URL =
@@ -21,7 +23,6 @@ const SIGNUP_PASSWORD =
 const AUDIO_FIXTURE = path.resolve(__dirname, "fixtures/synthetic-voice.wav");
 const LIVE_TRANSCRIPTION_WS_ORIGIN =
   process.env.PATIENT_WEB_LIVE_TRANSCRIPTION_WS_ORIGIN ?? null;
-const SYNTHETIC_ONBOARDING_DOB = "1985-01-15";
 const BULK_UPLOAD_MAX_ATTEMPTS = 3;
 const TRANSIENT_UPLOAD_ERROR_CODES = new Set([
   "ECONNRESET",
@@ -392,6 +393,30 @@ async function clickIfPresent(
   return true;
 }
 
+async function fillByTestId(page: Page, testId: string, value: string) {
+  const locator = page.getByTestId(testId);
+  await expect(locator).toBeVisible({ timeout: 30_000 });
+  await locator.fill(value);
+}
+
+async function clickByTestId(page: Page, testId: string) {
+  const locator = page.getByTestId(testId);
+  await expect(locator).toBeVisible({ timeout: 30_000 });
+  await locator.click();
+}
+
+async function waitForEnabledAndClick(
+  page: Page,
+  testId: string,
+  timeout = 30_000,
+) {
+  const locator = page.getByTestId(testId);
+  await expect(locator).toBeVisible({ timeout });
+  await expect(locator).toBeEnabled({ timeout });
+  await locator.scrollIntoViewIfNeeded();
+  await locator.click({ timeout: 10_000 });
+}
+
 async function getRegistrationVerificationCode(email: string): Promise<string> {
   if (!BACKEND_REGISTRATION_CODE_URL) {
     throw new Error(
@@ -584,66 +609,155 @@ async function csrfTokenForApiPath(
   return csrfCookie.value;
 }
 
-async function completeSyntheticOnboardingGate(page: Page) {
-  let lastFailure: string | null = null;
+async function isChiefComplaintStepVisible(page: Page): Promise<boolean> {
+  return (
+    (await page
+      .getByTestId("step-chief-complaint-select")
+      .isVisible({ timeout: 1_000 })
+      .catch(() => false)) ||
+    (await page
+      .getByTestId("chief-complaint-text-option")
+      .isVisible({ timeout: 1_000 })
+      .catch(() => false)) ||
+    (await page
+      .getByText(/Tell us what's/i)
+      .isVisible({ timeout: 1_000 })
+      .catch(() => false))
+  );
+}
+
+async function expectChiefComplaintAfterProfileSave(page: Page) {
+  await expect
+    .poll(() => isChiefComplaintStepVisible(page), {
+      timeout: 60_000,
+      message: "Expected chief complaint step after profile save",
+    })
+    .toBe(true);
+}
+
+async function clickChiefComplaintSave(page: Page) {
+  if (await clickIfPresent(page, "text-save-btn", 1_000)) return;
+
+  const save = page.getByRole("button", { name: /save and continue/i });
+  await expect(save).toBeVisible({ timeout: 30_000 });
+  await expect(save).toBeEnabled({ timeout: 30_000 });
+  await save.click({ timeout: 10_000 });
+}
+
+async function expectTreatmentHistoryAfterStorySave(page: Page) {
+  await expect(page.getByTestId("medical-history-conditions-none")).toBeVisible(
+    { timeout: 60_000 },
+  );
+}
+
+async function expectImagingRecordsAfterHistorySave(page: Page) {
+  await expect
+    .poll(
+      async () =>
+        (await page
+          .getByTestId("records-continue-btn")
+          .isVisible({ timeout: 1_000 })
+          .catch(() => false)) ||
+        (await page
+          .getByTestId("step-imaging-records")
+          .isVisible({ timeout: 1_000 })
+          .catch(() => false)) ||
+        (await page
+          .getByRole("button", { name: /complete intake/i })
+          .isVisible({ timeout: 1_000 })
+          .catch(() => false)) ||
+        (await page
+          .getByText(/Bring in your records/i)
+          .isVisible({ timeout: 1_000 })
+          .catch(() => false)),
+      {
+        timeout: 60_000,
+        message: "Expected imaging records step after treatment history save",
+      },
+    )
+    .toBe(true);
+}
+
+async function clickRecordsContinue(page: Page) {
+  if (
+    await page
+      .getByTestId("records-continue-btn")
+      .isVisible({ timeout: 1_000 })
+      .catch(() => false)
+  ) {
+    await waitForEnabledAndClick(page, "records-continue-btn");
+    return;
+  }
+
+  const skip = page.getByRole("button", { name: /skip for now/i });
+  if (await skip.isVisible({ timeout: 1_000 }).catch(() => false)) {
+    await expect(skip).toBeEnabled({ timeout: 30_000 });
+    await skip.click({ timeout: 10_000 });
+    return;
+  }
+
+  const complete = page.getByRole("button", { name: /complete intake/i });
+  await expect(complete).toBeVisible({ timeout: 30_000 });
+  await expect(complete).toBeEnabled({ timeout: 30_000 });
+  await complete.click({ timeout: 10_000 });
+}
+
+async function completeSyntheticOnboardingThroughUi(page: Page) {
+  await expect(page.getByTestId("onboarding-layout")).toBeVisible({
+    timeout: 60_000,
+  });
+
+  const { onboarding } = fullAssessmentScenario;
+  await fillByTestId(page, "profile-dob", onboarding.dateOfBirthDisplay);
+  await clickByTestId(page, `profile-sex-${onboarding.sexAtBirth}`);
+  await fillByTestId(page, "profile-height-ft", onboarding.heightFeet);
+  await fillByTestId(page, "profile-height-in", onboarding.heightInches);
+  await fillByTestId(page, "profile-weight", onboarding.weightPounds);
+  await fillByTestId(page, "profile-occupation", onboarding.occupation);
+  await clickByTestId(page, `profile-activity-${onboarding.activityLevel}`);
+
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    try {
-      await waitForBrowserNetworkReady(page);
-      const csrfToken = await csrfTokenForApiPath(
-        page,
-        "/api/proxy/api/v1/patients/me",
-      );
-      const session = await page.evaluate(
-        async ({ csrfToken, dateOfBirth }) => {
-          const updateResponse = await fetch("/api/proxy/api/v1/patients/me", {
-            method: "PATCH",
-            credentials: "include",
-            headers: {
-              "content-type": "application/json",
-              "x-csrf-token": csrfToken,
-            },
-            body: JSON.stringify({ date_of_birth: dateOfBirth }),
-          });
-          const updateText = await updateResponse.text();
-          if (!updateResponse.ok) {
-            throw new Error(
-              `synthetic onboarding profile patch failed status=${updateResponse.status} body=${updateText.slice(0, 160)}`,
-            );
-          }
+    await waitForBrowserNetworkReady(page).catch(() => undefined);
+    await waitForEnabledAndClick(page, "profile-continue-btn");
+    if (await isChiefComplaintStepVisible(page)) break;
 
-          const sessionResponse = await fetch("/api/auth/session", {
-            credentials: "include",
-          });
-          const sessionText = await sessionResponse.text();
-          if (!sessionResponse.ok) {
-            throw new Error(
-              `synthetic onboarding session refresh failed status=${sessionResponse.status} body=${sessionText.slice(0, 160)}`,
-            );
-          }
-
-          return JSON.parse(sessionText) as {
-            has_completed_onboarding?: unknown;
-          };
-        },
-        { csrfToken, dateOfBirth: SYNTHETIC_ONBOARDING_DOB },
-      );
-
-      expect(session.has_completed_onboarding).toBe(true);
-      await page.goto("/", { waitUntil: "domcontentloaded" });
-      return;
-    } catch (error) {
-      lastFailure =
-        error instanceof Error
-          ? sanitizeBrowserDiagnostic(error.message)
-          : "unknown_onboarding_gate_failure";
-      if (attempt === 3) break;
-      await page.waitForTimeout(attempt * 1_000);
-    }
+    const saveErrorVisible = await page
+      .getByText(/could not save your profile details/i)
+      .isVisible({ timeout: 5_000 })
+      .catch(() => false);
+    if (!saveErrorVisible || attempt === 3) break;
+    await page.waitForTimeout(attempt * 1_000);
   }
+  await expectChiefComplaintAfterProfileSave(page);
 
-  if (lastFailure) {
-    throw new Error(lastFailure);
+  await clickByTestId(page, "chief-complaint-text-option");
+  await expect(page.getByTestId("step-chief-complaint-text")).toBeVisible({
+    timeout: 30_000,
+  });
+  await fillByTestId(page, "narrative-input", onboarding.chiefComplaint);
+  await clickChiefComplaintSave(page);
+  await expectTreatmentHistoryAfterStorySave(page);
+
+  await clickByTestId(page, "medical-history-conditions-none");
+  const negativeMedicalHistoryAnswers = page.getByRole("button", {
+    name: "No",
+    exact: true,
+  });
+  await expect(negativeMedicalHistoryAnswers).toHaveCount(4);
+  for (let remaining = 4; remaining > 0; remaining -= 1) {
+    await negativeMedicalHistoryAnswers
+      .first()
+      .click({ force: true, timeout: 10_000 });
+    await expect(negativeMedicalHistoryAnswers).toHaveCount(remaining - 1);
+    await page.waitForTimeout(500);
   }
+  await clickByTestId(page, "medical-history-nicotine-no");
+  await waitForEnabledAndClick(page, "medical-history-continue-btn");
+  await expectImagingRecordsAfterHistorySave(page);
+
+  await clickRecordsContinue(page);
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await waitForHomeScreen(page);
 }
 
 async function registerAndAuthenticateSyntheticPatient(
@@ -728,8 +842,7 @@ async function registerAndAuthenticateSyntheticPatient(
     timeout: 60_000,
   });
   await acceptConsentIfPresent(page);
-  await completeSyntheticOnboardingGate(page);
-  await waitForHomeScreen(page);
+  await completeSyntheticOnboardingThroughUi(page);
 
   const cookies = await page.context().cookies();
   expect(
@@ -1336,6 +1449,7 @@ test.describe("patient web voice transcription contracts @voice-transcription", 
   test("streams the assessment Add Note WAV in chunks over the canonical WebSocket", async ({
     page,
   }, testInfo) => {
+    test.setTimeout(240_000);
     await registerAndAuthenticateSyntheticPatient(page, testInfo);
     const traffic = captureTranscriptionTraffic(page);
     const assessment = await startAssessmentFromActiveUi(page);
