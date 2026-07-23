@@ -2594,6 +2594,8 @@ async function answerScreening(page: Page, profiler: TransitionProfiler) {
       "question",
       () => clickScreeningNextAndWaitForAdvance(page, questionId),
     );
+    await settlePendingScreeningSyncProfiles(pendingSyncProfiles);
+    await waitForScreeningNavIdle(page);
     await expectNoAssessmentBlockingState(page);
 
     if (
