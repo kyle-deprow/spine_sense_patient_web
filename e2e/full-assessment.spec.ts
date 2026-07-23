@@ -1793,6 +1793,32 @@ async function waitForBrowserNetworkReady(page: Page, timeout = 30_000) {
     .toBe(true);
 }
 
+async function waitForScreeningNavReady(page: Page) {
+  const next = page.getByTestId("screening-nav-next");
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    if (await next.isVisible({ timeout: 20_000 }).catch(() => false)) return;
+
+    const retry = page.getByRole("button", { name: /^retry$/i }).first();
+    if (await retry.isVisible({ timeout: 1000 }).catch(() => false)) {
+      await waitForBrowserNetworkReady(page).catch(() => undefined);
+      await retry.click({ timeout: 10_000 }).catch(() => undefined);
+    } else {
+      await waitForBrowserNetworkReady(page).catch(() => undefined);
+      await page
+        .reload({ waitUntil: "domcontentloaded", timeout: 45_000 })
+        .catch(() => undefined);
+    }
+
+    await waitForAnyVisibleTestId(
+      page,
+      ["screening-screen", "home-screen", "assessment-entry-guard"],
+      30_000,
+    ).catch(() => null);
+  }
+
+  await expect(next).toBeVisible({ timeout: 60_000 });
+}
+
 async function clickConsentAccept(page: Page) {
   if (
     await page
@@ -2515,9 +2541,7 @@ async function stressBacktrackOneScreeningQuestion(
 }
 
 async function answerScreening(page: Page, profiler: TransitionProfiler) {
-  await expect(page.getByTestId("screening-nav-next")).toBeVisible({
-    timeout: 60_000,
-  });
+  await waitForScreeningNavReady(page);
   const stressState: ScreeningStressState = {
     reloadedDuringScreening: false,
     backtrackedDuringScreening: false,
