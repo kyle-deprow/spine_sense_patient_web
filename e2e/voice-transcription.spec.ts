@@ -530,17 +530,39 @@ async function acceptConsentIfPresent(page: Page) {
     .catch(() => false);
   if (!consentVisible) return;
 
-  await clickIfPresent(page, "consent-checkbox-pa-cons-privacy", 5_000);
-  await page.waitForTimeout(250);
-  await clickIfPresent(page, "consent-checkbox-pa-cons-educational", 5_000);
-  await page.waitForTimeout(250);
-  await clickIfPresent(page, "consent-checkbox-pa-cons-ai-analysis", 5_000);
-  await page.waitForTimeout(250);
+  let lastFailure: string | null = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await waitForBrowserNetworkReady(page);
+      await clickIfPresent(page, "consent-checkbox-pa-cons-privacy", 5_000);
+      await page.waitForTimeout(250);
+      await clickIfPresent(page, "consent-checkbox-pa-cons-educational", 5_000);
+      await page.waitForTimeout(250);
+      await clickIfPresent(page, "consent-checkbox-pa-cons-ai-analysis", 5_000);
+      await page.waitForTimeout(250);
 
-  const accept = page.getByTestId("consent-accept");
-  await expect(accept).toBeEnabled({ timeout: 30_000 });
-  await accept.click();
-  await expect(accept).toBeHidden({ timeout: 60_000 });
+      const accept = page.getByTestId("consent-accept");
+      await expect(accept).toBeEnabled({ timeout: 30_000 });
+      await accept.click();
+      await expect(accept).toBeHidden({ timeout: 30_000 });
+      return;
+    } catch (error) {
+      lastFailure =
+        error instanceof Error
+          ? sanitizeBrowserDiagnostic(error.message)
+          : "unknown_consent_submit_failure";
+      const stillOnConsent = await page
+        .getByTestId("consent-screen")
+        .isVisible({ timeout: 5_000 })
+        .catch(() => false);
+      if (attempt === 3 || !stillOnConsent) break;
+      await page.waitForTimeout(attempt * 1_000);
+    }
+  }
+
+  if (lastFailure) {
+    throw new Error(lastFailure);
+  }
 }
 
 async function csrfTokenForApiPath(
@@ -563,45 +585,65 @@ async function csrfTokenForApiPath(
 }
 
 async function completeSyntheticOnboardingGate(page: Page) {
-  const csrfToken = await csrfTokenForApiPath(
-    page,
-    "/api/proxy/api/v1/patients/me",
-  );
-  const session = await page.evaluate(
-    async ({ csrfToken, dateOfBirth }) => {
-      const updateResponse = await fetch("/api/proxy/api/v1/patients/me", {
-        method: "PATCH",
-        credentials: "include",
-        headers: {
-          "content-type": "application/json",
-          "x-csrf-token": csrfToken,
+  let lastFailure: string | null = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await waitForBrowserNetworkReady(page);
+      const csrfToken = await csrfTokenForApiPath(
+        page,
+        "/api/proxy/api/v1/patients/me",
+      );
+      const session = await page.evaluate(
+        async ({ csrfToken, dateOfBirth }) => {
+          const updateResponse = await fetch("/api/proxy/api/v1/patients/me", {
+            method: "PATCH",
+            credentials: "include",
+            headers: {
+              "content-type": "application/json",
+              "x-csrf-token": csrfToken,
+            },
+            body: JSON.stringify({ date_of_birth: dateOfBirth }),
+          });
+          const updateText = await updateResponse.text();
+          if (!updateResponse.ok) {
+            throw new Error(
+              `synthetic onboarding profile patch failed status=${updateResponse.status} body=${updateText.slice(0, 160)}`,
+            );
+          }
+
+          const sessionResponse = await fetch("/api/auth/session", {
+            credentials: "include",
+          });
+          const sessionText = await sessionResponse.text();
+          if (!sessionResponse.ok) {
+            throw new Error(
+              `synthetic onboarding session refresh failed status=${sessionResponse.status} body=${sessionText.slice(0, 160)}`,
+            );
+          }
+
+          return JSON.parse(sessionText) as {
+            has_completed_onboarding?: unknown;
+          };
         },
-        body: JSON.stringify({ date_of_birth: dateOfBirth }),
-      });
-      const updateText = await updateResponse.text();
-      if (!updateResponse.ok) {
-        throw new Error(
-          `synthetic onboarding profile patch failed status=${updateResponse.status} body=${updateText.slice(0, 160)}`,
-        );
-      }
+        { csrfToken, dateOfBirth: SYNTHETIC_ONBOARDING_DOB },
+      );
 
-      const sessionResponse = await fetch("/api/auth/session", {
-        credentials: "include",
-      });
-      const sessionText = await sessionResponse.text();
-      if (!sessionResponse.ok) {
-        throw new Error(
-          `synthetic onboarding session refresh failed status=${sessionResponse.status} body=${sessionText.slice(0, 160)}`,
-        );
-      }
+      expect(session.has_completed_onboarding).toBe(true);
+      await page.goto("/", { waitUntil: "domcontentloaded" });
+      return;
+    } catch (error) {
+      lastFailure =
+        error instanceof Error
+          ? sanitizeBrowserDiagnostic(error.message)
+          : "unknown_onboarding_gate_failure";
+      if (attempt === 3) break;
+      await page.waitForTimeout(attempt * 1_000);
+    }
+  }
 
-      return JSON.parse(sessionText) as { has_completed_onboarding?: unknown };
-    },
-    { csrfToken, dateOfBirth: SYNTHETIC_ONBOARDING_DOB },
-  );
-
-  expect(session.has_completed_onboarding).toBe(true);
-  await page.goto("/", { waitUntil: "domcontentloaded" });
+  if (lastFailure) {
+    throw new Error(lastFailure);
+  }
 }
 
 async function registerAndAuthenticateSyntheticPatient(
