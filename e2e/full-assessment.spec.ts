@@ -176,7 +176,12 @@ function readPositiveIntegerEnv(name: string, defaultValue: number): number {
 const TRANSITION_BUDGETS_MS: Record<TransitionProfileKind, number> = {
   page: readPositiveIntegerEnv("PATIENT_WEB_E2E_PAGE_BUDGET_MS", 90_000),
   question: readPositiveIntegerEnv("PATIENT_WEB_E2E_QUESTION_BUDGET_MS", 2_000),
-  sync: readPositiveIntegerEnv("PATIENT_WEB_E2E_SYNC_BUDGET_MS", 5_000),
+  // Background persistence is profiled separately from the user-visible
+  // question transition. Prod browser network changes have produced 7-8s save
+  // responses while the next question rendered in <500ms; keep the visible
+  // question budget strict and give sync enough room to measure the actual
+  // save path instead of timing out the listener.
+  sync: readPositiveIntegerEnv("PATIENT_WEB_E2E_SYNC_BUDGET_MS", 15_000),
   recovery: readPositiveIntegerEnv(
     "PATIENT_WEB_E2E_RECOVERY_BUDGET_MS",
     30_000,
