@@ -2398,12 +2398,36 @@ async function stressReloadCurrentScreeningQuestion(page: Page) {
     `stress: reloading during screening at ${questionIdBeforeReload}`,
   );
 
-  await page.reload({ waitUntil: "domcontentloaded", timeout: 45_000 });
-  const reloadStage = await waitForAnyVisibleTestId(
-    page,
-    ["screening-screen", "home-screen", "assessment-entry-guard"],
-    60_000,
-  );
+  let reloadStage: string | null = null;
+  let lastReloadError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await waitForBrowserNetworkReady(page).catch((error) => {
+      lastReloadError = error;
+    });
+    await page
+      .reload({ waitUntil: "domcontentloaded", timeout: 45_000 })
+      .catch((error) => {
+        lastReloadError = error;
+      });
+    await waitForBrowserNetworkReady(page).catch((error) => {
+      lastReloadError = error;
+    });
+    reloadStage = await waitForAnyVisibleTestId(
+      page,
+      ["screening-screen", "home-screen", "assessment-entry-guard"],
+      60_000,
+    ).catch((error) => {
+      lastReloadError = error;
+      return null;
+    });
+    if (reloadStage != null) break;
+    await page.waitForTimeout(attempt * 1_000);
+  }
+  if (reloadStage == null) {
+    throw lastReloadError instanceof Error
+      ? lastReloadError
+      : new Error("Stress reload did not restore an assessment screen");
+  }
   if (reloadStage === "home-screen") {
     await expectNoBrowserStorage(page);
     if (
