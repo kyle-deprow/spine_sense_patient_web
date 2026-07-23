@@ -2263,12 +2263,12 @@ async function isScreeningSubmitButton(page: Page): Promise<boolean> {
     next.innerText().catch(() => ""),
   ]);
 
-  if (!/submit answers/i.test(`${ariaLabel ?? ""} ${text}`)) return false;
-
   const currentQuestionId = await currentVisibleScreeningQuestionId(page).catch(
     () => null,
   );
-  return currentQuestionId === FINAL_SCREENING_QUESTION_ID;
+  if (currentQuestionId !== FINAL_SCREENING_QUESTION_ID) return false;
+  if (await next.isEnabled({ timeout: 500 }).catch(() => false)) return true;
+  return /submit answers/i.test(`${ariaLabel ?? ""} ${text}`);
 }
 
 async function waitForScreeningAdvance(
