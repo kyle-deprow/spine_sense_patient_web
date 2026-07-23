@@ -1156,6 +1156,54 @@ async function clickAndWaitForResponse({
   throw lastError instanceof Error ? lastError : new Error(`No response matched after clicking ${testId}`)
 }
 
+async function isOfflineBannerVisible(page: Page): Promise<boolean> {
+  return page
+    .getByText(/No internet connection/i)
+    .isVisible({ timeout: 1000 })
+    .catch(() => false)
+}
+
+async function fillVerificationCode(page: Page, verificationCode: string): Promise<void> {
+  await fillByTestId(page, 'verify-otp-digit-0', verificationCode)
+}
+
+async function submitVerificationWithTransientRetry(
+  page: Page,
+  verificationCode: string,
+): Promise<PlaywrightResponse> {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await expect(page.getByTestId('verify-screen')).toBeVisible({
+      timeout: 60_000,
+    })
+    if (await isOfflineBannerVisible(page)) {
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => undefined)
+      await expect(page.getByTestId('verify-screen')).toBeVisible({
+        timeout: 60_000,
+      })
+    }
+    await fillVerificationCode(page, verificationCode)
+    try {
+      return await clickAndWaitForResponse({
+        page,
+        testId: 'verify-submit',
+        matches: (response) =>
+          response.url().includes('/api/auth/verify/registration/confirm') && response.request().method() === 'POST',
+      })
+    } catch (error) {
+      lastError = error
+      if (attempt >= 3) break
+      if (await isOfflineBannerVisible(page)) {
+        await page.reload({ waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => undefined)
+      }
+      await page.waitForTimeout(1500)
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error('Timed out submitting verification after transient retries')
+}
+
 async function clickAndWaitForResponseOrSuccess({
   page,
   testId,
@@ -2237,15 +2285,10 @@ test.describe('patient web full assessment flow', () => {
     await expectNoBrowserStorage(page)
 
     const verificationCode = await getRegistrationVerificationCode(request, email)
-    await fillByTestId(page, 'verify-otp-digit-0', verificationCode)
+    await fillVerificationCode(page, verificationCode)
     logMilestone('verification code entered; submitting verification')
     const verifyResponse = await profiler.measure('verification.to_authenticated_session', 'page', () =>
-      clickAndWaitForResponse({
-        page,
-        testId: 'verify-submit',
-        matches: (response) =>
-          response.url().includes('/api/auth/verify/registration/confirm') && response.request().method() === 'POST',
-      }),
+      submitVerificationWithTransientRetry(page, verificationCode),
     )
     expect(verifyResponse.ok()).toBeTruthy()
     await expectNoTokenLeak(await verifyResponse.text())
