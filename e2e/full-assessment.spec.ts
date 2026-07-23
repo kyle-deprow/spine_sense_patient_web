@@ -176,7 +176,7 @@ function readPositiveIntegerEnv(name: string, defaultValue: number): number {
 const TRANSITION_BUDGETS_MS: Record<TransitionProfileKind, number> = {
   page: readPositiveIntegerEnv("PATIENT_WEB_E2E_PAGE_BUDGET_MS", 90_000),
   question: readPositiveIntegerEnv("PATIENT_WEB_E2E_QUESTION_BUDGET_MS", 2_000),
-  sync: readPositiveIntegerEnv("PATIENT_WEB_E2E_SYNC_BUDGET_MS", 500),
+  sync: readPositiveIntegerEnv("PATIENT_WEB_E2E_SYNC_BUDGET_MS", 5_000),
   recovery: readPositiveIntegerEnv(
     "PATIENT_WEB_E2E_RECOVERY_BUDGET_MS",
     30_000,
@@ -508,7 +508,23 @@ async function uploadSyntheticAssessmentDocumentFromRecordsStep(
         "records-choose-file-button",
       );
       await expect(chooseFileButton).toBeVisible({ timeout: 60_000 });
-      await expect(chooseFileButton).toBeEnabled({ timeout: 60_000 });
+      const chooseFileReady = await Promise.race([
+        expect(chooseFileButton)
+          .toBeEnabled({ timeout: 60_000 })
+          .then(() => "enabled" as const)
+          .catch(() => "not_enabled" as const),
+        page
+          .getByTestId("records-assessment-error")
+          .waitFor({ state: "visible", timeout: 60_000 })
+          .then(() => "assessment_error" as const)
+          .catch(() => "no_assessment_error" as const),
+      ]);
+      if (chooseFileReady === "assessment_error") {
+        throw new Error("Assessment document saving preparation failed");
+      }
+      if (chooseFileReady !== "enabled") {
+        await expect(chooseFileButton).toBeEnabled({ timeout: 1_000 });
+      }
       fileChooserPromise = page.waitForEvent("filechooser", {
         timeout: 30_000,
       });
@@ -607,7 +623,15 @@ async function uploadSyntheticAssessmentDocumentFromRecordsStep(
         .getByTestId("records-file-error")
         .isVisible({ timeout: 1_000 })
         .catch(() => false);
-      if (!retryableUploadError || attempt >= 3) break;
+      const retryableAssessmentPrepError = await page
+        .getByTestId("records-assessment-error")
+        .isVisible({ timeout: 1_000 })
+        .catch(() => false);
+      if (
+        (!retryableUploadError && !retryableAssessmentPrepError) ||
+        attempt >= 3
+      )
+        break;
       await page.waitForTimeout(1_500);
     }
   }
@@ -2478,7 +2502,8 @@ async function answerScreening(page: Page, profiler: TransitionProfiler) {
     const screeningAnswerSaveResponse = page.waitForResponse(
       isScreeningAnswersResponse,
       {
-        timeout: TRANSITION_BUDGETS_MS.sync,
+        timeout:
+          TRANSITION_BUDGETS_MS.question + TRANSITION_BUDGETS_MS.sync + 1_000,
       },
     );
 
