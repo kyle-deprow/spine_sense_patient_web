@@ -379,11 +379,16 @@ async function submitRegistrationAndWait(page: Page): Promise<Response> {
     : new Error("Registration submit did not produce a response");
 }
 
-async function submitVerificationAndWait(page: Page): Promise<Response> {
+async function submitVerificationAndWait(
+  page: Page,
+  getVerificationCode: () => Promise<string>,
+): Promise<Response> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
       await waitForBrowserNetworkReady(page);
+      const code = await getVerificationCode();
+      await page.getByTestId("verify-otp-digit-0").fill(code);
       const verifyResponsePromise = page.waitForResponse(
         (response) =>
           response.url().includes("/api/auth/verify/registration") &&
@@ -394,12 +399,17 @@ async function submitVerificationAndWait(page: Page): Promise<Response> {
         timeout: 30_000,
       });
       await page.getByTestId("verify-submit").click();
-      return await verifyResponsePromise;
+      const response = await verifyResponsePromise;
+      if (response.ok()) return response;
+      lastError = new Error(
+        `Verification submit failed status=${response.status()}`,
+      );
+      if (![422, 502, 503, 504].includes(response.status())) return response;
     } catch (error) {
       lastError = error;
-      if (attempt === 3) break;
-      await page.waitForTimeout(attempt * 1_000);
     }
+    if (attempt === 3) break;
+    await page.waitForTimeout(attempt * 1_000);
   }
 
   throw lastError instanceof Error
@@ -529,10 +539,9 @@ test.describe("patient app web deployment", () => {
         timeout: 60_000,
       });
 
-      const code = await getRegistrationVerificationCode(request, email);
-      await page.getByTestId("verify-otp-digit-0").fill(code);
-
-      const verifyResponse = await submitVerificationAndWait(page);
+      const verifyResponse = await submitVerificationAndWait(page, () =>
+        getRegistrationVerificationCode(request, email),
+      );
       expect(verifyResponse.ok()).toBeTruthy();
       await expectNoTokenLeak(await verifyResponse.text());
       await expect(page.getByTestId("consent-screen")).toBeVisible({
