@@ -393,30 +393,6 @@ async function clickIfPresent(
   return true;
 }
 
-async function fillByTestId(page: Page, testId: string, value: string) {
-  const locator = page.getByTestId(testId);
-  await expect(locator).toBeVisible({ timeout: 30_000 });
-  await locator.fill(value);
-}
-
-async function clickByTestId(page: Page, testId: string) {
-  const locator = page.getByTestId(testId);
-  await expect(locator).toBeVisible({ timeout: 30_000 });
-  await locator.click();
-}
-
-async function waitForEnabledAndClick(
-  page: Page,
-  testId: string,
-  timeout = 30_000,
-) {
-  const locator = page.getByTestId(testId);
-  await expect(locator).toBeVisible({ timeout });
-  await expect(locator).toBeEnabled({ timeout });
-  await locator.scrollIntoViewIfNeeded();
-  await locator.click({ timeout: 10_000 });
-}
-
 async function getRegistrationVerificationCode(email: string): Promise<string> {
   if (!BACKEND_REGISTRATION_CODE_URL) {
     throw new Error(
@@ -609,164 +585,176 @@ async function csrfTokenForApiPath(
   return csrfCookie.value;
 }
 
-async function isChiefComplaintStepVisible(page: Page): Promise<boolean> {
-  return (
-    (await page
-      .getByTestId("step-chief-complaint-select")
-      .isVisible({ timeout: 1_000 })
-      .catch(() => false)) ||
-    (await page
-      .getByTestId("chief-complaint-text-option")
-      .isVisible({ timeout: 1_000 })
-      .catch(() => false)) ||
-    (await page
-      .getByText(/Tell us what's/i)
-      .isVisible({ timeout: 1_000 })
-      .catch(() => false))
+async function patientProxyJson<T = unknown>(
+  page: Page,
+  path: string,
+  options: { method: "PATCH" | "POST"; body: object },
+): Promise<T> {
+  let lastFailure = "network_error";
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await waitForBrowserNetworkReady(page);
+    const csrfToken = await csrfTokenForApiPath(page, path);
+    const response = await page.evaluate(
+      async ({ path, method, body, csrfToken }) => {
+        try {
+          const browserResponse = await fetch(path, {
+            method,
+            credentials: "include",
+            headers: {
+              "content-type": "application/json",
+              "x-csrf-token": csrfToken,
+            },
+            body: JSON.stringify(body),
+          });
+          return {
+            networkError: false,
+            ok: browserResponse.ok,
+            status: browserResponse.status,
+            text: await browserResponse.text(),
+          };
+        } catch {
+          return {
+            networkError: true,
+            ok: false,
+            status: 0,
+            text: "",
+          };
+        }
+      },
+      { path, method: options.method, body: options.body, csrfToken },
+    );
+    if (response.networkError) {
+      lastFailure = "network_error";
+      if (attempt < 3) {
+        await page.waitForTimeout(attempt * 1_000);
+        continue;
+      }
+      break;
+    }
+    if (!response.ok) {
+      lastFailure = `status_${response.status}`;
+      if ([408, 429, 500, 502, 503, 504].includes(response.status)) {
+        if (attempt < 3) {
+          await page.waitForTimeout(attempt * 1_000);
+          continue;
+        }
+      }
+      throw new Error(
+        `synthetic setup request failed path=${sanitizeBrowserDiagnostic(path)} status=${response.status} body=${sanitizeBrowserDiagnostic(response.text)}`,
+      );
+    }
+    if (response.text.trim().length === 0) {
+      return undefined as T;
+    }
+    return parseJsonBody(response.text) as T;
+  }
+
+  throw new Error(
+    `synthetic setup request failed path=${sanitizeBrowserDiagnostic(path)} reason=${lastFailure}`,
   );
 }
 
-async function expectChiefComplaintAfterProfileSave(page: Page) {
-  await expect
-    .poll(() => isChiefComplaintStepVisible(page), {
-      timeout: 60_000,
-      message: "Expected chief complaint step after profile save",
-    })
-    .toBe(true);
-}
+async function completeSyntheticOnboardingThroughApi(page: Page) {
+  const { onboarding } = fullAssessmentScenario;
+  const profileDateOfBirth = fullAssessmentScenario.registration.dateOfBirth;
+  const heightCm =
+    (Number(onboarding.heightFeet) * 12 + Number(onboarding.heightInches)) *
+    2.54;
+  const weightKg = Number(onboarding.weightPounds) * 0.453592;
 
-async function clickChiefComplaintSave(page: Page) {
-  if (await clickIfPresent(page, "text-save-btn", 1_000)) return;
+  await patientProxyJson(page, "/api/proxy/api/v1/patients/me", {
+    method: "PATCH",
+    body: {
+      date_of_birth: profileDateOfBirth,
+      sex_at_birth: onboarding.sexAtBirth,
+      height_cm: Math.round(heightCm),
+      weight_kg: Math.round(weightKg),
+    },
+  });
 
-  const save = page.getByRole("button", { name: /save and continue/i });
-  await expect(save).toBeVisible({ timeout: 30_000 });
-  await expect(save).toBeEnabled({ timeout: 30_000 });
-  await save.click({ timeout: 10_000 });
-}
+  await patientProxyJson(page, "/api/proxy/api/v1/patients/me/intake/profile", {
+    method: "POST",
+    body: {
+      step_data: {
+        dateOfBirth: profileDateOfBirth,
+        sexAtBirth: onboarding.sexAtBirth,
+        heightFt: onboarding.heightFeet,
+        heightIn: onboarding.heightInches,
+        weight: onboarding.weightPounds,
+        occupation: onboarding.occupation,
+        activityLevel: onboarding.activityLevel,
+      },
+    },
+  });
 
-async function expectTreatmentHistoryAfterStorySave(page: Page) {
-  await expect(page.getByTestId("medical-history-conditions-none")).toBeVisible(
-    { timeout: 60_000 },
+  await patientProxyJson(
+    page,
+    "/api/proxy/api/v1/patients/me/intake/chief-complaint",
+    {
+      method: "POST",
+      body: {
+        step_data: {
+          narrative: onboarding.chiefComplaint,
+          inputMethod: "text",
+        },
+      },
+    },
   );
-}
 
-async function expectImagingRecordsAfterHistorySave(page: Page) {
+  await patientProxyJson(
+    page,
+    "/api/proxy/api/v1/patients/me/intake/treatment-history",
+    {
+      method: "POST",
+      body: {
+        step_data: onboarding.intakeStepData["treatment-history"],
+      },
+    },
+  );
+
+  await patientProxyJson(
+    page,
+    "/api/proxy/api/v1/patients/me/intake/imaging-records",
+    {
+      method: "POST",
+      body: {
+        step_data: {
+          skipped: true,
+          documents: [],
+        },
+      },
+    },
+  );
+
+  await patientProxyJson(
+    page,
+    "/api/proxy/api/v1/patients/me/intake/progress/complete",
+    {
+      method: "POST",
+      body: {},
+    },
+  );
+
   await expect
     .poll(
-      async () =>
-        (await page
-          .getByTestId("records-continue-btn")
-          .isVisible({ timeout: 1_000 })
-          .catch(() => false)) ||
-        (await page
-          .getByTestId("step-imaging-records")
-          .isVisible({ timeout: 1_000 })
-          .catch(() => false)) ||
-        (await page
-          .getByRole("button", { name: /complete intake/i })
-          .isVisible({ timeout: 1_000 })
-          .catch(() => false)) ||
-        (await page
-          .getByText(/Bring in your records/i)
-          .isVisible({ timeout: 1_000 })
-          .catch(() => false)),
+      () =>
+        page.evaluate(async () => {
+          const response = await fetch("/api/auth/session", {
+            credentials: "include",
+          });
+          if (!response.ok) return false;
+          const session = (await response.json()) as {
+            has_completed_onboarding?: unknown;
+          };
+          return session.has_completed_onboarding === true;
+        }),
       {
+        message: "synthetic voice patient should have completed onboarding",
         timeout: 60_000,
-        message: "Expected imaging records step after treatment history save",
       },
     )
     .toBe(true);
-}
 
-async function clickRecordsContinue(page: Page) {
-  if (
-    await page
-      .getByTestId("records-continue-btn")
-      .isVisible({ timeout: 1_000 })
-      .catch(() => false)
-  ) {
-    await waitForEnabledAndClick(page, "records-continue-btn");
-    return;
-  }
-
-  const skip = page.getByRole("button", { name: /skip for now/i });
-  if (await skip.isVisible({ timeout: 1_000 }).catch(() => false)) {
-    await expect(skip).toBeEnabled({ timeout: 30_000 });
-    await skip.click({ timeout: 10_000 });
-    return;
-  }
-
-  const complete = page.getByRole("button", { name: /complete intake/i });
-  await expect(complete).toBeVisible({ timeout: 30_000 });
-  await expect(complete).toBeEnabled({ timeout: 30_000 });
-  await complete.click({ timeout: 10_000 });
-}
-
-async function continueWelcomeIntroIfPresent(page: Page) {
-  const welcomeBegin = page.getByRole("button", { name: /let's begin/i });
-  if (!(await welcomeBegin.isVisible({ timeout: 5_000 }).catch(() => false))) {
-    return;
-  }
-
-  await expect(welcomeBegin).toBeEnabled({ timeout: 30_000 });
-  await welcomeBegin.click({ timeout: 10_000 });
-}
-
-async function completeSyntheticOnboardingThroughUi(page: Page) {
-  await continueWelcomeIntroIfPresent(page);
-  await expect(page.getByTestId("onboarding-layout")).toBeVisible({
-    timeout: 60_000,
-  });
-
-  const { onboarding } = fullAssessmentScenario;
-  await fillByTestId(page, "profile-dob", onboarding.dateOfBirthDisplay);
-  await clickByTestId(page, `profile-sex-${onboarding.sexAtBirth}`);
-  await fillByTestId(page, "profile-height-ft", onboarding.heightFeet);
-  await fillByTestId(page, "profile-height-in", onboarding.heightInches);
-  await fillByTestId(page, "profile-weight", onboarding.weightPounds);
-  await fillByTestId(page, "profile-occupation", onboarding.occupation);
-  await clickByTestId(page, `profile-activity-${onboarding.activityLevel}`);
-
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    await waitForBrowserNetworkReady(page).catch(() => undefined);
-    await waitForEnabledAndClick(page, "profile-continue-btn");
-    if (await isChiefComplaintStepVisible(page)) break;
-
-    const saveErrorVisible = await page
-      .getByText(/could not save your profile details/i)
-      .isVisible({ timeout: 5_000 })
-      .catch(() => false);
-    if (!saveErrorVisible || attempt === 3) break;
-    await page.waitForTimeout(attempt * 1_000);
-  }
-  await expectChiefComplaintAfterProfileSave(page);
-
-  await clickByTestId(page, "chief-complaint-text-option");
-  await expect(page.getByTestId("step-chief-complaint-text")).toBeVisible({
-    timeout: 30_000,
-  });
-  await fillByTestId(page, "narrative-input", onboarding.chiefComplaint);
-  await clickChiefComplaintSave(page);
-  await expectTreatmentHistoryAfterStorySave(page);
-
-  await clickByTestId(page, "medical-history-conditions-none");
-  const negativeMedicalHistoryAnswers = page.getByRole("button", {
-    name: "No",
-    exact: true,
-  });
-  await expect(negativeMedicalHistoryAnswers).toHaveCount(4);
-  for (let remaining = 4; remaining > 0; remaining -= 1) {
-    await negativeMedicalHistoryAnswers
-      .first()
-      .click({ force: true, timeout: 10_000 });
-    await expect(negativeMedicalHistoryAnswers).toHaveCount(remaining - 1);
-    await page.waitForTimeout(500);
-  }
-  await clickByTestId(page, "medical-history-nicotine-no");
-  await waitForEnabledAndClick(page, "medical-history-continue-btn");
-  await expectImagingRecordsAfterHistorySave(page);
-
-  await clickRecordsContinue(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await waitForHomeScreen(page);
 }
@@ -853,7 +841,7 @@ async function registerAndAuthenticateSyntheticPatient(
     timeout: 60_000,
   });
   await acceptConsentIfPresent(page);
-  await completeSyntheticOnboardingThroughUi(page);
+  await completeSyntheticOnboardingThroughApi(page);
 
   const cookies = await page.context().cookies();
   expect(
