@@ -2592,6 +2592,7 @@ async function answerScreening(page: Page, profiler: TransitionProfiler) {
       !stressState.reloadedDuringScreening &&
       questionId === STRESS_RELOAD_AFTER_SCREENING_QUESTION_ID
     ) {
+      await settlePendingScreeningSyncProfiles(pendingSyncProfiles);
       await stressReloadCurrentScreeningQuestion(page);
       stressState.reloadedDuringScreening = true;
     }
