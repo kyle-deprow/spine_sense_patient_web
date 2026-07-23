@@ -2037,9 +2037,29 @@ async function submitScreening(page: Page, profiler: TransitionProfiler) {
       });
     if (nextStage != null) return;
     expect(clickedSubmit).toBe(true);
+
+    await waitForBrowserNetworkReady(page).catch(() => undefined);
+    await page
+      .reload({ waitUntil: "domcontentloaded", timeout: 45_000 })
+      .catch(() => undefined);
+    const reloadedStage = await waitForAnyVisibleTestId(
+      page,
+      [...POST_SCREENING_STAGE_TEST_IDS, "screening-screen"],
+      60_000,
+    ).catch(() => null);
+    if (reloadedStage != null && reloadedStage !== "screening-screen") return;
+
     await expect(page.getByTestId("screening-nav-next")).toBeVisible({
       timeout: 5_000,
     });
+    const currentQuestionId = await currentVisibleScreeningQuestionId(
+      page,
+    ).catch(() => null);
+    expect(
+      currentQuestionId,
+      "Screening submit retry must stay on the final screening question",
+    ).toBe(FINAL_SCREENING_QUESTION_ID);
+    await waitForScreeningNavIdle(page, 60_000);
     await expect(page.getByTestId("screening-nav-next")).toBeEnabled({
       timeout: 30_000,
     });
