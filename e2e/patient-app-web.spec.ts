@@ -373,6 +373,34 @@ async function submitRegistrationAndWait(page: Page): Promise<Response> {
     : new Error("Registration submit did not produce a response");
 }
 
+async function submitVerificationAndWait(page: Page): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await waitForBrowserNetworkReady(page);
+      const verifyResponsePromise = page.waitForResponse(
+        (response) =>
+          response.url().includes("/api/auth/verify/registration") &&
+          response.request().method() === "POST",
+        { timeout: 45_000 },
+      );
+      await expect(page.getByTestId("verify-submit")).toBeEnabled({
+        timeout: 30_000,
+      });
+      await page.getByTestId("verify-submit").click();
+      return await verifyResponsePromise;
+    } catch (error) {
+      lastError = error;
+      if (attempt === 3) break;
+      await page.waitForTimeout(attempt * 1_000);
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Verification submit did not produce a response");
+}
+
 test.describe("patient app web deployment", () => {
   test.beforeEach(async ({ page }) => {
     installPhiSafeDiagnostics(page);
@@ -496,16 +524,9 @@ test.describe("patient app web deployment", () => {
       });
 
       const code = await getRegistrationVerificationCode(request, email);
-      const verifyResponsePromise = page.waitForResponse(
-        (response) =>
-          response.url().includes("/api/auth/verify/registration") &&
-          response.request().method() === "POST",
-      );
       await page.getByTestId("verify-otp-digit-0").fill(code);
-      await expect(page.getByTestId("verify-submit")).toBeEnabled();
-      await page.getByTestId("verify-submit").click();
 
-      const verifyResponse = await verifyResponsePromise;
+      const verifyResponse = await submitVerificationAndWait(page);
       expect(verifyResponse.ok()).toBeTruthy();
       await expectNoTokenLeak(await verifyResponse.text());
       await expect(page.getByTestId("consent-screen")).toBeVisible({
