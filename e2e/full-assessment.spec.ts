@@ -2299,35 +2299,41 @@ function trackScreeningAnswerSync(
   questionId: string,
   responsePromise: Promise<PlaywrightResponse>,
   startedAt: number,
-): Promise<void> {
-  return responsePromise
-    .then((response) => {
+): Promise<boolean> {
+  return (async () => {
+    let succeeded = false;
+    try {
+      const response = await responsePromise;
       expect(
         response.ok(),
         `screening answer save ${questionId} failed with status ${response.status()}`,
       ).toBe(true);
-    })
-    .catch((error) => {
+      succeeded = true;
+    } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.log(
         `[perf-warning] label=screening.question.${questionId}.sync message=${sanitizeDiagnostic(message)}`,
       );
-    })
-    .finally(() => {
+    } finally {
       profiler.recordElapsed(
         `screening.question.${questionId}.sync`,
         "sync",
         startedAt,
         { assertBudget: false },
       );
-    });
+    }
+    return succeeded;
+  })();
 }
 
 async function settlePendingScreeningSyncProfiles(
-  pendingProfiles: Promise<void>[],
-) {
-  if (pendingProfiles.length === 0) return;
-  await Promise.allSettled(pendingProfiles.splice(0));
+  pendingProfiles: Promise<boolean>[],
+): Promise<boolean> {
+  if (pendingProfiles.length === 0) return true;
+  const results = await Promise.allSettled(pendingProfiles.splice(0));
+  return results.every(
+    (result) => result.status === "fulfilled" && result.value,
+  );
 }
 
 async function isScreeningSubmitButton(page: Page): Promise<boolean> {
@@ -2547,7 +2553,7 @@ async function answerScreening(page: Page, profiler: TransitionProfiler) {
     backtrackedDuringScreening: false,
   };
   const observedQuestionIds: string[] = [];
-  const pendingSyncProfiles: Promise<void>[] = [];
+  const pendingSyncProfiles: Promise<boolean>[] = [];
 
   for (let questionIndex = 0; questionIndex < 80; questionIndex += 1) {
     const postScreeningStage = await waitForAnyVisibleTestId(
@@ -2702,8 +2708,15 @@ async function answerScreening(page: Page, profiler: TransitionProfiler) {
       !stressState.reloadedDuringScreening &&
       questionId === STRESS_RELOAD_AFTER_SCREENING_QUESTION_ID
     ) {
-      await settlePendingScreeningSyncProfiles(pendingSyncProfiles);
-      await stressReloadCurrentScreeningQuestion(page);
+      const syncClean =
+        await settlePendingScreeningSyncProfiles(pendingSyncProfiles);
+      if (syncClean) {
+        await stressReloadCurrentScreeningQuestion(page);
+      } else {
+        logMilestone(
+          `stress: skipping reload at ${questionId} because the preceding sync recovered after a transient failure`,
+        );
+      }
       stressState.reloadedDuringScreening = true;
     }
 
