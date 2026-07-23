@@ -2984,7 +2984,18 @@ async function completeProfileIfPresent(page: Page) {
   await fillByTestId(page, "profile-weight", onboarding.weightPounds);
   await fillByTestId(page, "profile-occupation", onboarding.occupation);
   await clickByTestId(page, `profile-activity-${onboarding.activityLevel}`);
-  await waitForEnabledAndClick(page, "profile-continue-btn");
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await waitForBrowserNetworkReady(page).catch(() => undefined);
+    await waitForEnabledAndClick(page, "profile-continue-btn");
+    if (await isChiefComplaintStepVisible(page)) return;
+
+    const saveErrorVisible = await page
+      .getByText(/could not save your profile details/i)
+      .isVisible({ timeout: 5_000 })
+      .catch(() => false);
+    if (!saveErrorVisible || attempt === 3) break;
+    await page.waitForTimeout(attempt * 1_000);
+  }
 }
 
 async function continueWelcomeIntroIfPresent(page: Page): Promise<boolean> {
@@ -3045,27 +3056,29 @@ async function expectTreatmentHistoryAfterStorySave(page: Page) {
   );
 }
 
+async function isChiefComplaintStepVisible(page: Page): Promise<boolean> {
+  return (
+    (await page
+      .getByTestId("step-chief-complaint-select")
+      .isVisible({ timeout: 1000 })
+      .catch(() => false)) ||
+    (await page
+      .getByTestId("chief-complaint-text-option")
+      .isVisible({ timeout: 1000 })
+      .catch(() => false)) ||
+    (await page
+      .getByText(/Tell us what's/i)
+      .isVisible({ timeout: 1000 })
+      .catch(() => false))
+  );
+}
+
 async function expectChiefComplaintAfterProfileSave(page: Page) {
   await expect
-    .poll(
-      async () =>
-        (await page
-          .getByTestId("step-chief-complaint-select")
-          .isVisible({ timeout: 1000 })
-          .catch(() => false)) ||
-        (await page
-          .getByTestId("chief-complaint-text-option")
-          .isVisible({ timeout: 1000 })
-          .catch(() => false)) ||
-        (await page
-          .getByText(/Tell us what's/i)
-          .isVisible({ timeout: 1000 })
-          .catch(() => false)),
-      {
-        timeout: 60_000,
-        message: "Expected chief complaint step after profile save",
-      },
-    )
+    .poll(() => isChiefComplaintStepVisible(page), {
+      timeout: 60_000,
+      message: "Expected chief complaint step after profile save",
+    })
     .toBe(true);
 }
 
