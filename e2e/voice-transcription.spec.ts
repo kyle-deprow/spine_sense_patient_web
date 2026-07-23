@@ -177,7 +177,7 @@ async function supportPost(
     );
   }
   let lastFailure = "network_error";
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+  for (let attempt = 1; attempt <= 12; attempt += 1) {
     try {
       const response = await fetch(url, {
         method: "POST",
@@ -192,7 +192,7 @@ async function supportPost(
       if (
         response.ok ||
         !TRANSIENT_SUPPORT_HTTP_STATUSES.has(response.status) ||
-        attempt === 3
+        attempt === 12
       ) {
         return { ok: response.ok, status: response.status, text };
       }
@@ -203,11 +203,13 @@ async function supportPost(
         throw new Error(`${label} failed reason=non_transient_network_error`);
       }
       lastFailure = code;
-      if (attempt === 3) break;
+      if (attempt === 12) break;
     }
-    await new Promise((resolve) => setTimeout(resolve, attempt * 1_000));
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.min(attempt * 1_000, 5_000)),
+    );
   }
-  throw new Error(`${label} failed after 3 attempts reason=${lastFailure}`);
+  throw new Error(`${label} failed after 12 attempts reason=${lastFailure}`);
 }
 
 class ProxyFetchError extends Error {
