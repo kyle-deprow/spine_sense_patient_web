@@ -2,6 +2,7 @@ import {
   expect,
   test,
   type APIRequestContext,
+  type APIResponse,
   type Page,
   type Response,
 } from "@playwright/test";
@@ -24,6 +25,28 @@ type BrowserCookie = {
   secure: boolean;
 };
 
+async function postCleanupWithRetry(
+  request: APIRequestContext,
+  url: string,
+  label: string,
+): Promise<APIResponse> {
+  let response: APIResponse | null = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    response = await request.post(url, {
+      headers: { authorization: `Bearer ${TEST_SUPPORT_TOKEN}` },
+      timeout: 30_000,
+    });
+    if (response.ok() || ![502, 503, 504].includes(response.status())) {
+      return response;
+    }
+    await new Promise((resolve) => setTimeout(resolve, attempt * 1_000));
+  }
+  if (response == null) {
+    throw new Error(`${label} cleanup did not return a response`);
+  }
+  return response;
+}
+
 async function cleanupE2eState(request: APIRequestContext) {
   if (!BACKEND_CLEANUP_URL) {
     throw new Error(
@@ -41,17 +64,21 @@ async function cleanupE2eState(request: APIRequestContext) {
     );
   }
 
-  const gatewayResponse = await request.post(GATEWAY_CLEANUP_URL, {
-    headers: { authorization: `Bearer ${TEST_SUPPORT_TOKEN}` },
-  });
+  const gatewayResponse = await postCleanupWithRetry(
+    request,
+    GATEWAY_CLEANUP_URL,
+    "patient web gateway",
+  );
   expect(
     gatewayResponse.ok(),
     `PATIENT_WEB_GATEWAY_E2E_CLEANUP_URL must clear gateway E2E state status=${gatewayResponse.status()}`,
   ).toBeTruthy();
 
-  const response = await request.post(BACKEND_CLEANUP_URL, {
-    headers: { authorization: `Bearer ${TEST_SUPPORT_TOKEN}` },
-  });
+  const response = await postCleanupWithRetry(
+    request,
+    BACKEND_CLEANUP_URL,
+    "backend synthetic",
+  );
   const responseText = await response.text();
   expect(
     response.ok(),
