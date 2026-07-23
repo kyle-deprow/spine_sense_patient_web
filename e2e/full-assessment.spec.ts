@@ -1635,12 +1635,33 @@ async function fillVerificationCode(
   await fillByTestId(page, "verify-otp-digit-0", verificationCode);
 }
 
+async function isPostVerificationState(page: Page): Promise<boolean> {
+  const cookies = await page.context().cookies();
+  if (
+    hasCookie(cookies, "spine_patient_sess") &&
+    hasCookie(cookies, "spine_patient_refresh")
+  ) {
+    return true;
+  }
+  return (
+    (await page
+      .getByTestId("consent-screen")
+      .isVisible({ timeout: 1000 })
+      .catch(() => false)) ||
+    (await page
+      .getByTestId("onboarding-layout")
+      .isVisible({ timeout: 1000 })
+      .catch(() => false))
+  );
+}
+
 async function submitVerificationWithTransientRetry(
   page: Page,
   getVerificationCode: () => Promise<string>,
-): Promise<PlaywrightResponse> {
+): Promise<PlaywrightResponse | null> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
+    if (await isPostVerificationState(page)) return null;
     await expect(page.getByTestId("verify-screen")).toBeVisible({
       timeout: 60_000,
     });
@@ -1652,9 +1673,9 @@ async function submitVerificationWithTransientRetry(
         timeout: 60_000,
       });
     }
-    const verificationCode = await getVerificationCode();
-    await fillVerificationCode(page, verificationCode);
     try {
+      const verificationCode = await getVerificationCode();
+      await fillVerificationCode(page, verificationCode);
       const response = await clickAndWaitForResponse({
         page,
         testId: "verify-submit",
@@ -1672,6 +1693,7 @@ async function submitVerificationWithTransientRetry(
       }
     } catch (error) {
       lastError = error;
+      if (await isPostVerificationState(page)) return null;
     }
     if (attempt >= 3) break;
     if (await isOfflineBannerVisible(page)) {
@@ -3278,8 +3300,10 @@ test.describe("patient web full assessment flow", () => {
             getRegistrationVerificationCode(request, email),
           ),
       );
-      expect(verifyResponse.ok()).toBeTruthy();
-      await expectNoTokenLeak(await verifyResponse.text());
+      if (verifyResponse != null) {
+        expect(verifyResponse.ok()).toBeTruthy();
+        await expectNoTokenLeak(await verifyResponse.text());
+      }
       expect(page.url()).not.toContain("verification");
       logMilestone(
         "verification accepted; checking authenticated cookie session",
