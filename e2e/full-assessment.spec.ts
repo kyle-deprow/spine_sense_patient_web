@@ -1688,6 +1688,45 @@ async function isConsentVisible(page: Page): Promise<boolean> {
   );
 }
 
+async function waitForBrowserNetworkReady(page: Page, timeout = 30_000) {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(async () => {
+          if (!navigator.onLine) return false;
+          try {
+            const response = await fetch("/api/health", {
+              cache: "no-store",
+            });
+            return response.ok;
+          } catch {
+            return false;
+          }
+        }),
+      {
+        message: "browser context should be online and able to reach the BFF",
+        timeout,
+      },
+    )
+    .toBe(true);
+}
+
+async function clickConsentAccept(page: Page) {
+  if (
+    await page
+      .getByTestId("consent-accept")
+      .isVisible({ timeout: 1000 })
+      .catch(() => false)
+  ) {
+    await waitForEnabledAndClick(page, "consent-accept");
+    return;
+  }
+
+  const accept = page.getByRole("button", { name: /Accept & Continue/i });
+  await expect(accept).toBeEnabled({ timeout: 30_000 });
+  await accept.click();
+}
+
 async function acceptConsentIfPresent(page: Page): Promise<boolean> {
   if (!(await isConsentVisible(page))) {
     return false;
@@ -1747,19 +1786,29 @@ async function acceptConsentIfPresent(page: Page): Promise<boolean> {
   }
   await page.waitForTimeout(250);
 
-  if (
-    await page
-      .getByTestId("consent-accept")
-      .isVisible({ timeout: 1000 })
-      .catch(() => false)
-  ) {
-    await waitForEnabledAndClick(page, "consent-accept");
-  } else {
-    const accept = page.getByRole("button", { name: /Accept & Continue/i });
-    await expect(accept).toBeEnabled({ timeout: 30_000 });
-    await accept.click();
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await waitForBrowserNetworkReady(page);
+    await clickConsentAccept(page);
+
+    const stage = await waitForAnyVisibleTestId(
+      page,
+      ["welcome-intro-screen", "onboarding-layout"],
+      10_000,
+    ).catch(() => null);
+    if (stage != null) {
+      return true;
+    }
+
+    if (!(await isConsentVisible(page))) {
+      return true;
+    }
+
+    logMilestone(
+      `consent accept did not leave consent screen; retrying (${attempt}/3)`,
+    );
   }
-  return true;
+
+  throw new Error("Consent accept did not transition after retrying online.");
 }
 
 async function waitForFirstVisibleEnabledAndClick(
