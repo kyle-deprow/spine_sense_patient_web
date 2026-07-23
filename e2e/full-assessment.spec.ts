@@ -128,6 +128,15 @@ type TransitionProfileSample = {
   status: "ok" | "slow";
 };
 
+type TransitionProfileSummary = {
+  kind: TransitionProfileKind;
+  count: number;
+  p50Ms: number;
+  p95Ms: number;
+  maxMs: number;
+  slowCount: number;
+};
+
 const SCREENING_ANSWERS_BY_ID = new Map(
   fullAssessmentScenario.screening.map((answer) => [answer.id, answer]),
 );
@@ -165,14 +174,14 @@ function readPositiveIntegerEnv(name: string, defaultValue: number): number {
 }
 
 const TRANSITION_BUDGETS_MS: Record<TransitionProfileKind, number> = {
-  page: readPositiveIntegerEnv("PATIENT_WEB_E2E_PAGE_BUDGET_MS", 8_000),
-  question: readPositiveIntegerEnv("PATIENT_WEB_E2E_QUESTION_BUDGET_MS", 5_000),
-  sync: readPositiveIntegerEnv("PATIENT_WEB_E2E_SYNC_BUDGET_MS", 30_000),
+  page: readPositiveIntegerEnv("PATIENT_WEB_E2E_PAGE_BUDGET_MS", 90_000),
+  question: readPositiveIntegerEnv("PATIENT_WEB_E2E_QUESTION_BUDGET_MS", 2_000),
+  sync: readPositiveIntegerEnv("PATIENT_WEB_E2E_SYNC_BUDGET_MS", 500),
   recovery: readPositiveIntegerEnv(
     "PATIENT_WEB_E2E_RECOVERY_BUDGET_MS",
     30_000,
   ),
-  stage: readPositiveIntegerEnv("PATIENT_WEB_E2E_STAGE_BUDGET_MS", 20_000),
+  stage: readPositiveIntegerEnv("PATIENT_WEB_E2E_STAGE_BUDGET_MS", 180_000),
   analysis: readPositiveIntegerEnv(
     "PATIENT_WEB_E2E_ANALYSIS_BUDGET_MS",
     480_000,
@@ -218,10 +227,17 @@ class TransitionProfiler {
 
   async attach(testInfo: TestInfo): Promise<void> {
     if (!ENABLE_TRANSITION_PROFILING) return;
+    const summaries = this.summaries();
+    for (const summary of summaries) {
+      console.log(
+        `[perf-summary] kind=${summary.kind} count=${summary.count} p50_ms=${summary.p50Ms.toFixed(1)} p95_ms=${summary.p95Ms.toFixed(1)} max_ms=${summary.maxMs.toFixed(1)} slow_count=${summary.slowCount}`,
+      );
+    }
     await testInfo.attach("transition-profile.json", {
       body: JSON.stringify(
         {
           budgetsMs: TRANSITION_BUDGETS_MS,
+          summaries,
           samples: this.samples,
         },
         null,
@@ -230,6 +246,40 @@ class TransitionProfiler {
       contentType: "application/json",
     });
   }
+
+  private summaries(): TransitionProfileSummary[] {
+    const summaries: TransitionProfileSummary[] = [];
+    for (const kind of Object.keys(
+      TRANSITION_BUDGETS_MS,
+    ) as TransitionProfileKind[]) {
+      const samples = this.samples
+        .filter((sample) => sample.kind === kind)
+        .sort((left, right) => left.durationMs - right.durationMs);
+      if (samples.length === 0) continue;
+      summaries.push({
+        kind,
+        count: samples.length,
+        p50Ms: percentile(samples, 0.5),
+        p95Ms: percentile(samples, 0.95),
+        maxMs: samples[samples.length - 1]?.durationMs ?? 0,
+        slowCount: samples.filter((sample) => sample.status === "slow").length,
+      });
+    }
+    return summaries;
+  }
+}
+
+function percentile(
+  samples: readonly TransitionProfileSample[],
+  fraction: number,
+): number {
+  if (samples.length === 0) return 0;
+  const boundedFraction = Math.max(0, Math.min(1, fraction));
+  const index = Math.min(
+    samples.length - 1,
+    Math.round((samples.length - 1) * boundedFraction),
+  );
+  return samples[index]?.durationMs ?? 0;
 }
 
 function logMilestone(message: string): void {
