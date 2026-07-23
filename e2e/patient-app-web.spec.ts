@@ -327,7 +327,13 @@ async function logoutViaBff(page: Page) {
         return "fetch_failed";
       }
     });
-    if (status !== "fetch_failed") break;
+    if (
+      status !== "fetch_failed" &&
+      status !== 502 &&
+      status !== 503 &&
+      status !== 504
+    )
+      break;
     await page.waitForTimeout(attempt * 1_000);
   }
 
