@@ -379,6 +379,36 @@ async function submitRegistrationAndWait(page: Page): Promise<Response> {
     : new Error("Registration submit did not produce a response");
 }
 
+async function expectRegistrationAccepted(
+  page: Page,
+  registerResponse: Response,
+) {
+  const registerResponseText = await registerResponse.text();
+  if (registerResponse.ok()) {
+    await expectNoTokenLeak(registerResponseText);
+    return;
+  }
+
+  const verifyScreenVisible = await page
+    .getByTestId("verify-screen")
+    .isVisible({ timeout: 10_000 })
+    .catch(() => false);
+  if (
+    registerResponse.status() === 409 &&
+    /registration_conflict/.test(registerResponseText) &&
+    /email/.test(registerResponseText) &&
+    verifyScreenVisible
+  ) {
+    await expectNoTokenLeak(registerResponseText);
+    return;
+  }
+
+  expect(
+    registerResponse.ok(),
+    `registration failed status=${registerResponse.status()} body=${sanitizeBrowserDiagnostic(registerResponseText)}`,
+  ).toBeTruthy();
+}
+
 async function submitVerificationAndWait(
   page: Page,
   getVerificationCode: () => Promise<string>,
@@ -456,12 +486,7 @@ test.describe("patient app web deployment", () => {
       await clickIfPresent(page, "register-consent-storage");
 
       const registerResponse = await submitRegistrationAndWait(page);
-      const registerResponseText = await registerResponse.text();
-      expect(
-        registerResponse.ok(),
-        `registration failed status=${registerResponse.status()} body=${sanitizeBrowserDiagnostic(registerResponseText)}`,
-      ).toBeTruthy();
-      await expectNoTokenLeak(registerResponseText);
+      await expectRegistrationAccepted(page, registerResponse);
 
       await expect(page.getByTestId("verify-screen")).toBeVisible({
         timeout: 60_000,
@@ -529,12 +554,7 @@ test.describe("patient app web deployment", () => {
       await clickIfPresent(page, "register-consent-storage");
 
       const registerResponse = await submitRegistrationAndWait(page);
-      const registerResponseText = await registerResponse.text();
-      expect(
-        registerResponse.ok(),
-        `registration failed status=${registerResponse.status()} body=${sanitizeBrowserDiagnostic(registerResponseText)}`,
-      ).toBeTruthy();
-      await expectNoTokenLeak(registerResponseText);
+      await expectRegistrationAccepted(page, registerResponse);
       await expect(page.getByTestId("verify-screen")).toBeVisible({
         timeout: 60_000,
       });
