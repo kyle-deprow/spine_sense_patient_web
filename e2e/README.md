@@ -8,6 +8,18 @@ app served by the BFF. Run them through the root Make targets:
 - `make patient-web-e2e`
 - `make patient-web-test-full-assessment`
 - `make patient-web-e2e-full-assessment`
+- `make patient-web-test-fhir-oauth`
+- `make patient-web-e2e-fhir-oauth`
+
+The FHIR OAuth suite is tagged `@fhir-oauth` and is opt-in because it requires
+the BFF to start with the FHIR OAuth runtime gate enabled. It fails closed if
+that gate is disabled, then validates browser-observable BFF behavior for raw
+callback-code scrubbing, state mismatch, cross-site starts, HttpOnly
+state-cookie cleanup, redirect `no-store`, and durable browser storage leakage.
+Server-side “do not call backend before validation” assertions remain in the
+route-level FHIR tests. This suite does not replace the live Epic shared-sandbox
+evidence gate; success and provider-denial exchanges still require the Phase 6
+operator runbook and redacted receipts.
 
 The voice transcription suite is production-only by policy. From the
 orchestration repo, use the focused target or the complete production run:

@@ -10,15 +10,18 @@ const includeFullAssessment =
   process.env.PATIENT_WEB_INCLUDE_FULL_ASSESSMENT === "true";
 const includeProdReportEmail =
   process.env.PATIENT_WEB_INCLUDE_PROD_REPORT_EMAIL === "true";
+const includeFhirOauth = process.env.PATIENT_WEB_INCLUDE_FHIR_OAUTH === "true";
 const fakeAudioFile = path.resolve(
   __dirname,
   "e2e/fixtures/synthetic-voice.wav",
 );
 const baseProjectGrepInvert = includeFullAssessment
-  ? /@voice-transcription/
+  ? /@voice-transcription|@prod-report-email|@fhir-oauth/
   : includeProdReportEmail
-    ? /@full-assessment|@voice-transcription/
-    : /@full-assessment|@voice-transcription|@prod-report-email/;
+    ? /@full-assessment|@voice-transcription|@fhir-oauth/
+    : includeFhirOauth
+      ? /@full-assessment|@voice-transcription|@prod-report-email/
+      : /@full-assessment|@voice-transcription|@prod-report-email|@fhir-oauth/;
 
 export default defineConfig({
   testDir: "./e2e",
