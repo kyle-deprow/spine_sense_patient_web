@@ -64,12 +64,15 @@ describe("unsafe browser route origin-policy inventory", () => {
     expect(source).toContain("handler as PUT");
   });
 
-  it("keeps the cross-site OAuth callback GET outside unsafe-request validation", () => {
-    const source = readFileSync(
-      resolve(process.cwd(), "src/app/api/auth/google/callback/route.ts"),
-      "utf8",
-    );
-    expect(source).not.toContain("validateAuthMutation");
-    expect(source).toContain("validatePatientWebConfiguration");
-  });
+  it.each([
+    "src/app/api/auth/google/callback/route.ts",
+    "src/app/api/fhir/callback/route.ts",
+  ])(
+    "keeps the cross-site OAuth callback GET outside unsafe-request validation for %s",
+    (relativePath) => {
+      const source = readFileSync(resolve(process.cwd(), relativePath), "utf8");
+      expect(source).not.toContain("validateAuthMutation");
+      expect(source).toContain("validatePatientWebConfiguration");
+    },
+  );
 });
