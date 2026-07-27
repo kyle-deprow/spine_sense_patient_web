@@ -1596,7 +1596,22 @@ async function fillVerificationCode(
   page: Page,
   verificationCode: string,
 ): Promise<void> {
-  await fillByTestId(page, "verify-otp-digit-0", verificationCode);
+  const normalizedCode = verificationCode.trim();
+  if (!/^\d{6}$/.test(normalizedCode)) {
+    throw new Error(
+      "Registration verification code lookup returned an invalid code format",
+    );
+  }
+  for (let index = 0; index < 6; index += 1) {
+    await fillByTestId(page, `verify-otp-digit-${index}`, "");
+  }
+  for (let index = 0; index < 6; index += 1) {
+    await fillByTestId(
+      page,
+      `verify-otp-digit-${index}`,
+      normalizedCode.charAt(index),
+    );
+  }
 }
 
 async function isPostVerificationState(page: Page): Promise<boolean> {
