@@ -2667,21 +2667,42 @@ async function answerScreening(page: Page, profiler: TransitionProfiler) {
       ).toBe(true);
       expect(optionLabelStyles[0]?.fontFamily).toContain("BlinkMacSystemFont");
     }
-    const textAnswer = SCREENING_TEXT_ANSWERS_BY_ID.get(questionId);
-    if (
-      textAnswer != null &&
-      (await answerTextQuestion(page, "question", textAnswer))
-    ) {
-      // Text answer entered.
-    } else {
-      const answer = SCREENING_ANSWERS_BY_ID.get(questionId);
-      if (answer == null) {
-        throw new Error(
-          `No screening fixture answer is defined for current question ${questionId}`,
-        );
+    const syncStartedAt = performance.now();
+    const screeningAnswerSaveResponse = page.waitForResponse(
+      (response) => isScreeningAnswersResponseForQuestion(response, questionId),
+      {
+        timeout: TRANSITION_BUDGETS_MS.sync,
+      },
+    );
+    try {
+      const textAnswer = SCREENING_TEXT_ANSWERS_BY_ID.get(questionId);
+      if (
+        textAnswer != null &&
+        (await answerTextQuestion(page, "question", textAnswer))
+      ) {
+        // Text answer entered.
+      } else {
+        const answer = SCREENING_ANSWERS_BY_ID.get(questionId);
+        if (answer == null) {
+          throw new Error(
+            `No screening fixture answer is defined for current question ${questionId}`,
+          );
+        }
+        await answerQuestion(page, "question", answer);
       }
-      await answerQuestion(page, "question", answer);
+    } catch (error) {
+      void screeningAnswerSaveResponse.catch(() => undefined);
+      throw error;
     }
+    pendingSyncProfiles.push(
+      trackScreeningAnswerSync(
+        profiler,
+        questionId,
+        screeningAnswerSaveResponse,
+        syncStartedAt,
+      ),
+    );
+    await settlePendingScreeningSyncProfiles(pendingSyncProfiles);
 
     await expect(
       page.getByTestId("screening-nav-next"),
@@ -2693,22 +2714,6 @@ async function answerScreening(page: Page, profiler: TransitionProfiler) {
       expectCompletedScreeningGoalRoute(observedQuestionIds);
       return;
     }
-
-    const syncStartedAt = performance.now();
-    const screeningAnswerSaveResponse = page.waitForResponse(
-      (response) => isScreeningAnswersResponseForQuestion(response, questionId),
-      {
-        timeout: TRANSITION_BUDGETS_MS.sync,
-      },
-    );
-    pendingSyncProfiles.push(
-      trackScreeningAnswerSync(
-        profiler,
-        questionId,
-        screeningAnswerSaveResponse,
-        syncStartedAt,
-      ),
-    );
 
     await profiler.measure(
       `screening.question.${questionId}.visual`,
