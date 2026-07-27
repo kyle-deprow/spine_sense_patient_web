@@ -1094,6 +1094,31 @@ async function warmCsrfSession(page: Page) {
   expect(hasCookie(cookies, "spine_patient_csrf")).toBe(true);
 }
 
+async function expectRegistrationVerificationCookie(page: Page) {
+  await expect
+    .poll(
+      async () => {
+        const cookies = await page.context().cookies();
+        return cookieHasExpectedShape(
+          cookies,
+          "spine_patient_registration_verify",
+          {
+            httpOnly: true,
+            path: "/api/auth/verify/registration",
+            sameSite: "Strict",
+            secure: EXPECT_SECURE_COOKIES,
+          },
+        );
+      },
+      {
+        message:
+          "registration challenge must be stored in the BFF HttpOnly cookie before confirmation",
+        timeout: 30_000,
+      },
+    )
+    .toBe(true);
+}
+
 async function gotoWelcome(page: Page) {
   const isBrowserNavigationErrorPage = async () =>
     page
@@ -3420,6 +3445,7 @@ test.describe("patient web full assessment flow", () => {
       await expect(page.getByTestId("verify-screen")).toBeVisible({
         timeout: 60_000,
       });
+      await expectRegistrationVerificationCookie(page);
       logMilestone("verification screen visible; checking browser storage");
       await expectNoBrowserStorage(page);
 
