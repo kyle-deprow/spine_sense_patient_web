@@ -146,7 +146,7 @@ export function registrationVerificationCookieOptions(): CookieOptions {
     httpOnly: true,
     secure: shouldUseSecureCookies(),
     sameSite: "strict",
-    path: "/api/auth/verify/registration",
+    path: "/api/auth",
     maxAge: REGISTRATION_VERIFICATION_MAX_AGE_SECONDS,
   };
 }

@@ -343,6 +343,7 @@ function sanitizeDiagnostic(value: string): string {
       match.replace(/:\s*"[^"]+"/, ':"[token]"'),
     )
     .replace(/"password"\s*:\s*"[^"]+"/gi, '"password":"[redacted]"')
+    .replace(/"code"\s*:\s*"[^"]+"/gi, '"code":"[redacted]"')
     .replace(/"csrfToken"\s*:\s*"[^"]+"/gi, '"csrfToken":"[redacted]"')
     .replace(/"csrf_token"\s*:\s*"[^"]+"/gi, '"csrf_token":"[redacted]"')
     .slice(0, 800);
@@ -1104,7 +1105,7 @@ async function expectRegistrationVerificationCookie(page: Page) {
           "spine_patient_registration_verify",
           {
             httpOnly: true,
-            path: "/api/auth/verify/registration",
+            path: "/api/auth",
             sameSite: "Strict",
             secure: EXPECT_SECURE_COOKIES,
           },
