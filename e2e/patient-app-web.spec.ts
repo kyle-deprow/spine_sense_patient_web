@@ -451,10 +451,13 @@ async function submitVerificationAndWait(
         lastError = error;
         if (lastVerificationCode == null) throw error;
       }
+      for (let index = 0; index < 6; index += 1) {
+        await page.getByTestId(`verify-otp-digit-${index}`).fill("");
+      }
       await page.getByTestId("verify-otp-digit-0").fill(lastVerificationCode);
       const verifyResponsePromise = page.waitForResponse(
         (response) =>
-          response.url().includes("/api/auth/verify/registration") &&
+          response.url().includes("/api/auth/verify/registration/confirm") &&
           response.request().method() === "POST",
         { timeout: 45_000 },
       );
