@@ -286,14 +286,24 @@ async function getRegistrationVerificationCode(
     );
   }
 
-  const response = await request.post(BACKEND_REGISTRATION_CODE_URL, {
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${TEST_SUPPORT_TOKEN}`,
-    },
-    data: { email },
-    timeout: 30_000,
-  });
+  const lookupCode = () =>
+    request.post(BACKEND_REGISTRATION_CODE_URL, {
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${TEST_SUPPORT_TOKEN}`,
+      },
+      data: { email },
+      timeout: 30_000,
+    });
+  let response = await lookupCode();
+  for (
+    let attempt = 1;
+    TRANSIENT_SUPPORT_HTTP_STATUSES.has(response.status()) && attempt < 12;
+    attempt += 1
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
+    response = await lookupCode();
+  }
   expect(
     response.status(),
     `registration verification code lookup failed status=${response.status()}`,
