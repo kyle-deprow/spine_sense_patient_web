@@ -409,10 +409,20 @@ async function submitVerificationAndWait(
         lastError = error;
         if (lastVerificationCode == null) throw error;
       }
+      const verificationCode = lastVerificationCode.trim();
+      if (!/^\d{6}$/.test(verificationCode)) {
+        throw new Error(
+          "Registration verification code lookup returned an invalid code format",
+        );
+      }
       for (let index = 0; index < 6; index += 1) {
         await page.getByTestId(`verify-otp-digit-${index}`).fill("");
       }
-      await page.getByTestId("verify-otp-digit-0").fill(lastVerificationCode);
+      for (let index = 0; index < 6; index += 1) {
+        await page
+          .getByTestId(`verify-otp-digit-${index}`)
+          .fill(verificationCode.charAt(index));
+      }
       const verifyResponsePromise = page.waitForResponse(
         (response) =>
           response.url().includes("/api/auth/verify/registration/confirm") &&
