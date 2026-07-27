@@ -2,16 +2,13 @@ import {
   expect,
   test,
   type APIRequestContext,
-  type APIResponse,
   type Page,
   type Response,
 } from "@playwright/test";
 
-const BACKEND_CLEANUP_URL = process.env.PATIENT_WEB_BACKEND_E2E_CLEANUP_URL;
 const BACKEND_REGISTRATION_CODE_URL =
   process.env.PATIENT_WEB_BACKEND_REGISTRATION_CODE_URL;
 const TEST_SUPPORT_TOKEN = process.env.PATIENT_WEB_TEST_SUPPORT_TOKEN;
-const GATEWAY_CLEANUP_URL = process.env.PATIENT_WEB_GATEWAY_E2E_CLEANUP_URL;
 const EXPECT_SECURE_COOKIES =
   process.env.PATIENT_WEB_EXPECT_SECURE_COOKIES === "true";
 const SIGNUP_PASSWORD =
@@ -27,74 +24,6 @@ type BrowserCookie = {
   sameSite: "Lax" | "None" | "Strict";
   secure: boolean;
 };
-
-async function postCleanupWithRetry(
-  request: APIRequestContext,
-  url: string,
-  label: string,
-): Promise<APIResponse> {
-  let response: APIResponse | null = null;
-  for (let attempt = 1; attempt <= 12; attempt += 1) {
-    response = await request.post(url, {
-      headers: { authorization: `Bearer ${TEST_SUPPORT_TOKEN}` },
-      timeout: 30_000,
-    });
-    if (
-      response.ok() ||
-      !TRANSIENT_SUPPORT_HTTP_STATUSES.has(response.status())
-    ) {
-      return response;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 5_000));
-  }
-  if (response == null) {
-    throw new Error(`${label} cleanup did not return a response`);
-  }
-  return response;
-}
-
-async function cleanupE2eState(request: APIRequestContext) {
-  if (!BACKEND_CLEANUP_URL) {
-    throw new Error(
-      "PATIENT_WEB_BACKEND_E2E_CLEANUP_URL is required for tests that create synthetic E2E users",
-    );
-  }
-  if (!GATEWAY_CLEANUP_URL) {
-    throw new Error(
-      "PATIENT_WEB_GATEWAY_E2E_CLEANUP_URL is required for tests that create synthetic E2E users",
-    );
-  }
-  if (!TEST_SUPPORT_TOKEN) {
-    throw new Error(
-      "PATIENT_WEB_TEST_SUPPORT_TOKEN is required for patient web E2E cleanup",
-    );
-  }
-
-  const gatewayResponse = await postCleanupWithRetry(
-    request,
-    GATEWAY_CLEANUP_URL,
-    "patient web gateway",
-  );
-  expect(
-    gatewayResponse.ok(),
-    `PATIENT_WEB_GATEWAY_E2E_CLEANUP_URL must clear gateway E2E state status=${gatewayResponse.status()}`,
-  ).toBeTruthy();
-
-  const response = await postCleanupWithRetry(
-    request,
-    BACKEND_CLEANUP_URL,
-    "backend synthetic",
-  );
-  const responseText = await response.text();
-  expect(
-    response.ok(),
-    [
-      "PATIENT_WEB_BACKEND_E2E_CLEANUP_URL must clean synthetic E2E state",
-      `status=${response.status()}`,
-      `body=${sanitizeBrowserDiagnostic(responseText)}`,
-    ].join(" "),
-  ).toBeTruthy();
-}
 
 function sanitizeBrowserDiagnostic(value: string): string {
   return value
@@ -534,47 +463,41 @@ test.describe("patient app web deployment", () => {
 
   test("registers a new patient through the BFF without exposing tokens", async ({
     page,
-    request,
   }) => {
-    await cleanupE2eState(request);
     const email = uniqueSyntheticEmail();
 
-    try {
-      await page.request.get("/api/auth/session");
-      await gotoHydratedRoute(page, "/register", "register-screen");
+    await page.request.get("/api/auth/session");
+    await gotoHydratedRoute(page, "/register", "register-screen");
 
-      await page.getByTestId("register-first-name").fill("Synthetic");
-      await page.getByTestId("register-last-name").fill("Patient");
-      await page.getByTestId("register-email").fill(email);
-      await page.getByTestId("register-password").fill(SIGNUP_PASSWORD);
-      await page.getByTestId("register-confirm-password").fill(SIGNUP_PASSWORD);
-      await clickIfPresent(page, "register-consent-storage");
+    await page.getByTestId("register-first-name").fill("Synthetic");
+    await page.getByTestId("register-last-name").fill("Patient");
+    await page.getByTestId("register-email").fill(email);
+    await page.getByTestId("register-password").fill(SIGNUP_PASSWORD);
+    await page.getByTestId("register-confirm-password").fill(SIGNUP_PASSWORD);
+    await clickIfPresent(page, "register-consent-storage");
 
-      const registerResponse = await submitRegistrationAndWait(page);
-      await expectRegistrationAccepted(page, registerResponse);
+    const registerResponse = await submitRegistrationAndWait(page);
+    await expectRegistrationAccepted(page, registerResponse);
 
-      await expect(page.getByTestId("verify-screen")).toBeVisible({
-        timeout: 60_000,
-      });
-      await expectRegistrationVerificationCookie(page);
-      expect(page.url()).not.toContain("verificationToken");
-      const resendResponsePromise = page.waitForResponse(
-        (response) =>
-          response.url().includes("/api/auth/verify/registration/send") &&
-          response.request().method() === "POST",
-      );
-      await page.getByTestId("verify-resend").click();
-      const resendResponse = await resendResponsePromise;
-      expect(resendResponse.ok()).toBeTruthy();
-      await expectNoTokenLeak(await resendResponse.text());
+    await expect(page.getByTestId("verify-screen")).toBeVisible({
+      timeout: 60_000,
+    });
+    await expectRegistrationVerificationCookie(page);
+    expect(page.url()).not.toContain("verificationToken");
+    const resendResponsePromise = page.waitForResponse(
+      (response) =>
+        response.url().includes("/api/auth/verify/registration/send") &&
+        response.request().method() === "POST",
+    );
+    await page.getByTestId("verify-resend").click();
+    const resendResponse = await resendResponsePromise;
+    expect(resendResponse.ok()).toBeTruthy();
+    await expectNoTokenLeak(await resendResponse.text());
 
-      const cookies = await page.context().cookies();
-      expect(hasCookie(cookies, "spine_patient_sess")).toBe(false);
-      expect(hasCookie(cookies, "spine_patient_refresh")).toBe(false);
-      await expectNoBrowserStorage(page);
-    } finally {
-      await cleanupE2eState(request);
-    }
+    const cookies = await page.context().cookies();
+    expect(hasCookie(cookies, "spine_patient_sess")).toBe(false);
+    expect(hasCookie(cookies, "spine_patient_refresh")).toBe(false);
+    await expectNoBrowserStorage(page);
   });
 
   test("requests a password reset through the BFF without exposing tokens", async ({
@@ -605,72 +528,65 @@ test.describe("patient app web deployment", () => {
     page,
     request,
   }) => {
-    await cleanupE2eState(request);
     const email = uniqueSyntheticEmail();
 
-    try {
-      await page.request.get("/api/auth/session");
-      await gotoHydratedRoute(page, "/register", "register-screen");
+    await page.request.get("/api/auth/session");
+    await gotoHydratedRoute(page, "/register", "register-screen");
 
-      await page.getByTestId("register-first-name").fill("Synthetic");
-      await page.getByTestId("register-last-name").fill("Verified");
-      await page.getByTestId("register-email").fill(email);
-      await page.getByTestId("register-password").fill(SIGNUP_PASSWORD);
-      await page.getByTestId("register-confirm-password").fill(SIGNUP_PASSWORD);
-      await clickIfPresent(page, "register-consent-storage");
+    await page.getByTestId("register-first-name").fill("Synthetic");
+    await page.getByTestId("register-last-name").fill("Verified");
+    await page.getByTestId("register-email").fill(email);
+    await page.getByTestId("register-password").fill(SIGNUP_PASSWORD);
+    await page.getByTestId("register-confirm-password").fill(SIGNUP_PASSWORD);
+    await clickIfPresent(page, "register-consent-storage");
 
-      const registerResponse = await submitRegistrationAndWait(page);
-      await expectRegistrationAccepted(page, registerResponse);
-      await expect(page.getByTestId("verify-screen")).toBeVisible({
-        timeout: 60_000,
-      });
-      await expectRegistrationVerificationCookie(page);
+    const registerResponse = await submitRegistrationAndWait(page);
+    await expectRegistrationAccepted(page, registerResponse);
+    await expect(page.getByTestId("verify-screen")).toBeVisible({
+      timeout: 60_000,
+    });
+    await expectRegistrationVerificationCookie(page);
 
-      const verifyResponse = await submitVerificationAndWait(page, () =>
-        getRegistrationVerificationCode(request, email),
-      );
-      expect(verifyResponse.ok()).toBeTruthy();
-      await expectNoTokenLeak(await verifyResponse.text());
-      await expect(page.getByTestId("consent-screen")).toBeVisible({
-        timeout: 60_000,
-      });
+    const verifyResponse = await submitVerificationAndWait(page, () =>
+      getRegistrationVerificationCode(request, email),
+    );
+    expect(verifyResponse.ok()).toBeTruthy();
+    await expectNoTokenLeak(await verifyResponse.text());
+    await expect(page.getByTestId("consent-screen")).toBeVisible({
+      timeout: 60_000,
+    });
 
-      const browserVisibleCookies = await page.evaluate(() => document.cookie);
-      expect(browserVisibleCookies.includes("spine_patient_sess")).toBe(false);
-      expect(browserVisibleCookies.includes("spine_patient_refresh")).toBe(
-        false,
-      );
+    const browserVisibleCookies = await page.evaluate(() => document.cookie);
+    expect(browserVisibleCookies.includes("spine_patient_sess")).toBe(false);
+    expect(browserVisibleCookies.includes("spine_patient_refresh")).toBe(false);
 
-      const cookies = await page.context().cookies();
-      expect(
-        cookieHasExpectedShape(cookies, "spine_patient_sess", {
-          httpOnly: true,
-          path: "/api",
-          sameSite: "Lax",
-          secure: EXPECT_SECURE_COOKIES,
-        }),
-      ).toBe(true);
-      expect(
-        cookieHasExpectedShape(cookies, "spine_patient_refresh", {
-          httpOnly: true,
-          path: "/api/auth/refresh",
-          sameSite: "Strict",
-          secure: EXPECT_SECURE_COOKIES,
-        }),
-      ).toBe(true);
-      expect(
-        cookieHasExpectedShape(cookies, "spine_patient_csrf", {
-          httpOnly: false,
-          path: "/",
-          sameSite: "Strict",
-          secure: EXPECT_SECURE_COOKIES,
-        }),
-      ).toBe(true);
+    const cookies = await page.context().cookies();
+    expect(
+      cookieHasExpectedShape(cookies, "spine_patient_sess", {
+        httpOnly: true,
+        path: "/api",
+        sameSite: "Lax",
+        secure: EXPECT_SECURE_COOKIES,
+      }),
+    ).toBe(true);
+    expect(
+      cookieHasExpectedShape(cookies, "spine_patient_refresh", {
+        httpOnly: true,
+        path: "/api/auth/refresh",
+        sameSite: "Strict",
+        secure: EXPECT_SECURE_COOKIES,
+      }),
+    ).toBe(true);
+    expect(
+      cookieHasExpectedShape(cookies, "spine_patient_csrf", {
+        httpOnly: false,
+        path: "/",
+        sameSite: "Strict",
+        secure: EXPECT_SECURE_COOKIES,
+      }),
+    ).toBe(true);
 
-      await logoutViaBff(page);
-      await expectNoBrowserStorage(page);
-    } finally {
-      await cleanupE2eState(request);
-    }
+    await logoutViaBff(page);
+    await expectNoBrowserStorage(page);
   });
 });
