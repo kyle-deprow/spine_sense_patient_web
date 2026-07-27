@@ -31,6 +31,8 @@ const FULL_FLOW_TIMEOUT_MS = readPositiveIntegerEnv(
 );
 const ENABLE_TRANSITION_PROFILING =
   process.env.PATIENT_WEB_E2E_PROFILE_TRANSITIONS !== "false";
+const ASSERT_TRANSITION_BUDGETS =
+  process.env.PATIENT_WEB_E2E_ASSERT_TRANSITION_BUDGETS !== "false";
 const ASSESSMENT_REPORT_PROXY_PATH_RE =
   /^\/api\/proxy\/api\/v1\/patients\/me\/assessments\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/reports$/i;
 const STRESS_RELOAD_AFTER_SCREENING_QUESTION_ID =
@@ -238,7 +240,7 @@ class TransitionProfiler {
     console.log(
       `[perf] label=${label} kind=${kind} duration_ms=${durationMs.toFixed(1)} budget_ms=${budgetMs} status=${status}`,
     );
-    if (options.assertBudget ?? true) {
+    if ((options.assertBudget ?? true) && ASSERT_TRANSITION_BUDGETS) {
       expect(
         durationMs,
         `${label} exceeded ${budgetMs}ms budget (${durationMs.toFixed(1)}ms)`,
