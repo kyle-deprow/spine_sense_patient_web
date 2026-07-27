@@ -550,8 +550,12 @@ test.describe("patient app web deployment", () => {
     const verifyResponse = await submitVerificationAndWait(page, () =>
       getRegistrationVerificationCode(request, email),
     );
-    expect(verifyResponse.ok()).toBeTruthy();
-    await expectNoTokenLeak(await verifyResponse.text());
+    const verifyResponseText = await verifyResponse.text();
+    expect(
+      verifyResponse.ok(),
+      `registration verification failed status=${verifyResponse.status()} body=${sanitizeBrowserDiagnostic(verifyResponseText)}`,
+    ).toBeTruthy();
+    await expectNoTokenLeak(verifyResponseText);
     await expect(page.getByTestId("consent-screen")).toBeVisible({
       timeout: 60_000,
     });
