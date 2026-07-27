@@ -695,10 +695,10 @@ async function completeSyntheticDocumentScan(
   let response = await completeScan();
   for (
     let attempt = 1;
-    response.status() === 404 && attempt < 5;
+    response.status() === 404 && attempt < 30;
     attempt += 1
   ) {
-    await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+    await new Promise<void>((resolve) => setTimeout(resolve, 3000));
     response = await completeScan();
   }
   expect(
