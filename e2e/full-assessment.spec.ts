@@ -2,7 +2,6 @@ import {
   expect,
   test,
   type APIRequestContext,
-  type APIResponse,
   type FileChooser,
   type Locator,
   type Page,
@@ -14,12 +13,10 @@ import { performance } from "node:perf_hooks";
 
 import { fullAssessmentScenario } from "./fixtures/fullAssessmentScenario";
 
-const BACKEND_CLEANUP_URL = process.env.PATIENT_WEB_BACKEND_E2E_CLEANUP_URL;
 const BACKEND_REGISTRATION_CODE_URL =
   process.env.PATIENT_WEB_BACKEND_REGISTRATION_CODE_URL;
 const BACKEND_DOCUMENT_SCAN_RESULT_URL =
   process.env.PATIENT_WEB_BACKEND_DOCUMENT_SCAN_RESULT_URL;
-const GATEWAY_CLEANUP_URL = process.env.PATIENT_WEB_GATEWAY_E2E_CLEANUP_URL;
 const TEST_SUPPORT_TOKEN = process.env.PATIENT_WEB_TEST_SUPPORT_TOKEN;
 const EXPECT_SECURE_COOKIES =
   process.env.PATIENT_WEB_EXPECT_SECURE_COOKIES === "true";
@@ -985,60 +982,6 @@ async function expectOptionalReportSwitchCanOnlySubmitWhenAvailable(
     switchLocator,
     `${label} option must be clearable before core download`,
   ).not.toBeChecked();
-}
-
-async function postTestSupport(
-  request: APIRequestContext,
-  url: string,
-  token: string | undefined,
-  label: string,
-): Promise<APIResponse> {
-  const options: Parameters<APIRequestContext["post"]>[1] = { timeout: 90_000 };
-  if (token) options.headers = { authorization: `Bearer ${token}` };
-  let response = await request.post(url, options);
-  for (
-    let attempt = 1;
-    TRANSIENT_SUPPORT_HTTP_STATUSES.has(response.status()) && attempt < 12;
-    attempt += 1
-  ) {
-    await new Promise<void>((resolve) => setTimeout(resolve, 5_000));
-    response = await request.post(url, options);
-  }
-  expect(response.status(), `${label} failed status=${response.status()}`).toBe(
-    200,
-  );
-  return response;
-}
-
-async function cleanupE2eState(request: APIRequestContext) {
-  if (!BACKEND_CLEANUP_URL) {
-    throw new Error(
-      "PATIENT_WEB_BACKEND_E2E_CLEANUP_URL is required for full assessment E2E",
-    );
-  }
-  if (!GATEWAY_CLEANUP_URL) {
-    throw new Error(
-      "PATIENT_WEB_GATEWAY_E2E_CLEANUP_URL is required for full assessment E2E",
-    );
-  }
-  if (!TEST_SUPPORT_TOKEN) {
-    throw new Error(
-      "PATIENT_WEB_TEST_SUPPORT_TOKEN is required for full assessment E2E",
-    );
-  }
-
-  await postTestSupport(
-    request,
-    GATEWAY_CLEANUP_URL,
-    TEST_SUPPORT_TOKEN,
-    "patient web gateway cleanup",
-  );
-  await postTestSupport(
-    request,
-    BACKEND_CLEANUP_URL,
-    TEST_SUPPORT_TOKEN,
-    "backend synthetic cleanup",
-  );
 }
 
 async function getRegistrationVerificationCode(
@@ -3340,10 +3283,6 @@ async function waitForAssessmentEntry(
 }
 
 test.describe("patient web full assessment flow", () => {
-  test.beforeEach(async ({ request }) => {
-    await cleanupE2eState(request);
-  });
-
   test.beforeEach(async ({ page }) => {
     installPhiSafeDiagnostics(page);
   });
