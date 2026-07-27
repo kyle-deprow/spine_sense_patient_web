@@ -1,6 +1,5 @@
 import type { NextRequest } from "next/server";
 
-import { clearRateLimitStore } from "@/lib/server/rate-limit";
 import { jsonNoStore } from "@/lib/server/responses";
 import { hasTestSupportAccess } from "@/lib/server/test-support-access";
 
@@ -9,10 +8,5 @@ export async function POST(request: NextRequest) {
     return jsonNoStore({ detail: "Not found" }, { status: 404 });
   }
 
-  try {
-    await clearRateLimitStore();
-    return jsonNoStore({ status: "cleanup_complete" });
-  } catch {
-    return jsonNoStore({ error: "service_unavailable" }, { status: 503 });
-  }
+  return jsonNoStore({ status: "ok" });
 }
