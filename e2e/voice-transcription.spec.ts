@@ -980,20 +980,57 @@ async function getAuthoritativeScreeningState(
   assessmentId: string,
 ): Promise<ScreeningState> {
   const path = `/api/proxy/api/v1/patients/me/assessments/${assessmentId}/screening/state`;
-  const response = await page.evaluate(async (path) => {
-    const browserResponse = await fetch(path, { credentials: "include" });
-    return {
-      ok: browserResponse.ok,
-      status: browserResponse.status,
-      text: await browserResponse.text(),
-    };
-  }, path);
-  if (!response.ok) {
-    throw new Error(
-      `screening state discovery failed status=${response.status}`,
-    );
+  let lastFailure = "network_error";
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await waitForBrowserNetworkReady(page);
+    const response = await page.evaluate(async (path) => {
+      try {
+        const browserResponse = await fetch(path, { credentials: "include" });
+        return {
+          networkError: false,
+          ok: browserResponse.ok,
+          status: browserResponse.status,
+          text: await browserResponse.text(),
+        };
+      } catch {
+        return {
+          networkError: true,
+          ok: false,
+          status: 0,
+          text: "",
+        };
+      }
+    }, path);
+
+    if (response.networkError) {
+      lastFailure = "network_error";
+      if (attempt < 3) {
+        await page.waitForTimeout(attempt * 1_000);
+        continue;
+      }
+      break;
+    }
+
+    if (!response.ok) {
+      lastFailure = `status_${response.status}`;
+      if (TRANSIENT_SUPPORT_HTTP_STATUSES.has(response.status) && attempt < 3) {
+        await page.waitForTimeout(attempt * 1_000);
+        continue;
+      }
+      throw new Error(
+        `screening state discovery failed status=${response.status} body=${sanitizeBrowserDiagnostic(response.text)}`,
+      );
+    }
+
+    return parseJsonBody(response.text) as ScreeningState;
   }
-  return JSON.parse(response.text) as ScreeningState;
+
+  throw new Error(
+    `screening state discovery failed reason=${sanitizeBrowserDiagnostic(
+      lastFailure,
+    )}`,
+  );
 }
 
 function firstIssuedQuestionId(state: ScreeningState): string {
