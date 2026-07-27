@@ -23,6 +23,9 @@ const GATEWAY_CLEANUP_URL = process.env.PATIENT_WEB_GATEWAY_E2E_CLEANUP_URL;
 const TEST_SUPPORT_TOKEN = process.env.PATIENT_WEB_TEST_SUPPORT_TOKEN;
 const EXPECT_SECURE_COOKIES =
   process.env.PATIENT_WEB_EXPECT_SECURE_COOKIES === "true";
+const TRANSIENT_SUPPORT_HTTP_STATUSES = new Set([
+  404, 408, 429, 500, 502, 503, 504,
+]);
 const ENABLE_FULL_ASSESSMENT_STRESS =
   process.env.PATIENT_WEB_FULL_ASSESSMENT_STRESS !== "false";
 const FULL_FLOW_TIMEOUT_MS = readPositiveIntegerEnv(
@@ -992,7 +995,15 @@ async function postTestSupport(
 ): Promise<APIResponse> {
   const options: Parameters<APIRequestContext["post"]>[1] = { timeout: 90_000 };
   if (token) options.headers = { authorization: `Bearer ${token}` };
-  const response = await request.post(url, options);
+  let response = await request.post(url, options);
+  for (
+    let attempt = 1;
+    TRANSIENT_SUPPORT_HTTP_STATUSES.has(response.status()) && attempt < 12;
+    attempt += 1
+  ) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 5_000));
+    response = await request.post(url, options);
+  }
   expect(response.status(), `${label} failed status=${response.status()}`).toBe(
     200,
   );

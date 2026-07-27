@@ -16,6 +16,9 @@ const EXPECT_SECURE_COOKIES =
   process.env.PATIENT_WEB_EXPECT_SECURE_COOKIES === "true";
 const SIGNUP_PASSWORD =
   process.env.PATIENT_E2E_SIGNUP_PASSWORD ?? "E2eSignup123!!";
+const TRANSIENT_SUPPORT_HTTP_STATUSES = new Set([
+  404, 408, 429, 500, 502, 503, 504,
+]);
 
 type BrowserCookie = {
   name: string;
@@ -31,15 +34,18 @@ async function postCleanupWithRetry(
   label: string,
 ): Promise<APIResponse> {
   let response: APIResponse | null = null;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+  for (let attempt = 1; attempt <= 12; attempt += 1) {
     response = await request.post(url, {
       headers: { authorization: `Bearer ${TEST_SUPPORT_TOKEN}` },
       timeout: 30_000,
     });
-    if (response.ok() || ![502, 503, 504].includes(response.status())) {
+    if (
+      response.ok() ||
+      !TRANSIENT_SUPPORT_HTTP_STATUSES.has(response.status())
+    ) {
       return response;
     }
-    await new Promise((resolve) => setTimeout(resolve, attempt * 1_000));
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
   }
   if (response == null) {
     throw new Error(`${label} cleanup did not return a response`);
