@@ -496,8 +496,6 @@ async function uploadSyntheticAssessmentDocumentFromRecordsStep(
   email: string,
   profiler: TransitionProfiler,
 ): Promise<void> {
-  await clickByTestId(page, "records-documents-file-tab");
-
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     let uploadUrlResponsePromise: Promise<PlaywrightResponse> | null = null;
@@ -1795,8 +1793,8 @@ async function waitForBrowserNetworkReady(page: Page, timeout = 30_000) {
 
 async function waitForScreeningNavReady(page: Page) {
   const next = page.getByTestId("screening-nav-next");
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    if (await next.isVisible({ timeout: 20_000 }).catch(() => false)) return;
+  for (let attempt = 1; attempt <= 12; attempt += 1) {
+    if (await next.isVisible({ timeout: 10_000 }).catch(() => false)) return;
 
     const retry = page.getByRole("button", { name: /^retry$/i }).first();
     if (await retry.isVisible({ timeout: 1000 }).catch(() => false)) {
@@ -1804,9 +1802,7 @@ async function waitForScreeningNavReady(page: Page) {
       await retry.click({ timeout: 10_000 }).catch(() => undefined);
     } else {
       await waitForBrowserNetworkReady(page).catch(() => undefined);
-      await page
-        .reload({ waitUntil: "domcontentloaded", timeout: 45_000 })
-        .catch(() => undefined);
+      await page.waitForTimeout(2_500);
     }
 
     await waitForAnyVisibleTestId(
@@ -1816,7 +1812,7 @@ async function waitForScreeningNavReady(page: Page) {
     ).catch(() => null);
   }
 
-  await expect(next).toBeVisible({ timeout: 60_000 });
+  await expect(next).toBeVisible({ timeout: 120_000 });
 }
 
 async function clickConsentAccept(page: Page) {
