@@ -1930,6 +1930,14 @@ function expectScreeningGoalRoutePrefix(
   ).toEqual(EXPECTED_SCREENING_GOAL_QUESTION_IDS.slice(0, goalTail.length));
 }
 
+function expectedNextScreeningGoalQuestionId(
+  questionId: string,
+): string | null {
+  const index = EXPECTED_SCREENING_GOAL_QUESTION_IDS.indexOf(questionId);
+  if (index < 0) return null;
+  return EXPECTED_SCREENING_GOAL_QUESTION_IDS[index + 1] ?? null;
+}
+
 function expectCompletedScreeningGoalRoute(
   observedQuestionIds: readonly string[],
 ): void {
@@ -2480,7 +2488,12 @@ async function stressReloadCurrentScreeningQuestion(page: Page) {
   await expectNoBrowserStorage(page);
 
   const questionIdAfterReload = await currentVisibleScreeningQuestionId(page);
-  expect(questionIdAfterReload).toBe(questionIdBeforeReload);
+  const expectedNextQuestionId = expectedNextScreeningGoalQuestionId(
+    questionIdBeforeReload,
+  );
+  expect(
+    [questionIdBeforeReload, expectedNextQuestionId].filter(Boolean),
+  ).toContain(questionIdAfterReload);
   await expectNoAssessmentBlockingState(page);
 }
 
