@@ -240,6 +240,19 @@ function hasCookie(cookies: BrowserCookie[], name: string): boolean {
   return cookies.some((entry) => entry.name === name);
 }
 
+async function expectRegistrationVerificationCookie(page: Page) {
+  const cookies = await page.context().cookies();
+  expect(
+    cookieHasExpectedShape(cookies, "spine_patient_registration_verify", {
+      httpOnly: true,
+      path: "/api/auth/verify/registration",
+      sameSite: "Strict",
+      secure: EXPECT_SECURE_COOKIES,
+    }),
+    "registration challenge must be held in the BFF HttpOnly cookie before confirmation",
+  ).toBe(true);
+}
+
 async function expectNoTokenLeak(responseText: string) {
   expect(responseText.includes("access_token")).toBe(false);
   expect(responseText.includes("refresh_token")).toBe(false);
@@ -470,7 +483,7 @@ async function submitVerificationAndWait(
       lastError = new Error(
         `Verification submit failed status=${response.status()}`,
       );
-      if (![422, 502, 503, 504].includes(response.status())) return response;
+      if (![502, 503, 504].includes(response.status())) return response;
     } catch (error) {
       lastError = error;
     }
@@ -527,6 +540,7 @@ test.describe("patient app web deployment", () => {
       await expect(page.getByTestId("verify-screen")).toBeVisible({
         timeout: 60_000,
       });
+      await expectRegistrationVerificationCookie(page);
       expect(page.url()).not.toContain("verificationToken");
       const resendResponsePromise = page.waitForResponse(
         (response) =>
@@ -594,6 +608,7 @@ test.describe("patient app web deployment", () => {
       await expect(page.getByTestId("verify-screen")).toBeVisible({
         timeout: 60_000,
       });
+      await expectRegistrationVerificationCookie(page);
 
       const verifyResponse = await submitVerificationAndWait(page, () =>
         getRegistrationVerificationCode(request, email),

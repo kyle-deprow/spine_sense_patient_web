@@ -573,4 +573,39 @@ describe("auth catch-all route handler", () => {
       }),
     );
   });
+
+  it("normalizes an empty camelCase registration verification token from the web app", async () => {
+    mockedBackendFetch.mockResolvedValueOnce(
+      Response.json({
+        success: true,
+        access_token: "issued-private-access-token",
+        refresh_token: "issued-private-refresh-token",
+      }),
+    );
+    mockedBackendFetch.mockResolvedValueOnce(
+      Response.json({ user_id: ACTOR_ID }),
+    );
+
+    const request = makeAuthRequest(
+      "/api/auth/verify/registration/confirm",
+      {
+        code: "private-registration-code",
+        verificationToken: "",
+      },
+      { registrationVerificationToken: "private-registration-challenge-token" },
+    );
+    const response = await POST(
+      request,
+      makeContext(["verify", "registration", "confirm"]),
+    );
+
+    expect(response.status).toBe(200);
+    const [, init] = mockedBackendFetch.mock.calls[0] ?? [];
+    expect(init?.body).toBe(
+      JSON.stringify({
+        code: "private-registration-code",
+        verification_token: "private-registration-challenge-token",
+      }),
+    );
+  });
 });

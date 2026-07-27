@@ -218,11 +218,9 @@ async function authRequestBody(
   const body = await request.arrayBuffer();
   if (!isRegistrationVerificationPath(authPath)) return body;
 
-  const cookieToken = request.cookies.get(
+  const cookieTokenValue = request.cookies.get(
     COOKIE_NAMES.registrationVerification,
   )?.value;
-  if (typeof cookieToken !== "string" || cookieToken.trim().length === 0)
-    return body;
 
   const contentType = request.headers.get("content-type");
   if (!contentType?.includes("application/json")) return body;
@@ -235,10 +233,21 @@ async function authRequestBody(
     const record = parsed as Record<string, unknown>;
     const submittedToken =
       record.verification_token ?? record.verificationToken;
-    if (typeof submittedToken === "string" && submittedToken.trim().length > 0)
-      return body;
+    const verificationToken =
+      typeof submittedToken === "string" && submittedToken.trim().length > 0
+        ? submittedToken
+        : typeof cookieTokenValue === "string" &&
+            cookieTokenValue.trim().length > 0
+          ? cookieTokenValue
+          : undefined;
 
-    return JSON.stringify({ ...record, verification_token: cookieToken });
+    const normalized: Record<string, unknown> = {};
+    if (typeof record.code === "string") normalized.code = record.code;
+    if (verificationToken !== undefined) {
+      normalized.verification_token = verificationToken;
+    }
+
+    return JSON.stringify(normalized);
   } catch {
     return body;
   }
