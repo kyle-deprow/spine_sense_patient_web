@@ -141,12 +141,83 @@ describe("proxy allowlist", () => {
     }
   });
 
+  it("allows only the exact intake live-story HTTP control-plane shapes", () => {
+    const cases = [
+      ["POST", "/api/v1/patients/me/intake/story/live-transcription-session"],
+      ["GET", "/api/v1/patients/me/intake/story"],
+      ["PUT", "/api/v1/patients/me/intake/story"],
+      ["POST", "/api/v1/patients/me/intake/route"],
+    ] as const;
+
+    for (const [method, targetPath] of cases) {
+      expect(
+        validateProxyTarget(
+          targetPath.slice(1).split("/"),
+          method,
+          `/api/proxy${targetPath}`,
+        ),
+      ).toEqual({ ok: true, targetPath });
+    }
+  });
+
+  it("keeps the intake websocket and suffix/traversal aliases outside the BFF", () => {
+    const cases = [
+      [
+        "/ws/patients/me/intake/story/live-transcription",
+        { ok: false, status: 404, code: "proxy_prefix_not_allowed" },
+      ],
+      [
+        "/api/v1/patients/me/intake/story/live-transcription-session/extra",
+        { ok: false, status: 404, code: "proxy_path_not_allowed" },
+      ],
+      [
+        "/api/v1/patients/me/intake/story/live-transcription-session%2fextra",
+        { ok: false, status: 400, code: "proxy_path_invalid" },
+      ],
+      [
+        "/api/v1/patients/me/intake/story/../route",
+        { ok: false, status: 400, code: "proxy_path_invalid" },
+      ],
+    ] as const;
+
+    for (const [targetPath, expected] of cases) {
+      expect(
+        validateProxyTarget(
+          targetPath.slice(1).split("/"),
+          "POST",
+          `/api/proxy${targetPath}`,
+        ),
+      ).toEqual(expected);
+    }
+  });
+
+  it("rejects method mismatches on exact intake live-story shapes", () => {
+    const cases = [
+      ["GET", "/api/v1/patients/me/intake/story/live-transcription-session"],
+      ["POST", "/api/v1/patients/me/intake/story"],
+      ["PUT", "/api/v1/patients/me/intake/route"],
+    ] as const;
+
+    for (const [method, targetPath] of cases) {
+      expect(
+        validateProxyTarget(
+          targetPath.slice(1).split("/"),
+          method,
+          `/api/proxy${targetPath}`,
+        ),
+      ).toEqual({
+        ok: false,
+        status: 405,
+        code: "proxy_method_not_allowed",
+      });
+    }
+  });
+
   it("blocks retired intake voice aliases and malformed story recording routes", () => {
     const cases = [
       "/api/v1/patients/me/intake/voice-upload-url",
       "/api/v1/patients/me/intake/transcribe",
       "/api/v1/patients/me/intake/story/live-transcription",
-      "/api/v1/patients/me/intake/story/live-transcription-session",
       "/api/v1/patients/me/intake/story/recordings",
       "/api/v1/patients/me/intake/story/recordings/not-a-uuid/transcription",
       "/api/v1/patients/me/intake/story/recordings/10000000-0000-4000-8000-000000000001/transcription/extra",
