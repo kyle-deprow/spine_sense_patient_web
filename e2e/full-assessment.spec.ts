@@ -148,13 +148,11 @@ const ADAPTIVE_ANSWERS_BY_ID = new Map(
 );
 const FINAL_SCREENING_QUESTION_ID =
   fullAssessmentScenario.finalScreeningQuestionId;
-const EXPECTED_SCREENING_GOAL_QUESTION_IDS: readonly string[] = [
-  ...fullAssessmentScenario.requiredScreeningGoalQuestionIds,
-  ...fullAssessmentScenario.optionalScreeningGoalQuestionIds.filter(
+const EXPECTED_SCREENING_GOAL_QUESTION_IDS: readonly string[] =
+  fullAssessmentScenario.screeningGoalQuestionOrder.filter(
     (id) =>
       SCREENING_ANSWERS_BY_ID.has(id) || SCREENING_TEXT_ANSWERS_BY_ID.has(id),
-  ),
-];
+  );
 const SCREENING_GOAL_QUESTION_IDS: ReadonlySet<string> = new Set([
   ...fullAssessmentScenario.requiredScreeningGoalQuestionIds,
   ...fullAssessmentScenario.optionalScreeningGoalQuestionIds,

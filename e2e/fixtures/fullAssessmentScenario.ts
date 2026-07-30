@@ -58,7 +58,8 @@ export const fullAssessmentScenario = {
   },
   requiredScreeningGoalQuestionIds: ['T01', 'T06_Q1', 'G01', 'G02', 'G03'],
   optionalScreeningGoalQuestionIds: ['G04'],
-  finalScreeningQuestionId: 'G04',
+  screeningGoalQuestionOrder: ['T01', 'T06_Q1', 'G04', 'G01', 'G02', 'G03'],
+  finalScreeningQuestionId: 'G03',
   screening: [
     { id: 'A00', value: ['low_back'] },
     { id: 'A02', value: ['pain', 'tingling_pins', 'numbness_deficit'] },

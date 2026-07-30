@@ -169,7 +169,7 @@ type ActualScenarioContract = {
 
 let cachedScenarioContract: ActualScenarioContract | undefined
 
-function fixtureScreeningIds(): string[] {
+function fixtureScreeningAnswerIds(): string[] {
   return [
     ...fullAssessmentScenario.screening.map(({ id }) => id),
     ...fullAssessmentScenario.screeningText.map(({ id }) => id),
@@ -177,11 +177,15 @@ function fixtureScreeningIds(): string[] {
 }
 
 function expectedScreeningGoalIds(): string[] {
-  const fixtureIds = new Set(fixtureScreeningIds())
-  return [
-    ...fullAssessmentScenario.requiredScreeningGoalQuestionIds,
-    ...fullAssessmentScenario.optionalScreeningGoalQuestionIds.filter((id) => fixtureIds.has(id)),
-  ]
+  const fixtureIds = new Set(fixtureScreeningAnswerIds())
+  return fullAssessmentScenario.screeningGoalQuestionOrder.filter((id) => fixtureIds.has(id))
+}
+
+function fixtureScreeningIds(): string[] {
+  const answerIds = fixtureScreeningAnswerIds()
+  const expectedGoalIds = expectedScreeningGoalIds()
+  const goalIds = new Set(expectedGoalIds)
+  return [...answerIds.filter((id) => !goalIds.has(id)), ...expectedGoalIds]
 }
 
 function actualScenarioContract(): ActualScenarioContract {
@@ -310,7 +314,9 @@ describe('full assessment E2E fixture server contracts', () => {
     expect(tinglingOption?.label.length).toBeGreaterThan(24)
     expect(tinglingOption?.label).toContain('/')
 
-    expect(fullAssessmentScenario.screeningText.at(-1)?.id).toBe(fullAssessmentScenario.finalScreeningQuestionId)
+    expect(fullAssessmentScenario.screeningGoalQuestionOrder.at(-1)).toBe(
+      fullAssessmentScenario.finalScreeningQuestionId,
+    )
     expect(screeningBank.has(fullAssessmentScenario.stress.reloadAfterScreeningQuestionId)).toBe(true)
     expect(screeningBank.has(fullAssessmentScenario.stress.backtrackAfterScreeningQuestionId)).toBe(true)
   })
