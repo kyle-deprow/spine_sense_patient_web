@@ -13,6 +13,7 @@ import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
 
 import { fullAssessmentScenario } from "./fixtures/fullAssessmentScenario";
+import { ScreeningRouteTracker } from "../src/lib/e2e/screening-route";
 
 const BACKEND_CLEANUP_URL = process.env.PATIENT_WEB_BACKEND_E2E_CLEANUP_URL;
 const BACKEND_REGISTRATION_CODE_URL =
@@ -2364,14 +2365,6 @@ async function waitForScreeningAdvance(
       return;
     }
 
-    const screeningNavGone = !(await page
-      .getByTestId("screening-nav-next")
-      .isVisible({ timeout: 250 })
-      .catch(() => false));
-    if (screeningNavGone) {
-      return;
-    }
-
     if (
       await page
         .getByTestId("screening-section-transition-continue")
@@ -2546,7 +2539,7 @@ async function answerScreening(page: Page, profiler: TransitionProfiler) {
     reloadedDuringScreening: false,
     backtrackedDuringScreening: false,
   };
-  const observedQuestionIds: string[] = [];
+  const routeTracker = new ScreeningRouteTracker();
   const pendingSyncProfiles: Promise<boolean>[] = [];
 
   for (let questionIndex = 0; questionIndex < 80; questionIndex += 1) {
@@ -2557,7 +2550,7 @@ async function answerScreening(page: Page, profiler: TransitionProfiler) {
     ).catch(() => null);
     if (postScreeningStage != null) {
       await settlePendingScreeningSyncProfiles(pendingSyncProfiles);
-      expectCompletedScreeningGoalRoute(observedQuestionIds);
+      expectCompletedScreeningGoalRoute(routeTracker.observedQuestionIds);
       return;
     }
 
@@ -2566,14 +2559,28 @@ async function answerScreening(page: Page, profiler: TransitionProfiler) {
       .isVisible({ timeout: 250 })
       .catch(() => false));
     if (screeningNavGone) {
-      await settlePendingScreeningSyncProfiles(pendingSyncProfiles);
-      expectCompletedScreeningGoalRoute(observedQuestionIds);
-      return;
+      const recoveredStage = await waitForAnyVisibleTestId(
+        page,
+        [...POST_SCREENING_STAGE_TEST_IDS, "screening-nav-next"],
+        30_000,
+      );
+      if (recoveredStage !== "screening-nav-next") {
+        await settlePendingScreeningSyncProfiles(pendingSyncProfiles);
+        expectCompletedScreeningGoalRoute(routeTracker.observedQuestionIds);
+        return;
+      }
+      await waitForScreeningNavIdle(page);
     }
 
     const questionId = await currentVisibleScreeningQuestionId(page);
-    observedQuestionIds.push(questionId);
-    expectScreeningGoalRoutePrefix(observedQuestionIds);
+    const observation = routeTracker.observe(questionId);
+    if (observation === "new") {
+      expectScreeningGoalRoutePrefix(routeTracker.observedQuestionIds);
+    } else {
+      logMilestone(
+        `transport: replaying ${questionId} after its prior save could not be confirmed`,
+      );
+    }
     if (questionId === "A02") {
       const [painId, tinglingId, fullWidthReferenceId] =
         fullAssessmentScenario.uiContracts.a02OptionIds;
@@ -2668,7 +2675,7 @@ async function answerScreening(page: Page, profiler: TransitionProfiler) {
 
     if (await isScreeningSubmitButton(page)) {
       await settlePendingScreeningSyncProfiles(pendingSyncProfiles);
-      expectCompletedScreeningGoalRoute(observedQuestionIds);
+      expectCompletedScreeningGoalRoute(routeTracker.observedQuestionIds);
       return;
     }
 
@@ -2693,7 +2700,9 @@ async function answerScreening(page: Page, profiler: TransitionProfiler) {
       "question",
       () => clickScreeningNextAndWaitForAdvance(page, questionId),
     );
-    await settlePendingScreeningSyncProfiles(pendingSyncProfiles);
+    const syncConfirmed =
+      await settlePendingScreeningSyncProfiles(pendingSyncProfiles);
+    routeTracker.recordSaveResult(questionId, syncConfirmed);
     await waitForScreeningNavIdle(page);
     await expectNoAssessmentBlockingState(page);
 
@@ -2702,9 +2711,7 @@ async function answerScreening(page: Page, profiler: TransitionProfiler) {
       !stressState.reloadedDuringScreening &&
       questionId === STRESS_RELOAD_AFTER_SCREENING_QUESTION_ID
     ) {
-      const syncClean =
-        await settlePendingScreeningSyncProfiles(pendingSyncProfiles);
-      if (syncClean) {
+      if (syncConfirmed) {
         await stressReloadCurrentScreeningQuestion(page);
       } else {
         logMilestone(
