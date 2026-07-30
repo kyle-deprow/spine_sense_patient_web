@@ -103,7 +103,7 @@ export const fullAssessmentScenario = {
       value: ['relieve_pain', 'return_to_work', 'understand_diagnosis'],
     },
     { id: 'G02', value: 'only_if_conservative_fails' },
-    { id: 'G03', value: 'want_a_plan' },
+    { id: 'G03', value: ['want_a_plan'] },
   ] satisfies readonly AssessmentAnswer[],
   screeningText: [
     {
