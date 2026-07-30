@@ -36,8 +36,12 @@ const INTAKE_STORY_AUDIO_UPLOADS_RE =
   /^\/api\/v1\/patients\/me\/intake\/story\/audio-uploads$/i;
 const INTAKE_STORY_TRANSCRIPTIONS_RE =
   /^\/api\/v1\/patients\/me\/intake\/story\/transcriptions(?:\/audio)?$/i;
+const INTAKE_STORY_EXACT_RE = /^\/api\/v1\/patients\/me\/intake\/story$/i;
+const INTAKE_STORY_LIVE_TRANSCRIPTION_SESSION_RE =
+  /^\/api\/v1\/patients\/me\/intake\/story\/live-transcription-session$/i;
 const INTAKE_ALLOWED_RE =
-  /^\/api\/v1\/patients\/me\/intake(?:\/(?:route|progress|progress\/latest|progress\/complete|steps|steps\/[^/]+|complete))?$/i;
+  /^\/api\/v1\/patients\/me\/intake(?:\/(?:progress|progress\/latest|progress\/complete|steps|steps\/[^/]+|complete))?$/i;
+const INTAKE_ROUTE_RE = /^\/api\/v1\/patients\/me\/intake\/route$/i;
 const REPORT_RE = `^\\/api\\/v1\\/patients\\/me\\/reports\\/${UUID_RE}`;
 const REPORT_EXACT_RE = new RegExp(`${REPORT_RE}$`, "i");
 const REPORT_DOWNLOAD_URL_RE = new RegExp(`${REPORT_RE}\\/download-url$`, "i");
@@ -180,6 +184,16 @@ export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
     methods: ["POST"],
     pathPattern: INTAKE_STORY_TRANSCRIPTIONS_RE,
   },
+  {
+    prefix: "/api/v1/patients/me/intake",
+    methods: ["POST"],
+    pathPattern: INTAKE_STORY_LIVE_TRANSCRIPTION_SESSION_RE,
+  },
+  {
+    prefix: "/api/v1/patients/me/intake",
+    methods: ["GET", "PUT"],
+    pathPattern: INTAKE_STORY_EXACT_RE,
+  },
   { prefix: "/api/v1/patients/me/dashboard", methods: ["GET"] },
   { prefix: "/api/v1/patients/me/symptom-trends", methods: ["GET"] },
   {
@@ -263,6 +277,11 @@ export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
     prefix: "/api/v1/patients/me/intake",
     methods: ["GET", "POST", "PUT"],
     pathPattern: INTAKE_ALLOWED_RE,
+  },
+  {
+    prefix: "/api/v1/patients/me/intake",
+    methods: ["POST"],
+    pathPattern: INTAKE_ROUTE_RE,
   },
   {
     prefix: `${MISCRIBE_PREFIX}/recording-policy`,
