@@ -326,6 +326,115 @@ async function expectNoBrowserStorage(page: Page) {
   });
 }
 
+async function hasAuthenticatedCookiePair(page: Page): Promise<boolean> {
+  const cookies = await page.context().cookies();
+  return (
+    hasCookie(cookies, "spine_patient_sess") &&
+    hasCookie(cookies, "spine_patient_refresh")
+  );
+}
+
+async function reconcileCommittedVerification(page: Page): Promise<boolean> {
+  const committed = await expect
+    .poll(
+      async () =>
+        (await page
+          .getByTestId("consent-screen")
+          .isVisible()
+          .catch(() => false)) || (await hasAuthenticatedCookiePair(page)),
+      {
+        message:
+          "verification outcome should expose consent or an authenticated cookie pair",
+        timeout: 5_000,
+      },
+    )
+    .toBe(true)
+    .then(() => true)
+    .catch(() => false);
+  if (!committed) return false;
+
+  if (
+    !(await page
+      .getByTestId("consent-screen")
+      .isVisible()
+      .catch(() => false))
+  ) {
+    await gotoHydratedRoute(page, "/consent", "consent-screen");
+  }
+  return true;
+}
+
+async function recoverCommittedVerificationByLogin(
+  page: Page,
+  email: string,
+): Promise<boolean> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    if (await reconcileCommittedVerification(page)) return true;
+    let retryable = true;
+    try {
+      await gotoHydratedRoute(page, "/login", "login-screen");
+      await page.getByTestId("login-email-input").fill(email);
+      await page.getByTestId("login-password-input").fill(SIGNUP_PASSWORD);
+
+      const loginResponsePromise = page.waitForResponse(
+        (response) =>
+          response.url().includes("/api/auth/login") &&
+          response.request().method() === "POST",
+        { timeout: 45_000 },
+      );
+      await expect(page.getByTestId("login-submit")).toBeEnabled({
+        timeout: 30_000,
+      });
+      await page.getByTestId("login-submit").click();
+      const response = await loginResponsePromise;
+      const responseText = await response.text();
+      await expectNoTokenLeak(responseText);
+
+      if (response.ok()) {
+        await expect(page.getByTestId("consent-screen")).toBeVisible({
+          timeout: 60_000,
+        });
+        return true;
+      }
+      if (response.status() !== 401) {
+        retryable = false;
+        throw new Error(
+          `Verification recovery login failed status=${response.status()}`,
+        );
+      }
+      return false;
+    } catch (error) {
+      lastError = error;
+      if (!retryable) throw error;
+      if (await reconcileCommittedVerification(page)) return true;
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Verification recovery login did not produce a response");
+}
+
+async function restartPendingRegistration(
+  page: Page,
+  email: string,
+): Promise<void> {
+  await gotoHydratedRoute(page, "/register", "register-screen");
+  await page.getByTestId("register-first-name").fill("Synthetic");
+  await page.getByTestId("register-last-name").fill("Verified");
+  await page.getByTestId("register-email").fill(email);
+  await page.getByTestId("register-password").fill(SIGNUP_PASSWORD);
+  await page.getByTestId("register-confirm-password").fill(SIGNUP_PASSWORD);
+  await clickIfPresent(page, "register-consent-storage");
+
+  const response = await submitRegistrationAndWait(page);
+  await expectRegistrationAccepted(page, response);
+  await expect(page.getByTestId("verify-screen")).toBeVisible({
+    timeout: 60_000,
+  });
+}
+
 async function logoutViaBff(page: Page) {
   let status: number | "missing_csrf" | "fetch_failed" = "fetch_failed";
   for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -438,23 +547,20 @@ async function expectRegistrationAccepted(
 
 async function submitVerificationAndWait(
   page: Page,
+  email: string,
   getVerificationCode: () => Promise<string>,
-): Promise<Response> {
+): Promise<Response | null> {
   let lastError: unknown;
-  let lastVerificationCode: string | null = null;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
+    let response: Response | null = null;
+    let recoverable = true;
     try {
       await waitForBrowserNetworkReady(page);
-      try {
-        lastVerificationCode = await getVerificationCode();
-      } catch (error) {
-        lastError = error;
-        if (lastVerificationCode == null) throw error;
-      }
+      const verificationCode = await getVerificationCode();
       for (let index = 0; index < 6; index += 1) {
         await page.getByTestId(`verify-otp-digit-${index}`).fill("");
       }
-      await page.getByTestId("verify-otp-digit-0").fill(lastVerificationCode);
+      await page.getByTestId("verify-otp-digit-0").fill(verificationCode);
       const verifyResponsePromise = page.waitForResponse(
         (response) =>
           response.url().includes("/api/auth/verify/registration/confirm") &&
@@ -465,17 +571,26 @@ async function submitVerificationAndWait(
         timeout: 30_000,
       });
       await page.getByTestId("verify-submit").click();
-      const response = await verifyResponsePromise;
+      response = await verifyResponsePromise;
       if (response.ok()) return response;
+      await expectNoTokenLeak(await response.text());
       lastError = new Error(
         `Verification submit failed status=${response.status()}`,
       );
-      if (![422, 502, 503, 504].includes(response.status())) return response;
+      if (![401, 403, 422, 502, 503, 504].includes(response.status())) {
+        recoverable = false;
+        throw lastError;
+      }
     } catch (error) {
       lastError = error;
     }
+    if (!recoverable) throw lastError;
+
+    if (await reconcileCommittedVerification(page)) return null;
+    if (await recoverCommittedVerificationByLogin(page, email)) return null;
+
     if (attempt === 3) break;
-    await page.waitForTimeout(attempt * 1_000);
+    await restartPendingRegistration(page, email);
   }
 
   throw lastError instanceof Error
@@ -595,11 +710,13 @@ test.describe("patient app web deployment", () => {
         timeout: 60_000,
       });
 
-      const verifyResponse = await submitVerificationAndWait(page, () =>
+      const verifyResponse = await submitVerificationAndWait(page, email, () =>
         getRegistrationVerificationCode(request, email),
       );
-      expect(verifyResponse.ok()).toBeTruthy();
-      await expectNoTokenLeak(await verifyResponse.text());
+      if (verifyResponse != null) {
+        expect(verifyResponse.ok()).toBeTruthy();
+        await expectNoTokenLeak(await verifyResponse.text());
+      }
       await expect(page.getByTestId("consent-screen")).toBeVisible({
         timeout: 60_000,
       });

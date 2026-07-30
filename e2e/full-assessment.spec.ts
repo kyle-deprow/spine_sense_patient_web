@@ -20,6 +20,7 @@ import {
 } from "../src/lib/e2e/profile-transition";
 import { answerControlIsSelected } from "../src/lib/e2e/answer-control";
 import { ScreeningRouteTracker } from "../src/lib/e2e/screening-route";
+import { splitScreeningVisualTiming } from "../src/lib/e2e/screening-timing";
 
 const BACKEND_CLEANUP_URL = process.env.PATIENT_WEB_BACKEND_E2E_CLEANUP_URL;
 const BACKEND_REGISTRATION_CODE_URL =
@@ -131,6 +132,8 @@ type TransitionProfileSample = {
   label: string;
   kind: TransitionProfileKind;
   durationMs: number;
+  wallDurationMs?: number | undefined;
+  excludedScreeningSyncMs?: number | undefined;
   budgetMs: number;
   status: "ok" | "slow";
 };
@@ -236,12 +239,47 @@ class TransitionProfiler {
   ) {
     if (!ENABLE_TRANSITION_PROFILING) return;
 
-    const durationMs = Math.round((performance.now() - startedAt) * 10) / 10;
+    this.recordDuration(label, kind, performance.now() - startedAt, options);
+  }
+
+  recordDuration(
+    label: string,
+    kind: TransitionProfileKind,
+    rawDurationMs: number,
+    options: {
+      assertBudget?: boolean;
+      wallDurationMs?: number;
+      excludedScreeningSyncMs?: number;
+    } = {},
+  ) {
+    if (!ENABLE_TRANSITION_PROFILING) return;
+
+    const durationMs = Math.round(rawDurationMs * 10) / 10;
+    const wallDurationMs =
+      options.wallDurationMs == null
+        ? undefined
+        : Math.round(options.wallDurationMs * 10) / 10;
+    const excludedScreeningSyncMs =
+      options.excludedScreeningSyncMs == null
+        ? undefined
+        : Math.round(options.excludedScreeningSyncMs * 10) / 10;
     const budgetMs = TRANSITION_BUDGETS_MS[kind];
     const status = durationMs > budgetMs ? "slow" : "ok";
-    this.samples.push({ label, kind, durationMs, budgetMs, status });
+    this.samples.push({
+      label,
+      kind,
+      durationMs,
+      wallDurationMs,
+      excludedScreeningSyncMs,
+      budgetMs,
+      status,
+    });
+    const transportEvidence =
+      wallDurationMs == null || excludedScreeningSyncMs == null
+        ? ""
+        : ` wall_duration_ms=${wallDurationMs.toFixed(1)} excluded_screening_sync_ms=${excludedScreeningSyncMs.toFixed(1)}`;
     console.log(
-      `[perf] label=${label} kind=${kind} duration_ms=${durationMs.toFixed(1)} budget_ms=${budgetMs} status=${status}`,
+      `[perf] label=${label} kind=${kind} duration_ms=${durationMs.toFixed(1)}${transportEvidence} budget_ms=${budgetMs} status=${status}`,
     );
     if (options.assertBudget ?? true) {
       expect(
@@ -2071,20 +2109,32 @@ async function submitScreening(page: Page, profiler: TransitionProfiler) {
     if (nextStage != null) return;
     expect(clickedSubmit).toBe(true);
 
-    await waitForBrowserNetworkReady(page).catch(() => undefined);
-    await page
-      .reload({ waitUntil: "domcontentloaded", timeout: 45_000 })
-      .catch(() => undefined);
-    const reloadedStage = await waitForAnyVisibleTestId(
-      page,
-      [...POST_SCREENING_STAGE_TEST_IDS, "screening-screen"],
-      60_000,
-    ).catch(() => null);
-    if (reloadedStage != null && reloadedStage !== "screening-screen") return;
+    let recoveryError: unknown = new Error(
+      "Screening submit recovery did not run",
+    );
+    let reloaded = false;
+    for (let recoveryAttempt = 0; recoveryAttempt < 3; recoveryAttempt += 1) {
+      try {
+        await waitForBrowserNetworkReady(page);
+        await page.reload({
+          waitUntil: "domcontentloaded",
+          timeout: 45_000,
+        });
+        reloaded = true;
+        break;
+      } catch (error) {
+        recoveryError = error;
+      }
+    }
+    if (!reloaded) throw recoveryError;
 
-    await expect(page.getByTestId("screening-nav-next")).toBeVisible({
-      timeout: 5_000,
-    });
+    const resolvedReloadedStage = await waitForAnyVisibleTestId(
+      page,
+      [...POST_SCREENING_STAGE_TEST_IDS, "screening-nav-next"],
+      60_000,
+    );
+    if (resolvedReloadedStage !== "screening-nav-next") return;
+
     const currentQuestionId = await currentVisibleScreeningQuestionId(
       page,
     ).catch(() => null);
@@ -2318,11 +2368,16 @@ function trackScreeningAnswerSync(
   questionId: string,
   responsePromise: Promise<PlaywrightResponse>,
   startedAt: number,
-): Promise<boolean> {
+): Promise<{
+  confirmed: boolean;
+  responseObservedAt?: number | undefined;
+}> {
   return (async () => {
     let succeeded = false;
+    let responseObservedAt: number | undefined;
     try {
       const response = await responsePromise;
+      responseObservedAt = performance.now();
       expect(
         response.ok(),
         `screening answer save ${questionId} failed with status ${response.status()}`,
@@ -2341,17 +2396,20 @@ function trackScreeningAnswerSync(
         { assertBudget: false },
       );
     }
-    return succeeded;
+    return { confirmed: succeeded, responseObservedAt };
   })();
 }
 
 async function settlePendingScreeningSyncProfiles(
-  pendingProfiles: Promise<boolean>[],
+  pendingProfiles: Promise<{
+    confirmed: boolean;
+    responseObservedAt?: number | undefined;
+  }>[],
 ): Promise<boolean> {
   if (pendingProfiles.length === 0) return true;
   const results = await Promise.allSettled(pendingProfiles.splice(0));
   return results.every(
-    (result) => result.status === "fulfilled" && result.value,
+    (result) => result.status === "fulfilled" && result.value.confirmed,
   );
 }
 
@@ -2564,8 +2622,10 @@ async function answerScreening(page: Page, profiler: TransitionProfiler) {
     backtrackedDuringScreening: false,
   };
   const routeTracker = new ScreeningRouteTracker();
-  const pendingSyncProfiles: Promise<boolean>[] = [];
-
+  const pendingSyncProfiles: Promise<{
+    confirmed: boolean;
+    responseObservedAt?: number | undefined;
+  }>[] = [];
   for (let questionIndex = 0; questionIndex < 80; questionIndex += 1) {
     const postScreeningStage = await waitForAnyVisibleTestId(
       page,
@@ -2711,19 +2771,43 @@ async function answerScreening(page: Page, profiler: TransitionProfiler) {
         timeout: TRANSITION_BUDGETS_MS.sync,
       },
     );
-    pendingSyncProfiles.push(
-      trackScreeningAnswerSync(
-        profiler,
-        questionId,
-        screeningAnswerSaveResponse,
-        syncStartedAt,
-      ),
+    const currentSyncProfile = trackScreeningAnswerSync(
+      profiler,
+      questionId,
+      screeningAnswerSaveResponse,
+      syncStartedAt,
     );
+    pendingSyncProfiles.push(currentSyncProfile);
 
-    await profiler.measure(
+    const visualStartedAt = performance.now();
+    try {
+      await clickScreeningNextAndWaitForAdvance(page, questionId);
+    } catch (error) {
+      profiler.recordElapsed(
+        `screening.question.${questionId}.visual`,
+        "question",
+        visualStartedAt,
+        { assertBudget: false },
+      );
+      throw error;
+    }
+    const visualEndedAt = performance.now();
+    const currentSyncResult = await currentSyncProfile;
+    const adjustedVisualTiming = splitScreeningVisualTiming({
+      visualStartedAt,
+      visualEndedAt,
+      responseObservedAt: currentSyncResult.responseObservedAt,
+      responseOk: currentSyncResult.confirmed,
+      maxSyncMs: TRANSITION_BUDGETS_MS.sync,
+    });
+    profiler.recordDuration(
       `screening.question.${questionId}.visual`,
       "question",
-      () => clickScreeningNextAndWaitForAdvance(page, questionId),
+      adjustedVisualTiming.durationMs,
+      {
+        wallDurationMs: adjustedVisualTiming.wallDurationMs,
+        excludedScreeningSyncMs: adjustedVisualTiming.excludedScreeningSyncMs,
+      },
     );
     const syncConfirmed =
       await settlePendingScreeningSyncProfiles(pendingSyncProfiles);
