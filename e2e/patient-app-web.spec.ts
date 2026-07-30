@@ -831,3 +831,215 @@ test.describe("patient app web deployment", () => {
     }
   });
 });
+
+const SEEDED_PATIENT_EMAIL =
+  process.env.PATIENT_WEB_SEEDED_EMAIL ?? "patient@e2e.example.com";
+const SEEDED_PATIENT_PASSWORD =
+  process.env.PATIENT_WEB_SEEDED_PASSWORD ?? "E2eTest123!!";
+
+/** Count object URLs the page creates and revokes, so a leaked handle is visible. */
+async function installObjectUrlLedger(page: Page) {
+  await page.addInitScript(() => {
+    const ledger = { created: [] as string[], revoked: [] as string[] };
+    (window as unknown as { __objectUrlLedger: typeof ledger }).__objectUrlLedger = ledger;
+    const realCreate = URL.createObjectURL.bind(URL);
+    const realRevoke = URL.revokeObjectURL.bind(URL);
+    URL.createObjectURL = (obj: Blob | MediaSource) => {
+      const url = realCreate(obj as Blob);
+      ledger.created.push(url);
+      return url;
+    };
+    URL.revokeObjectURL = (url: string) => {
+      ledger.revoked.push(url);
+      realRevoke(url);
+    };
+  });
+}
+
+async function readObjectUrlLedger(page: Page) {
+  return page.evaluate(() => {
+    const ledger = (
+      window as unknown as { __objectUrlLedger?: { created: string[]; revoked: string[] } }
+    ).__objectUrlLedger ?? { created: [], revoked: [] };
+    return {
+      outstanding: ledger.created.filter((url) => !ledger.revoked.includes(url)),
+      createdCount: ledger.created.length,
+    };
+  });
+}
+
+async function loginSeededPatient(page: Page) {
+  await page.request.get("/api/auth/session");
+  await gotoHydratedRoute(page, "/login", "login-screen");
+
+  const loginResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes("/api/auth/login") &&
+      response.request().method() === "POST",
+  );
+  await page.getByTestId("login-email-input").fill(SEEDED_PATIENT_EMAIL);
+  await page.getByTestId("login-password-input").fill(SEEDED_PATIENT_PASSWORD);
+  await page.getByTestId("login-submit").click();
+
+  const response = await loginResponse;
+  expect(response.ok()).toBeTruthy();
+  await expectNoTokenLeak(await response.text());
+}
+
+const SYNTHETIC_JPEG = Buffer.from(
+  // Minimal JPEG header + EOI. Synthetic bytes only — never patient imagery.
+  "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB" +
+    "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB/9k=",
+  "base64",
+);
+
+test.describe("patient web document photo upload", () => {
+  test.beforeEach(async ({ page }) => {
+    installPhiSafeDiagnostics(page);
+    await installObjectUrlLedger(page);
+  });
+
+  test("offers an image-only photo input and never a simulated camera", async ({
+    page,
+  }) => {
+    const shell = await gotoHydratedRoute(page, "/login", "login-screen");
+    // The BFF forbids camera access outright, so any UI promising an in-page
+    // camera would be promising something the policy cannot deliver.
+    expect(shell?.headers()["permissions-policy"]).toContain("camera=()");
+
+    await loginSeededPatient(page);
+    await gotoHydratedRoute(
+      page,
+      "/profile/documents/upload",
+      "document-upload-screen",
+    );
+
+    const photoCard = page.getByTestId("document-upload-form-take-photo");
+    await expect(photoCard).toBeVisible();
+
+    const chooserPromise = page.waitForEvent("filechooser");
+    await photoCard.click();
+    const chooser = await chooserPromise;
+    const input = chooser.element();
+
+    // Image-only, and no `capture` — the browser decides whether it can offer a
+    // camera; the app never forces or asserts one.
+    const accept = await input.getAttribute("accept");
+    expect(accept).toContain("image/jpeg");
+    expect(accept).toContain("image/png");
+    expect(accept).not.toContain("application/pdf");
+    expect(await input.getAttribute("capture")).toBeNull();
+
+    await chooser.setFiles([]);
+  });
+
+  test("uploads a photo through the BFF without leaking tokens, storage, or the patient filename", async ({
+    page,
+  }) => {
+    await loginSeededPatient(page);
+    const uploadScreen = await gotoHydratedRoute(
+      page,
+      "/profile/documents/upload",
+      "document-upload-screen",
+    );
+    expect(uploadScreen?.headers()["cache-control"]).toContain("no-store");
+
+    const requestUploadPromise = page.waitForResponse(
+      (response) =>
+        response.url().includes("/documents/upload-url") &&
+        response.request().method() === "POST",
+    );
+
+    const chooserPromise = page.waitForEvent("filechooser");
+    await page.getByTestId("document-upload-form-take-photo").click();
+    const chooser = await chooserPromise;
+    await chooser.setFiles({
+      // A patient-chosen filename is itself potentially identifying.
+      name: "jane-doe-lumbar-mri-2026.jpg",
+      mimeType: "image/jpeg",
+      buffer: SYNTHETIC_JPEG,
+    });
+
+    const requestUpload = await requestUploadPromise;
+    expect(requestUpload.ok()).toBeTruthy();
+    const sentBody = requestUpload.request().postData() ?? "";
+    expect(sentBody).toContain("captured-document.jpg");
+    expect(sentBody).not.toContain("jane-doe");
+    expect(requestUpload.request().headers()["x-csrf-token"]).toBeTruthy();
+    await expectNoTokenLeak(await requestUpload.text());
+
+    await expectNoBrowserStorage(page);
+    const cookies = await page.context().cookies();
+    expect(hasCookie(cookies, "spine_patient_sess")).toBe(true);
+    const browserVisibleCookies = await page.evaluate(() => document.cookie);
+    expect(browserVisibleCookies.includes("spine_patient_sess")).toBe(false);
+  });
+
+  test("releases the photo handle when a selection is rejected", async ({
+    page,
+  }) => {
+    await loginSeededPatient(page);
+    await gotoHydratedRoute(
+      page,
+      "/profile/documents/upload",
+      "document-upload-screen",
+    );
+
+    const chooserPromise = page.waitForEvent("filechooser");
+    await page.getByTestId("document-upload-form-take-photo").click();
+    const chooser = await chooserPromise;
+    await chooser.setFiles({
+      name: "referral-notes.pdf",
+      mimeType: "application/pdf",
+      buffer: Buffer.from("%PDF-1.4 synthetic", "utf8"),
+    });
+
+    await expect(
+      page.getByTestId("document-upload-form-file-error"),
+    ).toContainText(/Photos must be JPG, PNG, or HEIC/);
+
+    // A rejected selection must not leave image bytes reachable in the document.
+    await expect
+      .poll(async () => (await readObjectUrlLedger(page)).outstanding.length, {
+        timeout: 10_000,
+      })
+      .toBe(0);
+  });
+
+  test("leaves no photo handle or browser storage behind once a selection is finished", async ({
+    page,
+  }) => {
+    await loginSeededPatient(page);
+    await gotoHydratedRoute(
+      page,
+      "/profile/documents/upload",
+      "document-upload-screen",
+    );
+
+    const chooserPromise = page.waitForEvent("filechooser");
+    await page.getByTestId("document-upload-form-take-photo").click();
+    const chooser = await chooserPromise;
+    await chooser.setFiles({
+      name: "scan.jpg",
+      mimeType: "image/jpeg",
+      buffer: SYNTHETIC_JPEG,
+    });
+
+    // The upload path itself must release the handle; logout is the backstop,
+    // not the thing being relied on.
+    await expect
+      .poll(async () => (await readObjectUrlLedger(page)).outstanding.length, {
+        timeout: 15_000,
+      })
+      .toBe(0);
+    const ledger = await readObjectUrlLedger(page);
+    expect(ledger.createdCount).toBeGreaterThan(0);
+
+    await logoutViaBff(page);
+    await expectNoBrowserStorage(page);
+
+    const cookies = await page.context().cookies();
+    expect(hasCookie(cookies, "spine_patient_sess")).toBe(false);
+    expect(hasCookie(cookies, "spine_patient_refresh")).toBe(false);
+  });
+});
