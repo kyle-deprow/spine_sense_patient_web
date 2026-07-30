@@ -31,7 +31,8 @@ export const fullAssessmentScenario = {
     weightPounds: '145',
     occupation: 'Synthetic desk worker',
     activityLevel: 'lightly-active',
-    chiefComplaint: 'Lower back pain that started gradually and gets worse with prolonged sitting and bending',
+    chiefComplaint:
+      'Lower back pain that started gradually and gets worse with prolonged sitting and bending',
     intakeStepData: {
       'treatment-history': {
         conditions: { items: [], none: true },
@@ -93,6 +94,7 @@ export const fullAssessmentScenario = {
     { id: 'F03_Q1', value: 'occasionally' },
     { id: 'F03_Q3', value: 'no' },
     { id: 'F03_Q2', value: 'moderate' },
+    { id: 'DEF_TEMPO', value: 'over_a_year_stable' },
     { id: 'T00', value: ['no_imaging'] },
     { id: 'T01', value: ['none'] },
     { id: 'T06_Q1', value: 'no' },

@@ -6,6 +6,7 @@ import {
   type FileChooser,
   type Locator,
   type Page,
+  type Request as PlaywrightRequest,
   type Response as PlaywrightResponse,
   type TestInfo,
 } from "@playwright/test";
@@ -41,6 +42,8 @@ const ENABLE_TRANSITION_PROFILING =
   process.env.PATIENT_WEB_E2E_PROFILE_TRANSITIONS !== "false";
 const ASSESSMENT_REPORT_PROXY_PATH_RE =
   /^\/api\/proxy\/api\/v1\/patients\/me\/assessments\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/reports$/i;
+const ADAPTIVE_PREPARE_PROXY_PATH_RE =
+  /^\/api\/proxy\/api\/v1\/patients\/me\/assessments\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/adaptive\/prepare$/i;
 const STRESS_RELOAD_AFTER_SCREENING_QUESTION_ID =
   fullAssessmentScenario.stress.reloadAfterScreeningQuestionId;
 const STRESS_BACKTRACK_AFTER_SCREENING_QUESTION_ID =
@@ -1633,6 +1636,7 @@ async function clickAndWaitForResponse({
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const responsePromise = page.waitForResponse(matches, { timeout });
+    void responsePromise.catch(() => undefined);
     await waitForEnabledAndClick(page, testId);
 
     try {
@@ -1696,12 +1700,258 @@ async function isPostVerificationState(page: Page): Promise<boolean> {
   );
 }
 
+async function isPostVerificationStateImmediate(page: Page): Promise<boolean> {
+  const cookies = await page.context().cookies();
+  return (
+    (hasCookie(cookies, "spine_patient_sess") &&
+      hasCookie(cookies, "spine_patient_refresh")) ||
+    (await page.getByTestId("consent-screen").isVisible()) ||
+    (await page.getByTestId("onboarding-layout").isVisible())
+  );
+}
+
+function isRetryableVerificationCsrfFailure(
+  status: number,
+  responseText: string,
+): boolean {
+  if (status !== 403) return false;
+  try {
+    const payload = JSON.parse(responseText) as unknown;
+    if (
+      payload == null ||
+      typeof payload !== "object" ||
+      Array.isArray(payload)
+    ) {
+      return false;
+    }
+    const error = (payload as Record<string, unknown>).error;
+    return (
+      typeof error === "string" &&
+      ["csrf_missing", "csrf_mismatch", "csrf_invalid"].includes(error)
+    );
+  } catch {
+    return false;
+  }
+}
+
+type VerificationRequestOutcome = {
+  authenticated: boolean;
+  responses: PlaywrightResponse[];
+  failedRequests: PlaywrightRequest[];
+};
+
+function isExactVerificationRequest(
+  request: PlaywrightRequest,
+  pathname: string,
+  code?: string,
+): boolean {
+  if (
+    new URL(request.url()).pathname !== pathname ||
+    request.method() !== "POST"
+  ) {
+    return false;
+  }
+  if (code == null) return true;
+  try {
+    const payload = request.postDataJSON() as unknown;
+    return (
+      isRecord(payload) &&
+      typeof payload.code === "string" &&
+      payload.code === code
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function waitForVerificationAttemptToSettle(
+  page: Page,
+  timeout: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (await isPostVerificationStateImmediate(page)) return true;
+    if (
+      (await page.getByTestId("verify-error").isVisible()) &&
+      (await page.getByTestId("verify-submit").isEnabled())
+    ) {
+      return false;
+    }
+    await page.waitForTimeout(100);
+  }
+  throw new Error("Timed out waiting for verification attempt to settle");
+}
+
+async function observeVerificationConfirmAttempt(
+  page: Page,
+  code: string,
+): Promise<VerificationRequestOutcome> {
+  const requests = new Set<PlaywrightRequest>();
+  const responses: PlaywrightResponse[] = [];
+  const failedRequests: PlaywrightRequest[] = [];
+  const collectRequest = (request: PlaywrightRequest) => {
+    if (
+      isExactVerificationRequest(
+        request,
+        "/api/auth/verify/registration/confirm",
+        code,
+      )
+    ) {
+      requests.add(request);
+    }
+  };
+  const collectResponse = (response: PlaywrightResponse) => {
+    if (requests.has(response.request())) responses.push(response);
+  };
+  const collectFailure = (request: PlaywrightRequest) => {
+    if (requests.has(request)) failedRequests.push(request);
+  };
+
+  page.on("request", collectRequest);
+  page.on("response", collectResponse);
+  page.on("requestfailed", collectFailure);
+  try {
+    await waitForEnabledAndClick(page, "verify-submit");
+    const authenticated = await waitForVerificationAttemptToSettle(
+      page,
+      60_000,
+    );
+    await page.waitForTimeout(100);
+    return { authenticated, responses, failedRequests };
+  } finally {
+    page.off("request", collectRequest);
+    page.off("response", collectResponse);
+    page.off("requestfailed", collectFailure);
+  }
+}
+
+async function observeVerificationResendAttempt(
+  page: Page,
+): Promise<VerificationRequestOutcome & { resent: boolean }> {
+  const requests = new Set<PlaywrightRequest>();
+  const responses: PlaywrightResponse[] = [];
+  const failedRequests: PlaywrightRequest[] = [];
+  const collectRequest = (request: PlaywrightRequest) => {
+    if (
+      isExactVerificationRequest(request, "/api/auth/verify/registration/send")
+    ) {
+      requests.add(request);
+    }
+  };
+  const collectResponse = (response: PlaywrightResponse) => {
+    if (requests.has(response.request())) responses.push(response);
+  };
+  const collectFailure = (request: PlaywrightRequest) => {
+    if (requests.has(request)) failedRequests.push(request);
+  };
+
+  page.on("request", collectRequest);
+  page.on("response", collectResponse);
+  page.on("requestfailed", collectFailure);
+  try {
+    await expect(page.getByTestId("verify-resend")).toBeEnabled({
+      timeout: 30_000,
+    });
+    await page.getByTestId("verify-resend").click();
+    const outcome = await Promise.race([
+      page
+        .getByTestId("verify-resent")
+        .waitFor({ state: "visible", timeout: 60_000 })
+        .then(() => "resent" as const),
+      page
+        .getByTestId("verify-error")
+        .waitFor({ state: "visible", timeout: 60_000 })
+        .then(() => "error" as const),
+    ]);
+    await page.waitForTimeout(100);
+    return {
+      authenticated: false,
+      resent: outcome === "resent",
+      responses,
+      failedRequests,
+    };
+  } finally {
+    page.off("request", collectRequest);
+    page.off("response", collectResponse);
+    page.off("requestfailed", collectFailure);
+  }
+}
+
+async function assertVerificationResponsesDoNotLeakTokens(
+  responses: readonly PlaywrightResponse[],
+): Promise<Map<PlaywrightResponse, string>> {
+  const responseBodies = new Map<PlaywrightResponse, string>();
+  for (const response of responses) {
+    const responseText = await response.text();
+    await expectNoTokenLeak(responseText);
+    responseBodies.set(response, responseText);
+  }
+  return responseBodies;
+}
+
+async function requestFreshVerificationChallenge(page: Page): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    let outcome: (VerificationRequestOutcome & { resent: boolean }) | undefined;
+    try {
+      await waitForBrowserNetworkReady(page, 15_000);
+      if (attempt > 1) {
+        const reloadResponse = await page.reload({
+          waitUntil: "domcontentloaded",
+          timeout: 45_000,
+        });
+        expect(reloadResponse?.ok()).toBeTruthy();
+        await waitForBrowserNetworkReady(page, 15_000);
+      }
+      await expect(page.getByTestId("verify-screen")).toBeVisible({
+        timeout: 60_000,
+      });
+      outcome = await observeVerificationResendAttempt(page);
+    } catch (error) {
+      lastError = error;
+    }
+    if (outcome == null) continue;
+
+    const responseBodies = await assertVerificationResponsesDoNotLeakTokens(
+      outcome.responses,
+    );
+    const successfulResponse = outcome.responses.find((response) =>
+      response.ok(),
+    );
+    if (outcome.resent && successfulResponse != null) return;
+
+    const terminalResponse = outcome.responses.at(-1);
+    if (terminalResponse == null) {
+      lastError = new Error(
+        `verification resend failed without a response; failed_requests=${outcome.failedRequests.length}`,
+      );
+      continue;
+    }
+    const terminalBody = responseBodies.get(terminalResponse) ?? "";
+    lastError = new Error(
+      `verification resend failed status=${terminalResponse.status()}`,
+    );
+    if (
+      ![502, 503, 504].includes(terminalResponse.status()) &&
+      !isRetryableVerificationCsrfFailure(
+        terminalResponse.status(),
+        terminalBody,
+      )
+    ) {
+      throw lastError;
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Verification resend did not produce a response");
+}
+
 async function submitVerificationWithTransientRetry(
   page: Page,
   getVerificationCode: () => Promise<string>,
 ): Promise<PlaywrightResponse | null> {
   let lastError: unknown;
-  let lastVerificationCode: string | null = null;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     if (await isPostVerificationState(page)) return null;
     await expect(page.getByTestId("verify-screen")).toBeVisible({
@@ -1715,40 +1965,59 @@ async function submitVerificationWithTransientRetry(
         timeout: 60_000,
       });
     }
+    let outcome: VerificationRequestOutcome | undefined;
     try {
-      try {
-        lastVerificationCode = await getVerificationCode();
-      } catch (error) {
-        lastError = error;
-        if (lastVerificationCode == null) throw error;
-      }
-      await fillVerificationCode(page, lastVerificationCode);
-      const response = await clickAndWaitForResponse({
-        page,
-        testId: "verify-submit",
-        matches: (response) =>
-          response.url().includes("/api/auth/verify/registration/confirm") &&
-          response.request().method() === "POST",
-      });
-      if (response.ok()) return response;
-
-      lastError = new Error(
-        `verification submit failed status=${response.status()}`,
-      );
-      if (![422, 502, 503, 504].includes(response.status())) {
-        return response;
-      }
+      const verificationCode = await getVerificationCode();
+      await fillVerificationCode(page, verificationCode);
+      outcome = await observeVerificationConfirmAttempt(page, verificationCode);
     } catch (error) {
       lastError = error;
       if (await isPostVerificationState(page)) return null;
     }
-    if (attempt >= 3) break;
-    if (await isOfflineBannerVisible(page)) {
-      await page
-        .reload({ waitUntil: "domcontentloaded", timeout: 45_000 })
-        .catch(() => undefined);
+    if (outcome != null) {
+      const responseBodies = await assertVerificationResponsesDoNotLeakTokens(
+        outcome.responses,
+      );
+      if (outcome.authenticated) return null;
+      const successfulResponse = outcome.responses.find((response) =>
+        response.ok(),
+      );
+      if (successfulResponse != null) return successfulResponse;
+
+      const terminalResponse = outcome.responses.at(-1);
+      if (terminalResponse == null) {
+        lastError = new Error(
+          `verification submit failed without a response; failed_requests=${outcome.failedRequests.length}`,
+        );
+      } else {
+        const terminalBody = responseBodies.get(terminalResponse) ?? "";
+        lastError = new Error(
+          `verification submit failed status=${terminalResponse.status()}`,
+        );
+        if (
+          ![422, 502, 503, 504].includes(terminalResponse.status()) &&
+          !isRetryableVerificationCsrfFailure(
+            terminalResponse.status(),
+            terminalBody,
+          )
+        ) {
+          return terminalResponse;
+        }
+      }
     }
-    await page.waitForTimeout(1500);
+    if (attempt >= 3) break;
+
+    const reloadResponse = await page.reload({
+      waitUntil: "domcontentloaded",
+      timeout: 45_000,
+    });
+    expect(reloadResponse?.ok()).toBeTruthy();
+    await waitForBrowserNetworkReady(page, 15_000);
+    if (await isPostVerificationState(page)) return null;
+    await expect(page.getByTestId("verify-screen")).toBeVisible({
+      timeout: 60_000,
+    });
+    await requestFreshVerificationChallenge(page);
   }
   throw lastError instanceof Error
     ? lastError
@@ -2350,9 +2619,25 @@ function isScreeningAnswersResponseForQuestion(
   response: PlaywrightResponse,
   questionId: string,
 ): boolean {
-  if (!isScreeningAnswersResponse(response)) return false;
+  return (
+    isScreeningAnswersResponse(response) &&
+    isScreeningAnswersRequestForQuestion(response.request(), questionId)
+  );
+}
+
+function isScreeningAnswersRequestForQuestion(
+  request: PlaywrightRequest,
+  questionId: string,
+): boolean {
+  const url = new URL(request.url());
+  if (
+    !url.pathname.endsWith("/screening/answers") ||
+    request.method() !== "PATCH"
+  ) {
+    return false;
+  }
   try {
-    const payload = response.request().postDataJSON();
+    const payload = request.postDataJSON();
     return (
       isRecord(payload) &&
       isRecord(payload.answers) &&
@@ -2370,14 +2655,11 @@ function trackScreeningAnswerSync(
   startedAt: number,
 ): Promise<{
   confirmed: boolean;
-  responseObservedAt?: number | undefined;
 }> {
   return (async () => {
     let succeeded = false;
-    let responseObservedAt: number | undefined;
     try {
       const response = await responsePromise;
-      responseObservedAt = performance.now();
       expect(
         response.ok(),
         `screening answer save ${questionId} failed with status ${response.status()}`,
@@ -2396,14 +2678,13 @@ function trackScreeningAnswerSync(
         { assertBudget: false },
       );
     }
-    return { confirmed: succeeded, responseObservedAt };
+    return { confirmed: succeeded };
   })();
 }
 
 async function settlePendingScreeningSyncProfiles(
   pendingProfiles: Promise<{
     confirmed: boolean;
-    responseObservedAt?: number | undefined;
   }>[],
 ): Promise<boolean> {
   if (pendingProfiles.length === 0) return true;
@@ -2624,7 +2905,6 @@ async function answerScreening(page: Page, profiler: TransitionProfiler) {
   const routeTracker = new ScreeningRouteTracker();
   const pendingSyncProfiles: Promise<{
     confirmed: boolean;
-    responseObservedAt?: number | undefined;
   }>[] = [];
   for (let questionIndex = 0; questionIndex < 80; questionIndex += 1) {
     const postScreeningStage = await waitForAnyVisibleTestId(
@@ -2780,6 +3060,54 @@ async function answerScreening(page: Page, profiler: TransitionProfiler) {
     pendingSyncProfiles.push(currentSyncProfile);
 
     const visualStartedAt = performance.now();
+    const observedRequests = new Map<PlaywrightRequest, number>();
+    const recoverableTransportFailures = new Map<PlaywrightRequest, number>();
+    const successfulResponseHeaders = new Set<PlaywrightRequest>();
+    const completedSuccesses: {
+      request: PlaywrightRequest;
+      requestObservedAt: number;
+      responseFinishedAt: number;
+    }[] = [];
+    const observeExactScreeningRequest = (request: PlaywrightRequest) => {
+      if (!isScreeningAnswersRequestForQuestion(request, questionId)) return;
+      observedRequests.set(request, performance.now());
+    };
+    const observeExactScreeningRequestFailure = (
+      request: PlaywrightRequest,
+    ) => {
+      const requestObservedAt = observedRequests.get(request);
+      if (
+        requestObservedAt == null ||
+        !request.failure()?.errorText.includes("ERR_NETWORK_CHANGED")
+      ) {
+        return;
+      }
+      recoverableTransportFailures.set(request, requestObservedAt);
+    };
+    const observeExactScreeningResponse = (response: PlaywrightResponse) => {
+      if (!response.ok() || !observedRequests.has(response.request())) return;
+      successfulResponseHeaders.add(response.request());
+    };
+    const observeExactScreeningRequestFinished = (
+      request: PlaywrightRequest,
+    ) => {
+      const requestObservedAt = observedRequests.get(request);
+      if (
+        requestObservedAt == null ||
+        !successfulResponseHeaders.has(request)
+      ) {
+        return;
+      }
+      completedSuccesses.push({
+        request,
+        requestObservedAt,
+        responseFinishedAt: performance.now(),
+      });
+    };
+    page.on("request", observeExactScreeningRequest);
+    page.on("requestfailed", observeExactScreeningRequestFailure);
+    page.on("response", observeExactScreeningResponse);
+    page.on("requestfinished", observeExactScreeningRequestFinished);
     try {
       await clickScreeningNextAndWaitForAdvance(page, questionId);
     } catch (error) {
@@ -2790,15 +3118,48 @@ async function answerScreening(page: Page, profiler: TransitionProfiler) {
         { assertBudget: false },
       );
       throw error;
+    } finally {
+      page.off("request", observeExactScreeningRequest);
+      page.off("requestfailed", observeExactScreeningRequestFailure);
+      page.off("response", observeExactScreeningResponse);
+      page.off("requestfinished", observeExactScreeningRequestFinished);
     }
     const visualEndedAt = performance.now();
-    const currentSyncResult = await currentSyncProfile;
+    await currentSyncProfile;
+    const successfulCompletion = completedSuccesses
+      .filter(
+        (candidate) =>
+          !recoverableTransportFailures.has(candidate.request) &&
+          candidate.requestObservedAt >= visualStartedAt &&
+          candidate.responseFinishedAt <= visualEndedAt,
+      )
+      .sort(
+        (left, right) => left.responseFinishedAt - right.responseFinishedAt,
+      )[0];
+    const recoverableTransportStartedAt =
+      successfulCompletion == null
+        ? undefined
+        : [...recoverableTransportFailures.entries()]
+            .filter(
+              ([request, startedAt]) =>
+                request !== successfulCompletion.request &&
+                startedAt >= visualStartedAt &&
+                startedAt <= successfulCompletion.requestObservedAt,
+            )
+            .map(([, startedAt]) => startedAt)
+            .sort((left, right) => left - right)[0];
+    const successfulRequestObservedAt =
+      recoverableTransportStartedAt ?? successfulCompletion?.requestObservedAt;
+    const successfulResponseObservedAt =
+      successfulCompletion?.responseFinishedAt;
     const adjustedVisualTiming = splitScreeningVisualTiming({
       visualStartedAt,
       visualEndedAt,
-      responseObservedAt: currentSyncResult.responseObservedAt,
-      responseOk: currentSyncResult.confirmed,
-      maxSyncMs: TRANSITION_BUDGETS_MS.sync,
+      requestObservedAt: successfulRequestObservedAt,
+      responseObservedAt: successfulResponseObservedAt,
+      responseOk:
+        successfulRequestObservedAt != null &&
+        successfulResponseObservedAt != null,
     });
     profiler.recordDuration(
       `screening.question.${questionId}.visual`,
@@ -2953,10 +3314,100 @@ async function answerIssuedAdaptiveQuestion(
   }
 }
 
+type AdaptivePrepareAttempt = {
+  sequence: number;
+  responseStatus?: number | undefined;
+  requestFailure?: "network_changed" | "other" | undefined;
+};
+
+class AdaptivePrepareTracker {
+  private attempts: AdaptivePrepareAttempt[] = [];
+  private attemptsByRequest = new Map<
+    PlaywrightRequest,
+    AdaptivePrepareAttempt
+  >();
+  private consumedSequence = 0;
+  private page: Page | null = null;
+
+  private readonly onRequest = (request: PlaywrightRequest) => {
+    if (
+      request.method() !== "POST" ||
+      !ADAPTIVE_PREPARE_PROXY_PATH_RE.test(new URL(request.url()).pathname)
+    ) {
+      return;
+    }
+    const attempt = { sequence: this.attempts.length + 1 };
+    this.attempts.push(attempt);
+    this.attemptsByRequest.set(request, attempt);
+  };
+
+  private readonly onResponse = (response: PlaywrightResponse) => {
+    const attempt = this.attemptsByRequest.get(response.request());
+    if (attempt != null) attempt.responseStatus = response.status();
+  };
+
+  private readonly onRequestFailed = (request: PlaywrightRequest) => {
+    const attempt = this.attemptsByRequest.get(request);
+    if (attempt == null) return;
+    attempt.requestFailure = request
+      .failure()
+      ?.errorText.includes("ERR_NETWORK_CHANGED")
+      ? "network_changed"
+      : "other";
+  };
+
+  start(page: Page): void {
+    if (this.page != null) {
+      throw new Error("Adaptive prepare tracker is already active");
+    }
+    this.page = page;
+    page.on("request", this.onRequest);
+    page.on("response", this.onResponse);
+    page.on("requestfailed", this.onRequestFailed);
+  }
+
+  stop(): void {
+    if (this.page == null) return;
+    this.page.off("request", this.onRequest);
+    this.page.off("response", this.onResponse);
+    this.page.off("requestfailed", this.onRequestFailed);
+    this.page = null;
+  }
+
+  consumeRetryableFailure(): "network_changed" | "gateway" {
+    const attempt = this.attempts.at(-1);
+    if (attempt == null || attempt.sequence <= this.consumedSequence) {
+      throw new Error(
+        "Adaptive loading error had no new correlated prepare attempt",
+      );
+    }
+    this.consumedSequence = attempt.sequence;
+
+    if (attempt.responseStatus != null) {
+      if ([502, 503, 504].includes(attempt.responseStatus)) return "gateway";
+      throw new Error(
+        `Adaptive prepare failed with non-retryable status=${attempt.responseStatus}`,
+      );
+    }
+    if (attempt.requestFailure === "network_changed") {
+      return "network_changed";
+    }
+    if (attempt.requestFailure === "other") {
+      throw new Error(
+        "Adaptive prepare failed with a non-retryable transport error",
+      );
+    }
+    throw new Error(
+      "Adaptive loading error appeared before the correlated prepare attempt completed",
+    );
+  }
+}
+
 async function completeAdaptiveIfPresent(
   page: Page,
   generatedAdaptiveAnswers: Map<string, unknown>,
   profiler: TransitionProfiler,
+  prepareTracker: AdaptivePrepareTracker,
 ): Promise<string | null> {
   const adaptiveScreen = page.getByTestId("adaptive-screen");
   let initialStage = await waitForAssessmentStage(page, [
@@ -2964,9 +3415,46 @@ async function completeAdaptiveIfPresent(
     "adaptive-loading-error-state",
     "adaptive-screen",
     "adaptive-error-state",
+    "review-screen",
   ]);
-  for (let retryAttempt = 0; retryAttempt < 3; retryAttempt += 1) {
+  let retryAttempts = 0;
+  let reloadRecoveries = 0;
+  while (
+    initialStage === "adaptive-loading-state" ||
+    initialStage === "adaptive-loading-error-state"
+  ) {
     if (initialStage === "adaptive-loading-error-state") {
+      const failureKind = prepareTracker.consumeRetryableFailure();
+      logMilestone(
+        `transport: adaptive prepare ${failureKind} failure is eligible for bounded recovery`,
+      );
+      if (retryAttempts >= 3) {
+        if (reloadRecoveries >= 2) break;
+        reloadRecoveries += 1;
+        initialStage = await profiler.measure(
+          `adaptive.reload_recovery.${reloadRecoveries}`,
+          "recovery",
+          async () => {
+            await waitForBrowserNetworkReady(page, 15_000);
+            const reloadResponse = await page.reload({
+              waitUntil: "domcontentloaded",
+              timeout: 45_000,
+            });
+            expect(reloadResponse?.ok()).toBeTruthy();
+            await waitForBrowserNetworkReady(page, 15_000);
+            return waitForAssessmentStage(page, [
+              "adaptive-loading-state",
+              "adaptive-loading-error-state",
+              "adaptive-screen",
+              "adaptive-error-state",
+              "review-screen",
+            ]);
+          },
+        );
+        retryAttempts = 0;
+        continue;
+      }
+      retryAttempts += 1;
       initialStage = await profiler.measure(
         "adaptive.retry_loading",
         "stage",
@@ -2976,9 +3464,11 @@ async function completeAdaptiveIfPresent(
             "adaptive-loading-state",
             "adaptive-screen",
             "adaptive-error-state",
+            "review-screen",
           ]);
         },
       );
+      continue;
     }
 
     if (initialStage === "adaptive-loading-state") {
@@ -2990,12 +3480,11 @@ async function completeAdaptiveIfPresent(
             "adaptive-loading-error-state",
             "adaptive-screen",
             "adaptive-error-state",
+            "review-screen",
           ]),
       );
       continue;
     }
-
-    break;
   }
   if (initialStage !== "adaptive-screen") return initialStage;
 
@@ -3495,6 +3984,7 @@ test.describe("patient web full assessment flow", () => {
     const questionnaireMutations = captureQuestionnaireMutations(page);
     const generatedAdaptiveAnswers = new Map<string, unknown>();
     const profiler = new TransitionProfiler();
+    let adaptivePrepareTracker: AdaptivePrepareTracker | null = null;
 
     try {
       let email = uniqueSyntheticEmail();
@@ -3724,12 +4214,15 @@ test.describe("patient web full assessment flow", () => {
         timeout: 60_000,
       });
       await answerScreening(page, profiler);
+      adaptivePrepareTracker = new AdaptivePrepareTracker();
+      adaptivePrepareTracker.start(page);
       await submitScreening(page, profiler);
 
       const postAdaptiveStage = await completeAdaptiveIfPresent(
         page,
         generatedAdaptiveAnswers,
         profiler,
+        adaptivePrepareTracker,
       );
       if (postAdaptiveStage !== "review-screen") {
         throw new Error(
@@ -3836,6 +4329,7 @@ test.describe("patient web full assessment flow", () => {
       ).toBeVisible();
       await expectNoBrowserStorage(page);
     } finally {
+      adaptivePrepareTracker?.stop();
       await profiler.attach(test.info());
     }
   });

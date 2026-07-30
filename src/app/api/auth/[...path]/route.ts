@@ -3,6 +3,7 @@ import type { NextRequest, NextResponse } from "next/server";
 import {
   COOKIE_NAMES,
   clearAuthCookies,
+  clearAuthenticatedSessionCookies,
   clearRegistrationVerificationCookie,
   issueAuthenticatedSessionCookies,
 } from "@/lib/auth/cookies";
@@ -199,6 +200,7 @@ async function handler(request: NextRequest, context: AuthProxyContext) {
   const response = transitionResponse(
     jsonNoStore(safeAuthBody(data), { status: backendResponse.status }),
     isAccountTransition,
+    !(tokenPairIssued && actorId !== undefined),
   );
   if (tokenPairIssued && isAccountTransition && actorId !== undefined) {
     issueAuthenticatedSessionCookies(response, {
@@ -316,8 +318,16 @@ function toTokenPair(data: BackendTokenPair): {
 function transitionResponse(
   response: NextResponse,
   isAccountTransition: boolean,
+  preserveRegistrationVerification = true,
 ): NextResponse {
-  if (isAccountTransition) clearAuthCookies(response);
+  if (!isAccountTransition) return response;
+  if (!preserveRegistrationVerification) {
+    clearAuthCookies(response);
+    return response;
+  }
+
+  clearAuthenticatedSessionCookies(response);
+  issueCsrfCookie(response);
   return response;
 }
 

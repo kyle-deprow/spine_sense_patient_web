@@ -252,6 +252,27 @@ function uniqueSyntheticEmail(): string {
   return `patient-web-signup-${unique}@e2e.example.com`;
 }
 
+function isRetryableCsrfFailure(status: number, responseText: string): boolean {
+  if (status !== 403) return false;
+  try {
+    const payload = JSON.parse(responseText) as unknown;
+    if (
+      payload == null ||
+      typeof payload !== "object" ||
+      Array.isArray(payload)
+    ) {
+      return false;
+    }
+    const error = (payload as Record<string, unknown>).error;
+    return (
+      typeof error === "string" &&
+      ["csrf_missing", "csrf_mismatch", "csrf_invalid"].includes(error)
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function getRegistrationVerificationCode(
   request: APIRequestContext,
   email: string,
@@ -433,6 +454,62 @@ async function restartPendingRegistration(
   await expect(page.getByTestId("verify-screen")).toBeVisible({
     timeout: 60_000,
   });
+}
+
+async function submitVerificationResendAndWait(page: Page): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    let response: Response | null = null;
+    try {
+      await waitForBrowserNetworkReady(page, 15_000);
+      if (attempt > 1) {
+        const reloadResponse = await page.reload({
+          waitUntil: "domcontentloaded",
+          timeout: 45_000,
+        });
+        expect(reloadResponse?.ok()).toBeTruthy();
+        await waitForBrowserNetworkReady(page, 15_000);
+        await expect(page.getByTestId("verify-screen")).toBeVisible({
+          timeout: 30_000,
+        });
+      }
+
+      await expect(page.getByTestId("verify-resend")).toBeEnabled({
+        timeout: 30_000,
+      });
+      const responsePromise = page.waitForResponse(
+        (candidate) =>
+          new URL(candidate.url()).pathname ===
+            "/api/auth/verify/registration/send" &&
+          candidate.request().method() === "POST",
+        { timeout: 30_000 },
+      );
+      void responsePromise.catch(() => undefined);
+      await page.getByTestId("verify-resend").click();
+      response = await responsePromise;
+    } catch (error) {
+      lastError = error;
+    }
+    if (response == null) continue;
+
+    const responseText = await response.text();
+    await expectNoTokenLeak(responseText);
+    if (response.ok()) return response;
+
+    lastError = new Error(
+      `Verification resend failed status=${response.status()}`,
+    );
+    if (
+      ![502, 503, 504].includes(response.status()) &&
+      !isRetryableCsrfFailure(response.status(), responseText)
+    ) {
+      throw lastError;
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Verification resend did not produce a response");
 }
 
 async function logoutViaBff(page: Page) {
@@ -622,6 +699,7 @@ test.describe("patient app web deployment", () => {
     page,
     request,
   }) => {
+    test.setTimeout(180_000);
     await cleanupE2eState(request);
     const email = uniqueSyntheticEmail();
 
@@ -643,15 +721,8 @@ test.describe("patient app web deployment", () => {
         timeout: 60_000,
       });
       expect(page.url()).not.toContain("verificationToken");
-      const resendResponsePromise = page.waitForResponse(
-        (response) =>
-          response.url().includes("/api/auth/verify/registration/send") &&
-          response.request().method() === "POST",
-      );
-      await page.getByTestId("verify-resend").click();
-      const resendResponse = await resendResponsePromise;
+      const resendResponse = await submitVerificationResendAndWait(page);
       expect(resendResponse.ok()).toBeTruthy();
-      await expectNoTokenLeak(await resendResponse.text());
 
       const cookies = await page.context().cookies();
       expect(hasCookie(cookies, "spine_patient_sess")).toBe(false);

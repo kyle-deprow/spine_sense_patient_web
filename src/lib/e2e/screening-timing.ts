@@ -7,9 +7,9 @@ export type ScreeningVisualTiming = {
 type SplitScreeningVisualTimingInput = {
   visualStartedAt: number;
   visualEndedAt: number;
+  requestObservedAt?: number | undefined;
   responseObservedAt?: number | undefined;
   responseOk: boolean;
-  maxSyncMs: number;
 };
 
 /**
@@ -26,8 +26,10 @@ export function splitScreeningVisualTiming(
   );
   if (
     !input.responseOk ||
+    input.requestObservedAt == null ||
     input.responseObservedAt == null ||
-    input.responseObservedAt < input.visualStartedAt ||
+    input.requestObservedAt < input.visualStartedAt ||
+    input.responseObservedAt < input.requestObservedAt ||
     input.responseObservedAt > input.visualEndedAt
   ) {
     return {
@@ -39,8 +41,7 @@ export function splitScreeningVisualTiming(
 
   const excludedScreeningSyncMs = Math.min(
     wallDurationMs,
-    input.maxSyncMs,
-    input.responseObservedAt - input.visualStartedAt,
+    input.responseObservedAt - input.requestObservedAt,
   );
   return {
     durationMs: Math.max(0, wallDurationMs - excludedScreeningSyncMs),

@@ -417,6 +417,78 @@ describe("auth catch-all route handler", () => {
     );
   });
 
+  it("preserves the HttpOnly registration challenge and rotates CSRF after confirmation CSRF denial", async () => {
+    const request = new NextRequest(
+      "http://localhost/api/auth/verify/registration/confirm",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: `${COOKIE_NAMES.registrationVerification}=private-registration-challenge-token`,
+          Origin: ORIGIN,
+        },
+        body: JSON.stringify({ code: "private-registration-code" }),
+      },
+    );
+
+    const response = await POST(
+      request,
+      makeContext(["verify", "registration", "confirm"]),
+    );
+
+    expect(response.status).toBe(403);
+    const setCookies = response.headers.getSetCookie();
+    expect(
+      setCookies.some((cookie) =>
+        cookie.startsWith(`${COOKIE_NAMES.registrationVerification}=;`),
+      ),
+    ).toBe(false);
+    const csrfCookie = setCookies.find((cookie) =>
+      cookie.startsWith(`${COOKIE_NAMES.csrf}=`),
+    );
+    expect(csrfCookie).toBeDefined();
+    expect(csrfCookie).not.toContain("Max-Age=0");
+    expect(mockedBackendFetch).not.toHaveBeenCalled();
+  });
+
+  it("preserves the HttpOnly registration challenge after backend confirmation rejection", async () => {
+    mockedBackendFetch.mockResolvedValue(
+      Response.json({ error: "invalid_code" }, { status: 422 }),
+    );
+
+    const response = await POST(
+      makeAuthRequest(
+        "/api/auth/verify/registration/confirm",
+        { code: "private-registration-code" },
+        {
+          accessToken: ACCESS_TOKEN,
+          registrationVerificationToken: "private-registration-challenge-token",
+        },
+      ),
+      makeContext(["verify", "registration", "confirm"]),
+    );
+
+    expect(response.status).toBe(422);
+    const setCookies = response.headers.getSetCookie();
+    expect(
+      setCookies.some((cookie) =>
+        cookie.startsWith(`${COOKIE_NAMES.registrationVerification}=;`),
+      ),
+    ).toBe(false);
+    expect(
+      setCookies.some(
+        (cookie) =>
+          cookie.startsWith(`${COOKIE_NAMES.access}=;`) &&
+          cookie.includes("Max-Age=0"),
+      ),
+    ).toBe(true);
+    const csrfCookie = setCookies.find((cookie) =>
+      cookie.startsWith(`${COOKIE_NAMES.csrf}=`),
+    );
+    expect(csrfCookie).toBeDefined();
+    expect(csrfCookie).not.toContain("Max-Age=0");
+  });
+
   it("audits an unallowlisted path using only a fixed category", async () => {
     const request = makeAuthRequest(
       "/api/auth/register/private-patient?email=patient@example.test",

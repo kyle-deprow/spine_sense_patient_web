@@ -381,7 +381,7 @@ export function setCsrfCookie(response: NextResponse, token: string): void {
   response.cookies.set(COOKIE_NAMES.csrf, token, csrfCookieOptions());
 }
 
-export function clearAuthCookies(response: NextResponse): void {
+export function clearAuthenticatedSessionCookies(response: NextResponse): void {
   response.cookies.set(COOKIE_NAMES.access, "", {
     ...accessCookieOptions(),
     maxAge: 0,
@@ -402,6 +402,10 @@ export function clearAuthCookies(response: NextResponse): void {
     ...auditActorCookieOptions(),
     maxAge: 0,
   });
+}
+
+export function clearAuthCookies(response: NextResponse): void {
+  clearAuthenticatedSessionCookies(response);
   clearRegistrationVerificationCookie(response);
 }
 
