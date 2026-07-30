@@ -18,6 +18,7 @@ import {
   PROFILE_SUBMISSION_MAX_ATTEMPTS,
   type ProfileTransitionDecision,
 } from "../src/lib/e2e/profile-transition";
+import { answerControlIsSelected } from "../src/lib/e2e/answer-control";
 import { ScreeningRouteTracker } from "../src/lib/e2e/screening-route";
 
 const BACKEND_CLEANUP_URL = process.env.PATIENT_WEB_BACKEND_E2E_CLEANUP_URL;
@@ -2153,13 +2154,31 @@ async function answerOneValue(
   id: string,
   value: string | number,
 ) {
+  const clickIfNotSelected = async (control: Locator): Promise<void> => {
+    const [ariaChecked, ariaPressed, ariaSelected] = await Promise.all([
+      control.getAttribute("aria-checked"),
+      control.getAttribute("aria-pressed"),
+      control.getAttribute("aria-selected"),
+    ]);
+    if (
+      answerControlIsSelected({
+        ariaChecked,
+        ariaPressed,
+        ariaSelected,
+      })
+    ) {
+      return;
+    }
+    await control.click();
+  };
+
   const normalized = String(value);
   const locator = await findVisibleCandidate(
     page,
     answerCandidateTestIds(prefix, id, value),
   );
   if (locator != null) {
-    await locator.click();
+    await clickIfNotSelected(locator);
     return;
   }
 
@@ -2170,7 +2189,7 @@ async function answerOneValue(
       })
       .first();
     if (await painLevel.isVisible({ timeout: 1000 }).catch(() => false)) {
-      await painLevel.click();
+      await clickIfNotSelected(painLevel);
       return;
     }
   }
@@ -2185,7 +2204,7 @@ async function answerOneValue(
       for (const name of [exactOptionLabel, exactLabel]) {
         const control = page.getByRole(role, { name }).first();
         if (await control.isVisible({ timeout: 500 }).catch(() => false)) {
-          await control.click();
+          await clickIfNotSelected(control);
           return;
         }
       }
@@ -2582,6 +2601,7 @@ async function answerScreening(page: Page, profiler: TransitionProfiler) {
     if (observation === "new") {
       expectScreeningGoalRoutePrefix(routeTracker.observedQuestionIds);
     } else {
+      await waitForBrowserNetworkReady(page);
       logMilestone(
         `transport: replaying ${questionId} after its prior save could not be confirmed`,
       );
