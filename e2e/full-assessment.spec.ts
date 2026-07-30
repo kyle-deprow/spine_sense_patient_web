@@ -13,6 +13,11 @@ import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
 
 import { fullAssessmentScenario } from "./fixtures/fullAssessmentScenario";
+import {
+  decideProfileTransition,
+  PROFILE_SUBMISSION_MAX_ATTEMPTS,
+  type ProfileTransitionDecision,
+} from "../src/lib/e2e/profile-transition";
 import { ScreeningRouteTracker } from "../src/lib/e2e/screening-route";
 
 const BACKEND_CLEANUP_URL = process.env.PATIENT_WEB_BACKEND_E2E_CLEANUP_URL;
@@ -3044,16 +3049,63 @@ async function completeProfileIfPresent(page: Page) {
   await fillByTestId(page, "profile-weight", onboarding.weightPounds);
   await fillByTestId(page, "profile-occupation", onboarding.occupation);
   await clickByTestId(page, `profile-activity-${onboarding.activityLevel}`);
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    await waitForBrowserNetworkReady(page).catch(() => undefined);
-    await waitForEnabledAndClick(page, "profile-continue-btn");
-    if (await isChiefComplaintStepVisible(page)) return;
+  for (
+    let attempt = 1;
+    attempt <= PROFILE_SUBMISSION_MAX_ATTEMPTS;
+    attempt += 1
+  ) {
+    await waitForBrowserNetworkReady(page);
 
-    const saveErrorVisible = await page
-      .getByText(/could not save your profile details/i)
-      .isVisible({ timeout: 5_000 })
-      .catch(() => false);
-    if (!saveErrorVisible || attempt === 3) break;
+    if (await isChiefComplaintStepVisible(page)) return;
+    await expect(page.getByTestId("step-profile")).toBeVisible({
+      timeout: 5_000,
+    });
+    await waitForEnabledAndClick(page, "profile-continue-btn");
+
+    const readDecision = async (): Promise<ProfileTransitionDecision> => {
+      const chiefComplaintVisible = await isChiefComplaintStepVisible(page);
+      const profileVisible = await page
+        .getByTestId("step-profile")
+        .isVisible({ timeout: 500 })
+        .catch(() => false);
+      const continueEnabled = profileVisible
+        ? await page
+            .getByTestId("profile-continue-btn")
+            .isEnabled({ timeout: 500 })
+            .catch(() => false)
+        : false;
+      const errorText = profileVisible
+        ? await page
+            .getByTestId("intake-submit-error")
+            .textContent({ timeout: 500 })
+            .catch(() => null)
+        : null;
+
+      return decideProfileTransition(attempt, {
+        chiefComplaintVisible,
+        continueEnabled,
+        errorText,
+        profileVisible,
+      });
+    };
+
+    await expect
+      .poll(async () => (await readDecision()).status, {
+        message:
+          "profile submission should advance or settle into a bounded retryable state",
+        timeout: 30_000,
+      })
+      .not.toBe("pending");
+
+    const decision = await readDecision();
+    if (decision.status === "complete") return;
+
+    if (decision.status !== "retry") {
+      throw new Error("Profile transition did not produce a terminal decision");
+    }
+    console.warn(
+      `[full-assessment] Retrying profile transition after ${decision.reason}`,
+    );
     await page.waitForTimeout(attempt * 1_000);
   }
 }
