@@ -31,7 +31,7 @@ describe('web voice startup audit', () => {
   })
 
   it('logs the enabled policy once per process module lifecycle', async () => {
-    vi.stubEnv('PATIENT_APP_ENVIRONMENT', 'test')
+    vi.stubEnv('ENVIRONMENT', 'test')
     const { auditWebVoicePolicyAtStartup } = await import('@/lib/server/startupAudit')
 
     auditWebVoicePolicyAtStartup()
@@ -47,8 +47,33 @@ describe('web voice startup audit', () => {
   })
 
   it('enables and audits the production voice policy', async () => {
-    vi.stubEnv('PATIENT_APP_ENVIRONMENT', 'production')
+    vi.stubEnv('ENVIRONMENT', 'production')
+    vi.stubEnv('PATIENT_WEB_CLIENT_IP_MODE', 'unavailable')
+    vi.stubEnv('PATIENT_WEB_CREDENTIAL_RATE_LIMIT_STORE', 'redis')
+    vi.stubEnv('REDIS_URL', 'rediss://patient-web-redis.example.test:6380')
     vi.stubEnv('NEXT_PUBLIC_STORAGE_DOMAINS', 'https://patient-documents.example.test')
+    vi.stubEnv('PATIENT_WEB_LOCAL_MINIO_PUBLIC_ORIGIN', '')
+    const { auditWebVoicePolicyAtStartup } = await import('@/lib/server/startupAudit')
+
+    expect(() => auditWebVoicePolicyAtStartup()).not.toThrow()
+    expect(mockedAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'security.web_voice.policy',
+        reason: 'enabled',
+      }),
+    )
+  })
+
+  // The incident this guards: deployed dev legitimately runs
+  // ENVIRONMENT=development against HTTPS Azure Blob origins and has no MinIO.
+  // Keying the local-upload requirement on the tier name crash-looped its
+  // startup probe.
+  it('starts a deployed development tier with HTTPS-only storage and no MinIO origin', async () => {
+    vi.stubEnv('ENVIRONMENT', 'development')
+    vi.stubEnv(
+      'NEXT_PUBLIC_STORAGE_DOMAINS',
+      'https://stphissaispinedev.blob.core.windows.net https://strawssaispinedev.blob.core.windows.net https://stastssaispinedev.blob.core.windows.net',
+    )
     vi.stubEnv('PATIENT_WEB_LOCAL_MINIO_PUBLIC_ORIGIN', '')
     const { auditWebVoicePolicyAtStartup } = await import('@/lib/server/startupAudit')
 

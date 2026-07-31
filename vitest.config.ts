@@ -9,7 +9,6 @@ export default defineConfig({
       PATIENT_WEB_CLIENT_IP_MODE: 'single-bucket',
       PATIENT_WEB_CREDENTIAL_RATE_LIMIT_STORE: 'memory',
       PATIENT_WEB_ALLOWED_ORIGINS: 'https://patient.example.test',
-      PATIENT_APP_ENVIRONMENT: 'test',
       NEXT_PUBLIC_STORAGE_DOMAINS:
         'https://patient-documents.example.test https://assets.example.test http://127.0.0.1:9000',
       PATIENT_WEB_LOCAL_MINIO_PUBLIC_ORIGIN: 'http://127.0.0.1:9000',
