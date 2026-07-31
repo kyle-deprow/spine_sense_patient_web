@@ -1675,23 +1675,67 @@ async function installInterimTranscriptDetector(page: Page, markers: string[]) {
 
 /** Authenticated GET through the BFF proxy. Mirrors
  *  getAuthoritativeScreeningState; patientProxyJson is mutation-only. */
+/**
+ * Navigate, retrying only Chromium's transient network-state errors.
+ *
+ * Against a remote environment the host's network configuration can change
+ * mid-session (`net::ERR_NETWORK_CHANGED`), which aborts an in-flight
+ * navigation. That is an environment condition, not a product failure, so it
+ * is retried here — and only here. Assertion failures are never retried.
+ */
+async function gotoWithNetworkRetry(page: Page, target: string) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      await page.goto(target, { waitUntil: "domcontentloaded" });
+      return;
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/ERR_NETWORK_CHANGED|ERR_NETWORK_IO_SUSPENDED|ERR_CONNECTION_RESET/.test(message)) {
+        throw error;
+      }
+      await page.waitForTimeout(2_000 * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
+
 async function patientProxyGet<T = unknown>(
   page: Page,
   apiPath: string,
 ): Promise<T> {
   const proxied = `/api/proxy${apiPath}`;
-  const response = await page.evaluate(async (target) => {
-    const browserResponse = await fetch(target, { credentials: "include" });
-    return {
-      ok: browserResponse.ok,
-      status: browserResponse.status,
-      text: await browserResponse.text(),
-    };
-  }, proxied);
-  if (!response.ok) {
-    throw new Error(`GET ${apiPath} failed status=${response.status}`);
+  // Mirrors patientProxyJson's retry: against a remote environment the host's
+  // network can flap mid-run, surfacing as `TypeError: Failed to fetch` inside
+  // the page. Retry the transport only — a non-OK HTTP status still throws.
+  let lastFailure = "network_error";
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await waitForBrowserNetworkReady(page);
+    const response = await page.evaluate(async (target) => {
+      try {
+        const browserResponse = await fetch(target, { credentials: "include" });
+        return {
+          networkError: false,
+          ok: browserResponse.ok,
+          status: browserResponse.status,
+          text: await browserResponse.text(),
+        };
+      } catch {
+        return { networkError: true, ok: false, status: 0, text: "" };
+      }
+    }, proxied);
+    if (response.networkError) {
+      lastFailure = "network_error";
+      await page.waitForTimeout(1_000 * attempt);
+      continue;
+    }
+    if (!response.ok) {
+      throw new Error(`GET ${apiPath} failed status=${response.status}`);
+    }
+    return JSON.parse(response.text) as T;
   }
-  return JSON.parse(response.text) as T;
+  throw new Error(`GET ${apiPath} failed: ${lastFailure}`);
 }
 
 type IntakeFrameSummary = { type: unknown; keys: string[] };
@@ -1751,7 +1795,7 @@ test.describe("patient web long-audio story streaming", () => {
     // The helper drives onboarding through the API, so let the app resume at
     // the first incomplete step rather than deep-linking — a hard navigation
     // re-gates on consent.
-    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await gotoWithNetworkRetry(page, "/");
     // Onboarding is deliberately incomplete, so the wizard restarts at its
     // first screen. Wait for whichever gate renders before acting —
     // acceptConsentIfPresent's own 5s probe is too short after a cold reload.
