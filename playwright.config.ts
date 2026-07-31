@@ -15,10 +15,23 @@ const fakeAudioFile = path.resolve(
   __dirname,
   "e2e/fixtures/synthetic-voice.wav",
 );
+// `%noloop` stops the fake device at end-of-file instead of looping. Chromium
+// splits the switch value on `%` and accepts only the literal `noloop`; any
+// other suffix trips a CHECK and aborts the audio service, and a path
+// containing a literal `%` silently falls back to looping. Keep both facts in
+// mind before touching this path.
+const longFakeAudioFile = `${path.resolve(
+  __dirname,
+  "e2e/fixtures/synthetic-voice-long.wav",
+)}%noloop`;
 // `@keyboard-ios` is excluded from every branch: it only runs under the
 // `webkit-iphone` project (a real WebKit engine at an iPhone viewport), so
 // running it on Desktop Chrome would silently pass without exercising the
 // class of bug it exists to catch.
+// `@voice-transcription` already substring-matches `@voice-transcription-long`,
+// so the base inversions exclude the long suite for free. It is named
+// explicitly anyway so a future rename of either tag cannot silently pull a
+// ~10 minute test into the default suite.
 const baseProjectGrepInvert = includeFullAssessment
   ? /@voice-transcription|@prod-report-email|@fhir-oauth|@keyboard-ios/
   : includeProdReportEmail
@@ -53,6 +66,11 @@ export default defineConfig({
     {
       name: "chromium-voice",
       grep: /@voice-transcription/,
+      // Without this the unanchored grep above substring-matches
+      // `@voice-transcription-long`, so the long test would also run here
+      // against the short, *looping* fixture under the 120s global timeout —
+      // and `pnpm test:e2e:voice` is what the prod release gate runs.
+      grepInvert: /@voice-transcription-long/,
       use: {
         ...devices["Desktop Chrome"],
         permissions: ["microphone"],
@@ -61,6 +79,29 @@ export default defineConfig({
             "--use-fake-device-for-media-stream",
             "--use-fake-ui-for-media-stream",
             `--use-file-for-fake-audio-capture=${fakeAudioFile}`,
+          ],
+        },
+      },
+    },
+    {
+      // >2 minutes of real microphone capture through MediaRecorder, so the
+      // budget is dominated by wall-clock audio rather than by the app.
+      // 600s, set here and nowhere else: an in-body `test.setTimeout()` would
+      // silently override this, and 420s would collide exactly with the
+      // server's own INTAKE_STORY_MAX_SOCKET_SECONDS, turning a server socket
+      // timeout into an opaque Playwright timeout.
+      name: "chromium-voice-long",
+      grep: /@voice-transcription-long/,
+      timeout: 600_000,
+      retries: 0,
+      use: {
+        ...devices["Desktop Chrome"],
+        permissions: ["microphone"],
+        launchOptions: {
+          args: [
+            "--use-fake-device-for-media-stream",
+            "--use-fake-ui-for-media-stream",
+            `--use-file-for-fake-audio-capture=${longFakeAudioFile}`,
           ],
         },
       },

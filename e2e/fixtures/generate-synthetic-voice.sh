@@ -5,8 +5,16 @@ set -euo pipefail
 # The test always uploads the checked-in WAV; this script documents and
 # reproduces its synthetic source without recording a real person.
 
+# Variant "long" rebuilds the >2 minute fixture used by the long-audio
+# streaming test. Its narrative lives beside it in synthetic-voice-long.txt so
+# the word count the spec derives its floors from stays in version control.
+variant="${1:-short}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-output_path="${1:-${script_dir}/synthetic-voice.wav}"
+case "${variant}" in
+  short) output_path="${2:-${script_dir}/synthetic-voice.wav}" ;;
+  long) output_path="${2:-${script_dir}/synthetic-voice-long.wav}" ;;
+  *) echo "usage: $0 [short|long] [output.wav]" >&2; exit 2 ;;
+esac
 work_dir="$(mktemp -d)"
 trap 'rm -rf "${work_dir}"' EXIT
 
@@ -29,16 +37,28 @@ if [[ "${espeak_version}" != "${required_espeak_version}" || "${ffmpeg_version}"
   exit 1
 fi
 
-LC_ALL=C espeak-ng \
-  -D \
-  -v en-us \
-  -s 135 \
-  -p 45 \
-  -a 160 \
-  -g 8 \
-  --stdout \
-  "This is a synthetic Spine Sense test recording. The transcription service is working correctly." \
-  >"${work_dir}/source.wav"
+if [[ "${variant}" == "long" ]]; then
+  narrative_path="${script_dir}/synthetic-voice-long.txt"
+  [[ -f "${narrative_path}" ]] || {
+    echo "Missing narrative source ${narrative_path}." >&2
+    exit 1
+  }
+  # -f, not a shell argument: the long narrative exceeds comfortable argv use.
+  LC_ALL=C espeak-ng -D -v en-us -s 135 -p 45 -a 160 -g 8 --stdout \
+    -f "${narrative_path}" \
+    >"${work_dir}/source.wav"
+else
+  LC_ALL=C espeak-ng \
+    -D \
+    -v en-us \
+    -s 135 \
+    -p 45 \
+    -a 160 \
+    -g 8 \
+    --stdout \
+    "This is a synthetic Spine Sense test recording. The transcription service is working correctly." \
+    >"${work_dir}/source.wav"
+fi
 
 ffmpeg -hide_banner -loglevel error -y \
   -i "${work_dir}/source.wav" \
@@ -50,4 +70,18 @@ ffmpeg -hide_banner -loglevel error -y \
   -map_metadata -1 \
   "${output_path}"
 
-echo "Generated ${output_path}"
+if [[ "${variant}" == "long" ]]; then
+  # The spec derives its word-count floor from this file rather than a magic
+  # number, so it must be regenerated with the WAV or the floor drifts.
+  word_count="$(wc -w <"${script_dir}/synthetic-voice-long.txt" | tr -d ' ')"
+  duration="$(ffprobe -v error -show_entries format=duration \
+    -of default=noprint_wrappers=1:nokey=1 "${output_path}")"
+  # Two tail markers, not one: the last marker sits closest to the trailing
+  # `%noloop` silence and is the most exposed to a mis-hear, so requiring any
+  # single one of them would undo the k-of-n tolerance.
+  printf '{\n  "wordCount": %s,\n  "durationSeconds": %.3f,\n  "markers": ["harbor", "lantern", "beacon", "meridian"],\n  "tailMarkers": ["beacon", "meridian"]\n}\n' \
+    "${word_count}" "${duration}" >"${script_dir}/synthetic-voice-long.json"
+  echo "Generated ${output_path} (${word_count} words, ${duration}s)"
+else
+  echo "Generated ${output_path}"
+fi
