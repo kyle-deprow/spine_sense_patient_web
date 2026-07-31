@@ -43,6 +43,20 @@ function boundSessionCookies(actorId: string, accessToken: string): Record<strin
   }
 }
 
+/**
+ * Names of cookies this response actively deletes. A deletion is a Set-Cookie
+ * with an empty value and an immediate expiry; cookies merely absent from the
+ * response are left alone in the browser.
+ */
+function clearedCookieNames(response: { headers: Headers }): Set<string> {
+  return new Set(
+    response.headers
+      .getSetCookie()
+      .filter((cookie) => /^[^=]+=;/.test(cookie) && /Max-Age=0/i.test(cookie))
+      .map((cookie) => cookie.slice(0, cookie.indexOf('='))),
+  )
+}
+
 describe('BFF auth boundary', () => {
   const actorId = '10000000-0000-4000-8000-000000000001'
 
@@ -361,6 +375,59 @@ describe('BFF auth boundary', () => {
       })
       const setCookie = response.headers.getSetCookie().join('\n')
       expect(setCookie).toContain('spine_patient_csrf=')
+    })
+
+    // A probe that finds the access credential gone or rejected has learned
+    // nothing about the refresh token. Destroying the renewal pair here is what
+    // forced a full re-login after any background gap longer than the 15-minute
+    // access cookie, so both expiry branches must leave it standing.
+    it('keeps the refresh credential when the access cookie has lapsed', async () => {
+      const request = makeRequest({
+        spine_patient_refresh: 'still-valid-refresh-token',
+        spine_patient_sess_iat: String(Math.floor(Date.now() / 1000)),
+      })
+      const response = await sessionFromCookie(request)
+
+      expect(response.status).toBe(401)
+      expect(mockedBackendFetch).not.toHaveBeenCalled()
+      expect(clearedCookieNames(response)).toEqual(
+        new Set(['spine_patient_sess', 'spine_patient_audit_actor']),
+      )
+    })
+
+    it('keeps the refresh credential when the backend rejects the access token', async () => {
+      mockedBackendFetch.mockResolvedValue(
+        Response.json({ error: 'token_expired' }, { status: 401 }),
+      )
+
+      const request = makeRequest({
+        ...boundSessionCookies(actorId, 'expired-access-token'),
+        spine_patient_refresh: 'still-valid-refresh-token',
+      })
+      const response = await sessionFromCookie(request)
+
+      expect(response.status).toBe(401)
+      expect(clearedCookieNames(response)).toEqual(
+        new Set(['spine_patient_sess', 'spine_patient_audit_actor']),
+      )
+    })
+
+    // An actor mismatch is a session integrity failure, not an expiry — the
+    // full wipe must survive the narrowing above.
+    it('clears the whole cookie set when the bound actor does not match the backend', async () => {
+      mockedBackendFetch.mockResolvedValue(
+        Response.json({ user_id: '20000000-0000-4000-8000-000000000002' }),
+      )
+
+      const request = makeRequest({
+        ...boundSessionCookies(actorId, 'valid-access-token'),
+        spine_patient_refresh: 'refresh-token',
+      })
+      const response = await sessionFromCookie(request)
+
+      expect(response.status).toBe(401)
+      expect(clearedCookieNames(response)).toContain('spine_patient_refresh')
+      expect(clearedCookieNames(response)).toContain('spine_patient_sess_iat')
     })
   })
 })

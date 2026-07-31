@@ -85,11 +85,18 @@ export async function POST(request: NextRequest) {
       reason: "refresh_token_pair",
     });
   } else {
+    // A caller that presented no refresh cookie at all is an anonymous probe,
+    // not a rejected credential — the client now attempts one refresh whenever
+    // its session probe comes back empty, which includes ordinary first visits.
+    // Tag it so failure-rate alerting can separate "logged-out visitor" from
+    // "the backend refused a real refresh token".
+    const presentedRefreshToken = request.cookies.has(COOKIE_NAMES.refresh);
     auditLog({
       ts: new Date().toISOString(),
       event: "auth.refresh.failure",
       method: "POST",
       status: response.status,
+      ...(presentedRefreshToken ? {} : { reason: "no_refresh_credential" }),
       ...auditContext,
     });
   }

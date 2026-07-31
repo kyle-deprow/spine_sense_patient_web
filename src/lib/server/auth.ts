@@ -6,6 +6,7 @@ import {
   SESSION_MAX_AGE_SECONDS,
   auditActorIdFromRequest,
   clearAuthCookies,
+  clearExpiredAccessCookies,
   clearMfaTransactionCookies,
   issueAuthenticatedSessionCookies,
   setMfaTransactionCookies,
@@ -350,8 +351,12 @@ export async function sessionFromCookie(
 ): Promise<NextResponse> {
   const accessToken = request.cookies.get(COOKIE_NAMES.access)?.value;
   if (!accessToken) {
+    // The 15-minute access cookie lapsed (or was never set). This says nothing
+    // about the 7-day refresh cookie, so retire the access credential only and
+    // let the client spend its refresh token. Clearing the whole set here is
+    // what forced a full re-login after any >15-minute background gap.
     const response = jsonNoStore({ error: "unauthorized" }, { status: 401 });
-    clearAuthCookies(response);
+    clearExpiredAccessCookies(response);
     issueCsrfCookie(response);
     return response;
   }
@@ -370,7 +375,11 @@ export async function sessionFromCookie(
       status: backendResponse.status,
     });
     if (backendResponse.status === 401) {
-      clearAuthCookies(response);
+      // Same reasoning as the missing-cookie branch: a rejected ACCESS token is
+      // not evidence the refresh token is dead. If the whole session really was
+      // revoked, the backend rejects the refresh too and `refreshWithCookie`
+      // performs the full wipe one step later.
+      clearExpiredAccessCookies(response);
       issueCsrfCookie(response);
     }
     return response;

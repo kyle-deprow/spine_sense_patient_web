@@ -409,6 +409,37 @@ export function clearAuthCookies(response: NextResponse): void {
   clearRegistrationVerificationCookie(response);
 }
 
+/**
+ * Retire ONLY the short-lived access credential, leaving the renewal pair
+ * (`refresh` + `sessionIssuedAt`) intact.
+ *
+ * The access cookie lives 15 minutes; the refresh cookie is a deliberately
+ * separate, path-scoped credential. A session probe that finds the access
+ * cookie missing or rejected has learned nothing about the refresh token, so
+ * wiping both turns every >15-minute gap into a forced re-login even though
+ * the patient still holds a renewable session. Callers that have learned the
+ * SESSION is dead (logout, failed refresh, actor mismatch) must still use
+ * `clearAuthCookies`.
+ *
+ * `sessionIssuedAt` must survive too: `refreshWithCookie` reads it to enforce
+ * the 12-hour absolute session lifetime and fails closed without it, so
+ * clearing it alone would break renewal just as thoroughly.
+ *
+ * The audit-actor cookie is cryptographically bound to the access token it was
+ * issued with, so it can never verify again once that token is gone; it is
+ * cleared here and reissued by the next successful refresh.
+ */
+export function clearExpiredAccessCookies(response: NextResponse): void {
+  response.cookies.set(COOKIE_NAMES.access, "", {
+    ...accessCookieOptions(),
+    maxAge: 0,
+  });
+  response.cookies.set(COOKIE_NAMES.auditActor, "", {
+    ...auditActorCookieOptions(),
+    maxAge: 0,
+  });
+}
+
 function clearCookie(
   response: NextResponse,
   name: string,
