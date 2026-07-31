@@ -15,13 +15,17 @@ const fakeAudioFile = path.resolve(
   __dirname,
   "e2e/fixtures/synthetic-voice.wav",
 );
+// `@keyboard-ios` is excluded from every branch: it only runs under the
+// `webkit-iphone` project (a real WebKit engine at an iPhone viewport), so
+// running it on Desktop Chrome would silently pass without exercising the
+// class of bug it exists to catch.
 const baseProjectGrepInvert = includeFullAssessment
-  ? /@voice-transcription|@prod-report-email|@fhir-oauth/
+  ? /@voice-transcription|@prod-report-email|@fhir-oauth|@keyboard-ios/
   : includeProdReportEmail
-    ? /@full-assessment|@voice-transcription|@fhir-oauth/
+    ? /@full-assessment|@voice-transcription|@fhir-oauth|@keyboard-ios/
     : includeFhirOauth
-      ? /@full-assessment|@voice-transcription|@prod-report-email/
-      : /@full-assessment|@voice-transcription|@prod-report-email|@fhir-oauth/;
+      ? /@full-assessment|@voice-transcription|@prod-report-email|@keyboard-ios/
+      : /@full-assessment|@voice-transcription|@prod-report-email|@fhir-oauth|@keyboard-ios/;
 
 export default defineConfig({
   testDir: "./e2e",
@@ -60,6 +64,14 @@ export default defineConfig({
           ],
         },
       },
+    },
+    // Real WebKit at an iPhone viewport. Tag-gated (like `chromium-voice`) so
+    // it never slows the default run. Requires the WebKit browser binary:
+    //   pnpm exec playwright install webkit
+    {
+      name: "webkit-iphone",
+      grep: /@keyboard-ios/,
+      use: { ...devices["iPhone 14"] },
     },
   ],
 });

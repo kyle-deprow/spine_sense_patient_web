@@ -15,6 +15,7 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test --project=chromium",
     "test:e2e:voice": "playwright test --project=chromium-voice",
+    "test:e2e:keyboard-ios": "playwright test --grep @keyboard-ios --project=webkit-iphone",
     "test:e2e:full-assessment": "PATIENT_WEB_INCLUDE_FULL_ASSESSMENT=true playwright test --grep @full-assessment",
     "test:e2e:full-assessment:stress": "PATIENT_WEB_INCLUDE_FULL_ASSESSMENT=true PATIENT_WEB_FULL_ASSESSMENT_STRESS=true playwright test --grep @full-assessment",
     "test:e2e:fhir-oauth": "PATIENT_WEB_INCLUDE_FHIR_OAUTH=true playwright test --grep @fhir-oauth --project=chromium",
