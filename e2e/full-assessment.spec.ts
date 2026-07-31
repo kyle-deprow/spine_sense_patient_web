@@ -4138,17 +4138,35 @@ test.describe("patient web full assessment flow", () => {
         },
       );
       await clickByTestId(page, "medical-history-conditions-none");
-      const negativeMedicalHistoryAnswers = page.getByRole("button", {
-        name: "No",
-        exact: true,
-      });
-      await expect(negativeMedicalHistoryAnswers).toHaveCount(4);
-      for (let remaining = 4; remaining > 0; remaining -= 1) {
-        await negativeMedicalHistoryAnswers
-          .first()
-          .click({ force: true, timeout: 10_000 });
-        await expect(negativeMedicalHistoryAnswers).toHaveCount(remaining - 1);
-        await page.waitForTimeout(500);
+      // These yes/no rows render as accessibilityRole="radio" inside an
+      // accessibilityRole="radiogroup" (SegmentedChoice), not as buttons that get
+      // removed once answered. Selecting a radio only flips its
+      // aria-checked/aria-pressed/aria-selected state, so drive each question by
+      // testID and assert it becomes selected — do not reintroduce a count-based
+      // assertion that expects the control to disappear.
+      const negativeMedicalHistoryPrefixes = [
+        "medical-history-surgery",
+        "medical-history-bone",
+        "medical-history-trauma",
+        "medical-history-meds",
+      ];
+      for (const prefix of negativeMedicalHistoryPrefixes) {
+        await clickByTestId(page, `${prefix}-no`);
+        const control = await byTestId(page, `${prefix}-no`);
+        await expect
+          .poll(async () => {
+            const [ariaChecked, ariaPressed, ariaSelected] = await Promise.all([
+              control.getAttribute("aria-checked"),
+              control.getAttribute("aria-pressed"),
+              control.getAttribute("aria-selected"),
+            ]);
+            return answerControlIsSelected({
+              ariaChecked,
+              ariaPressed,
+              ariaSelected,
+            });
+          })
+          .toBe(true);
       }
       await clickByTestId(page, "medical-history-nicotine-no");
       await profiler.measure(

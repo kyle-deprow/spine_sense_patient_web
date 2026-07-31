@@ -130,6 +130,11 @@ export async function forwardCredentialAuth(
       data,
     );
     const response = clearAndNoStore(normalized.body, normalized.status);
+    // Same reasoning as the refresh failure paths below: a REJECTED credential
+    // is the case where the client most needs a usable CSRF token, because its
+    // next act is to try again. Clearing the token here turned one mistyped
+    // password into a login form that could no longer submit at all.
+    issueCsrfCookie(response);
     if (!backendPath.includes("/mfa/verify"))
       clearMfaTransactionCookies(response);
     return response;
@@ -169,11 +174,17 @@ export async function forwardCredentialAuth(
     (!tokenPairIssued && !hasChallenge && !permitsUnauthenticatedSuccess)
   ) {
     const failure = clearAndNoStore({ error: "invalid_auth_transaction" }, 502);
+    issueCsrfCookie(failure);
     clearMfaTransactionCookies(failure);
     return failure;
   }
   if (tokenPairIssued && actorId === undefined) {
-    return clearAndNoStore({ error: "authenticated_actor_unavailable" }, 502);
+    const failure = clearAndNoStore(
+      { error: "authenticated_actor_unavailable" },
+      502,
+    );
+    issueCsrfCookie(failure);
+    return failure;
   }
 
   const safeBody =
@@ -251,6 +262,13 @@ export async function refreshWithCookie(
       { status: 401 },
     );
     clearAuthCookies(response);
+    // The CSRF cookie is not an authentication credential — it is precisely what
+    // an UNauthenticated client needs in order to log in or register. Tearing it
+    // down along with the auth cookies on a failed refresh strands the user: the
+    // very next login/register attempt fails CSRF validation before it ever
+    // reaches the backend. Always reissue it here, same as sessionFromCookie does
+    // on its 401 paths.
+    issueCsrfCookie(response);
     return response;
   }
 
@@ -263,6 +281,7 @@ export async function refreshWithCookie(
     // Session has exceeded absolute lifetime — force re-login
     const response = jsonNoStore({ error: "session_expired" }, { status: 401 });
     clearAuthCookies(response);
+    issueCsrfCookie(response);
     return response;
   }
 
@@ -275,6 +294,7 @@ export async function refreshWithCookie(
   if (!backendResponse.ok || !hasTokenPair(data)) {
     const response = jsonNoStore({ error: "refresh_failed" }, { status: 401 });
     clearAuthCookies(response);
+    issueCsrfCookie(response);
     return response;
   }
 
@@ -283,7 +303,15 @@ export async function refreshWithCookie(
     data,
   );
   if (actorId === undefined) {
-    return clearAndNoStore({ error: "authenticated_actor_unavailable" }, 502);
+    // Same defect as the three 401 paths above: this clears auth cookies via
+    // clearAndNoStore and must not leave the client without a CSRF cookie either,
+    // or the ensuing forced re-login would itself fail CSRF validation.
+    const response = clearAndNoStore(
+      { error: "authenticated_actor_unavailable" },
+      502,
+    );
+    issueCsrfCookie(response);
+    return response;
   }
 
   const response = jsonNoStore({ success: true });
@@ -304,11 +332,10 @@ export async function logoutWithCookie(
   const accessToken = request.cookies.get(COOKIE_NAMES.access)?.value;
 
   if (!accessToken) {
-    // Already logged out — cookies are absent, nothing to revoke.
-    const response = jsonNoStore({ success: true });
-    clearAuthCookies(response);
-    clearMfaTransactionCookies(response);
-    return response;
+    // Already logged out — cookies are absent, nothing to revoke. This still
+    // clears (a no-op for auth cookies, but not for CSRF/MFA state) and must
+    // still leave a fresh CSRF cookie behind — see clearAccountTransitionState.
+    return clearAccountTransitionState(jsonNoStore({ success: true }));
   }
 
   let backendOk = false;
@@ -330,20 +357,15 @@ export async function logoutWithCookie(
 
   // Always clear browser cookies: even on backend failure the local session
   // must be invalidated so the patient is not left in a half-logged-out state.
+  // A user who just logged out (or tried to) is about to log back in, so the
+  // CSRF cookie this clears must be reissued — see clearAccountTransitionState.
   if (!backendOk) {
-    const response = jsonNoStore(
-      { error: "logout_backend_failed" },
-      { status: 502 },
+    return clearAccountTransitionState(
+      jsonNoStore({ error: "logout_backend_failed" }, { status: 502 }),
     );
-    clearAuthCookies(response);
-    clearMfaTransactionCookies(response);
-    return response;
   }
 
-  const response = jsonNoStore({ success: true });
-  clearAuthCookies(response);
-  clearMfaTransactionCookies(response);
-  return response;
+  return clearAccountTransitionState(jsonNoStore({ success: true }));
 }
 
 export async function sessionFromCookie(
@@ -424,6 +446,26 @@ export function clearAccountTransitionState(
 ): NextResponse {
   clearAuthCookies(response);
   clearMfaTransactionCookies(response);
+  // clearAuthCookies tears down the CSRF cookie along with the session/refresh
+  // cookies. Every current caller of this helper is a failure path — request
+  // policy rejection, rate limiting, malformed JSON, backend unavailability —
+  // where the client's very next move is to retry the mutation (login,
+  // register, or MFA verify). The CSRF cookie is not an authentication
+  // credential; it is exactly what an UNauthenticated client needs to make
+  // that next attempt, so it must always be reissued here. If a future caller
+  // ever wraps an already-authenticated success response in this helper,
+  // reassess: that would double-issue (harmless) but signals the caller
+  // probably wants `clearAuthCookies` directly instead.
+  try {
+    issueCsrfCookie(response);
+  } catch {
+    // getPatientWebConfig() throws when deployment configuration itself is
+    // invalid (e.g. PATIENT_WEB_ALLOWED_ORIGINS unset). validateAuthMutation
+    // already caught that same failure and normalized the response we were
+    // handed into a sanitized "service_unavailable" — there is no valid CSRF
+    // secret to mint a token with in that state, and the whole BFF fails
+    // closed regardless, so swallow this rather than crash the response.
+  }
   return response;
 }
 
