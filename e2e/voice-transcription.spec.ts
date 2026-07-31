@@ -654,7 +654,10 @@ async function patientProxyJson<T = unknown>(
   );
 }
 
-async function completeSyntheticOnboardingThroughApi(page: Page) {
+async function completeSyntheticOnboardingThroughApi(
+  page: Page,
+  options: { stopBeforeChiefComplaint?: boolean } = {},
+) {
   const { onboarding } = fullAssessmentScenario;
   const profileDateOfBirth = fullAssessmentScenario.registration.dateOfBirth;
   const heightCm =
@@ -690,6 +693,12 @@ async function completeSyntheticOnboardingThroughApi(page: Page) {
       },
     },
   );
+
+  if (options.stopBeforeChiefComplaint) {
+    // Chief-complaint completion is gated on a READY story; the caller will
+    // create one by recording through the UI.
+    return;
+  }
 
   await patientProxyJson(
     page,
@@ -766,6 +775,7 @@ async function completeSyntheticOnboardingThroughApi(page: Page) {
 async function registerAndAuthenticateSyntheticPatient(
   page: Page,
   testInfo: TestInfo,
+  options: { stopBeforeChiefComplaint?: boolean } = {},
 ) {
   let lastFailure: string | null = null;
 
@@ -845,7 +855,7 @@ async function registerAndAuthenticateSyntheticPatient(
     timeout: 60_000,
   });
   await acceptConsentIfPresent(page);
-  await completeSyntheticOnboardingThroughApi(page);
+  await completeSyntheticOnboardingThroughApi(page, options);
 
   const cookies = await page.context().cookies();
   expect(
@@ -1558,5 +1568,435 @@ test.describe("patient web voice transcription contracts @voice-transcription", 
       ),
       "assessment Add Note streaming must not use onboarding completed-file upload",
     ).toBe(false);
+  });
+});
+
+// ── Long-audio streaming ──────────────────────────────────────────────────
+//
+// The only test that drives My Story through the *microphone* and the real
+// streaming path. Every other voice test either drives the bulk endpoints at
+// the API layer or constructs its own WebSocket and pushes raw PCM, so this
+// is also the first coverage anywhere of Opus-in-WebM reaching the gateway.
+//
+// Runs only under the `chromium-voice-long` project, which supplies the >2
+// minute fixture with `%noloop` and a 600s timeout. Do NOT add
+// `test.setTimeout()` here: it silently overrides the project timeout.
+
+const LONG_AUDIO_FIXTURE = path.resolve(
+  __dirname,
+  "fixtures/synthetic-voice-long.wav",
+);
+const LONG_AUDIO_META = JSON.parse(
+  fs.readFileSync(
+    path.resolve(__dirname, "fixtures/synthetic-voice-long.json"),
+    "utf8",
+  ),
+) as {
+  wordCount: number;
+  durationSeconds: number;
+  markers: string[];
+  tailMarkers: string[];
+};
+const INTAKE_WS_PATH = "/ws/patients/me/intake/story/live-transcription";
+// Worst case is the connection's 15s finish timer followed by the client's
+// 25s `finalizing` poll, so ~41s. 55s is a deliberately loose upper bound that
+// still fails long before the 600s project timeout would.
+const FINALIZATION_BUDGET_MS = 55_000;
+// Both bounds are derived from the committed narrative rather than guessed.
+// The floor is far above what the opening seconds alone could yield; the
+// ceiling is what makes over-production — a looping fixture or hallucinated
+// silence — falsifiable, which a floor alone cannot do.
+const TRANSCRIPT_WORD_FLOOR = Math.floor(LONG_AUDIO_META.wordCount * 0.55);
+const TRANSCRIPT_WORD_CEILING = Math.ceil(LONG_AUDIO_META.wordCount * 1.25);
+// ~3 chars/word after normalization, derived so it cannot drift from the script.
+const TRANSCRIPT_CHAR_FLOOR = TRANSCRIPT_WORD_FLOOR * 3;
+
+function normalizeTranscript(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Longest run of any repeated 8-gram: catches loop leakage and silence
+ *  hallucination, both of which produce long verbatim repeats. */
+function maxShingleRepeat(normalized: string): number {
+  const words = normalized.split(" ");
+  if (words.length < 8) return 0;
+  const counts = new Map<string, number>();
+  for (let i = 0; i + 8 <= words.length; i += 1) {
+    const shingle = words.slice(i, i + 8).join(" ");
+    counts.set(shingle, (counts.get(shingle) ?? 0) + 1);
+  }
+  return Math.max(...counts.values());
+}
+
+/** Counts DOM text mutations matching fixture markers. A MutationObserver
+ *  cannot miss a brief flash the way polling can, and unlike `toBeVisible()`
+ *  it still fires for hidden or aria-hidden nodes. */
+async function installInterimTranscriptDetector(page: Page, markers: string[]) {
+  await page.addInitScript((watched: string[]) => {
+    const w = window as unknown as { __interimTranscriptHits: number };
+    w.__interimTranscriptHits = 0;
+    const scan = (text: string | null) => {
+      if (!text) return;
+      const haystack = text.toLowerCase();
+      if (watched.some((marker) => haystack.includes(marker))) {
+        w.__interimTranscriptHits += 1;
+      }
+    };
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        if (record.type === "characterData") {
+          scan(record.target.textContent);
+        }
+        record.addedNodes.forEach((node) => scan(node.textContent));
+      }
+    });
+    // addInitScript runs before the document exists, so defer attaching until
+    // there is a node to observe.
+    const attach = () => {
+      if (!document.documentElement) return;
+      observer.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+      });
+    };
+    if (document.documentElement) {
+      attach();
+    } else {
+      document.addEventListener("readystatechange", attach, { once: true });
+      document.addEventListener("DOMContentLoaded", attach, { once: true });
+    }
+  }, markers);
+}
+
+/** Authenticated GET through the BFF proxy. Mirrors
+ *  getAuthoritativeScreeningState; patientProxyJson is mutation-only. */
+async function patientProxyGet<T = unknown>(
+  page: Page,
+  apiPath: string,
+): Promise<T> {
+  const proxied = `/api/proxy${apiPath}`;
+  const response = await page.evaluate(async (target) => {
+    const browserResponse = await fetch(target, { credentials: "include" });
+    return {
+      ok: browserResponse.ok,
+      status: browserResponse.status,
+      text: await browserResponse.text(),
+    };
+  }, proxied);
+  if (!response.ok) {
+    throw new Error(`GET ${apiPath} failed status=${response.status}`);
+  }
+  return JSON.parse(response.text) as T;
+}
+
+type IntakeFrameSummary = { type: unknown; keys: string[] };
+
+/** Records the *shape* of every text frame, never its content — the frames
+ *  themselves are PHI once a real transcript exists. */
+function captureIntakeSocketFrames(page: Page): IntakeFrameSummary[] {
+  const frames: IntakeFrameSummary[] = [];
+  page.on("websocket", (socket) => {
+    if (new URL(socket.url()).pathname !== INTAKE_WS_PATH) return;
+    socket.on("framereceived", (frame) => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(frame.payload as string);
+      } catch {
+        return; // binary or non-JSON: nothing to assert about shape
+      }
+      if (parsed && typeof parsed === "object") {
+        frames.push({
+          type: (parsed as Record<string, unknown>).type,
+          keys: Object.keys(parsed as Record<string, unknown>),
+        });
+      }
+    });
+  });
+  return frames;
+}
+
+test.describe("patient web long-audio story streaming", () => {
+  test.beforeEach(async ({ page }) => {
+    expect(
+      fs.existsSync(LONG_AUDIO_FIXTURE),
+      "The committed long-form WAV fixture is required for long-audio voice E2E.",
+    ).toBe(true);
+    installPhiSafeDiagnostics(page);
+    await cleanupE2eState();
+  });
+
+  test.afterEach(async () => {
+    await cleanupE2eState();
+  });
+
+  test("streams a >2 minute My Story from the microphone and returns the whole transcript @voice-transcription-long", async ({
+    page,
+  }, testInfo) => {
+    const traffic = captureTranscriptionTraffic(page);
+    const frames = captureIntakeSocketFrames(page);
+    await installInterimTranscriptDetector(page, LONG_AUDIO_META.markers);
+    // Stop before chief-complaint: that step now requires a READY
+    // server-owned story, and creating one by recording is the whole point of
+    // this test. Pre-submitting a client-derived narrative would both skip the
+    // flow and be rejected with story_not_ready.
+    await registerAndAuthenticateSyntheticPatient(page, testInfo, {
+      stopBeforeChiefComplaint: true,
+    });
+
+    // The helper drives onboarding through the API, so let the app resume at
+    // the first incomplete step rather than deep-linking — a hard navigation
+    // re-gates on consent.
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    // Onboarding is deliberately incomplete, so the wizard restarts at its
+    // first screen. Wait for whichever gate renders before acting —
+    // acceptConsentIfPresent's own 5s probe is too short after a cold reload.
+    await expect
+      .poll(
+        async () => {
+          if (await page.getByTestId("consent-screen").count()) return "consent";
+          if (await page.getByTestId("step-chief-complaint-select").count())
+            return "step";
+          return "none";
+        },
+        { timeout: 90_000, intervals: [1_000] },
+      )
+      .not.toBe("none");
+    await acceptConsentIfPresent(page);
+    // Consent is followed by the welcome intro, then the wizard opens on
+    // PROFILE. That step's data was already saved through the API, so advance
+    // to YOUR STORY, which is the step under test.
+    await clickIfPresent(page, "welcome-intro-begin", 30_000);
+    // The wizard opens on PROFILE with an empty form — it does not hydrate
+    // from the API-saved step data, and a hard deep-link re-gates on consent —
+    // so fill and submit it the way a patient would.
+    if (!(await page.getByTestId("step-chief-complaint-select").count())) {
+      const { onboarding } = fullAssessmentScenario;
+      await expect(page.getByTestId("step-profile")).toBeVisible({
+        timeout: 60_000,
+      });
+      await page
+        .getByTestId("profile-dob")
+        .fill(onboarding.dateOfBirthDisplay);
+      await page.getByTestId(`profile-sex-${onboarding.sexAtBirth}`).click();
+      await page.getByTestId("profile-height-ft").fill(onboarding.heightFeet);
+      await page.getByTestId("profile-height-in").fill(onboarding.heightInches);
+      await page.getByTestId("profile-weight").fill(onboarding.weightPounds);
+      await page.getByTestId("profile-occupation").fill(onboarding.occupation);
+      await page
+        .getByTestId(`profile-activity-${onboarding.activityLevel}`)
+        .click();
+      const profileContinue = page.getByTestId("profile-continue-btn");
+      await expect(profileContinue).toBeEnabled({ timeout: 30_000 });
+      await profileContinue.click();
+    }
+    await expect(page.getByTestId("step-chief-complaint-select")).toBeVisible({
+      timeout: 90_000,
+    });
+
+    // Voice stays disabled until the server-owned rollout switch resolves, so
+    // wait for enabled rather than merely visible.
+    const voiceOption = page.getByTestId("chief-complaint-voice-option");
+    await expect(voiceOption).toBeEnabled({ timeout: 60_000 });
+
+    // The story must not exist before we record it.
+    const preStory = await patientProxyGet<{ narrative: string | null }>(page, "/api/v1/patients/me/intake/story");
+    expect(
+      preStory.narrative,
+      "the story must be empty before any recording",
+    ).toBeNull();
+
+    await voiceOption.click();
+    await expect(page.getByTestId("step-chief-complaint-voice")).toBeVisible();
+    await page.getByTestId("voice-mic-button").click();
+
+    // Poll the app's own clock: `%noloop` emits silence after EOF rather than
+    // ending the stream, so there is no "audio finished" event to await, and
+    // trailing silence is hallucination surface we want to minimise.
+    const targetSeconds = Math.floor(LONG_AUDIO_META.durationSeconds) + 2;
+    await expect
+      .poll(
+        async () => {
+          for (const id of ["voice-timer-inline", "voice-timer-block"]) {
+            const timer = page.getByTestId(id);
+            if ((await timer.count()) === 0) continue;
+            const text = ((await timer.textContent()) ?? "").trim();
+            const match = /(\d+):(\d{2})/.exec(text);
+            if (match)
+              return Number(match[1]) * 60 + Number(match[2]);
+          }
+          return 0;
+        },
+        {
+          timeout: (targetSeconds + 60) * 1000,
+          intervals: [2_000],
+          message: "recording clock must reach the full fixture duration",
+        },
+      )
+      .toBeGreaterThanOrEqual(targetSeconds);
+
+    // No transcript may have surfaced at any point during capture.
+    expect(
+      await page.evaluate(
+        () =>
+          (window as unknown as { __interimTranscriptHits: number })
+            .__interimTranscriptHits,
+      ),
+      "no interim transcript text may be rendered while recording",
+    ).toBe(0);
+    expect(
+      await page.getByTestId("narrative-input").count(),
+      "the review textarea must not be mounted during recording",
+    ).toBe(0);
+
+    // Finalize through the footer's "I'm Done", not the mic button: while
+    // recording the mic button is a *pause* control, so clicking it again
+    // would suspend capture rather than finish the story.
+    const doneButton = page.getByTestId("voice-done-btn");
+    await expect(doneButton).toBeEnabled({ timeout: 30_000 });
+    const stoppedAt = Date.now();
+    await doneButton.click();
+
+    const narrativeInput = page.getByTestId("narrative-input");
+    await expect(narrativeInput).toBeVisible({
+      timeout: FINALIZATION_BUDGET_MS,
+    });
+    expect(
+      Date.now() - stoppedAt,
+      "finalization must complete inside the client's two 25s phases",
+    ).toBeLessThan(FINALIZATION_BUDGET_MS);
+
+    // ── Transport: streaming only, exactly one socket, no bulk ingress ──
+    expect(
+      traffic.websocketPaths,
+      "exactly one intake story socket — the client has no retry, so a second is a defect",
+    ).toEqual([INTAKE_WS_PATH]);
+    // Positive first: without this the negatives below would also pass a run
+    // that never started a session at all.
+    expect(
+      hasRequest(
+        traffic,
+        "POST",
+        /\/intake\/story\/live-transcription-session$/,
+      ),
+      "the streaming path must mint a live transcription session",
+    ).toBe(true);
+    expectNoBulkUpload(traffic);
+    expect(
+      hasRequest(traffic, "POST", /\/intake\/story\/audio-uploads$/),
+      "the streaming path must not request a bulk upload grant",
+    ).toBe(false);
+    expect(
+      hasRequest(traffic, "POST", /\/intake\/story\/transcriptions(\/audio)?$/),
+      "the streaming path must not call bulk transcription",
+    ).toBe(false);
+
+    // ── Wire: only lifecycle frames, never transcript text ──
+    expect(frames.length, "the gateway must send lifecycle frames").toBeGreaterThan(0);
+    for (const frame of frames) {
+      expect(
+        ["ready", "done", "error"],
+        `unexpected intake frame type: ${String(frame.type)}`,
+      ).toContain(frame.type);
+      expect(
+        frame.keys,
+        "intake lifecycle frames must never carry transcript text",
+      ).not.toContain("text");
+    }
+    expect(
+      frames.some((frame) => frame.type === "done"),
+      "the gateway must complete the stream",
+    ).toBe(true);
+
+    // ── Provenance: the textarea shows exactly what the server returned ──
+    const story = await patientProxyGet<{
+      narrative: string | null;
+      revision: number;
+      input_method: string | null;
+      streaming_enabled: boolean;
+    }>(page, "/api/v1/patients/me/intake/story");
+    expect(story.narrative, "the server must own the transcript").toBeTruthy();
+    // The client stores `narrative.trim()`, so compare against the trimmed
+    // server value rather than failing on incidental whitespace.
+    expect(
+      await narrativeInput.inputValue(),
+      "the textarea must render the authoritative narrative verbatim",
+    ).toBe((story.narrative ?? "").trim());
+    expect(story.input_method).toBe("voice");
+
+    // ── Coverage: the whole recording, not just its opening ──
+    const normalized = normalizeTranscript(story.narrative ?? "");
+    const words = normalized.split(" ").filter(Boolean);
+    expect(
+      words.length,
+      `transcript must reflect ${LONG_AUDIO_META.durationSeconds}s of speech`,
+    ).toBeGreaterThan(TRANSCRIPT_WORD_FLOOR);
+    expect((story.narrative ?? "").length).toBeGreaterThan(
+      TRANSCRIPT_CHAR_FLOOR,
+    );
+    expect(
+      words.length,
+      "more words than the script contains means looped audio or hallucinated silence",
+    ).toBeLessThan(TRANSCRIPT_WORD_CEILING);
+    // k-of-n so a single mis-heard marker is not a red build.
+    const present = LONG_AUDIO_META.markers.filter((marker) =>
+      normalized.includes(marker),
+    );
+    expect(
+      present.length,
+      `expected at least 2 of ${LONG_AUDIO_META.markers.join("/")}, saw ${present.length}`,
+    ).toBeGreaterThanOrEqual(2);
+    // Truncation is directional: it drops the end. Measure position by word
+    // index *from the end* rather than as a forward ratio — a hallucinated
+    // tail lengthens the transcript and would push a forward ratio below its
+    // threshold even though nothing was truncated.
+    const tailHits = LONG_AUDIO_META.tailMarkers
+      .map((marker) => words.lastIndexOf(marker))
+      .filter((index) => index >= 0);
+    expect(
+      tailHits.length,
+      `at least one tail marker (${LONG_AUDIO_META.tailMarkers.join("/")}) must survive`,
+    ).toBeGreaterThan(0);
+    const wordsFromEnd = words.length - Math.max(...tailHits);
+    expect(
+      wordsFromEnd / words.length,
+      "a tail marker must sit in the last 40% of the transcript",
+    ).toBeLessThan(0.4);
+    // Exactly 1, not <=2: a fixture that loops once reproduces every 8-gram
+    // precisely twice, which is the case this guard exists to catch. The
+    // committed script contains no repeated 8-gram, so 1 is achievable.
+    expect(
+      maxShingleRepeat(normalized),
+      "a repeated 8-gram indicates a looping fixture or silence hallucination",
+    ).toBe(1);
+
+    // ── Persistence: server-owned, not local React state ──
+    const edited = `${story.narrative} Reviewed and confirmed by the patient.`;
+    await narrativeInput.fill(edited);
+    await page.getByTestId("text-save-btn").click();
+
+    await expect
+      .poll(
+        async () => {
+          const saved = await patientProxyGet<{
+            revision: number;
+            narrative: string | null;
+            input_method: string | null;
+          }>(page, "/api/v1/patients/me/intake/story");
+          return saved;
+        },
+        { timeout: 60_000, intervals: [2_000] },
+      )
+      .toMatchObject({ narrative: edited, input_method: "voice" });
+
+    const saved = await patientProxyGet<{ revision: number }>(page, "/api/v1/patients/me/intake/story");
+    expect(
+      saved.revision,
+      "saving a reviewed transcript must advance the server revision",
+    ).toBeGreaterThan(story.revision);
   });
 });
