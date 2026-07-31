@@ -22,6 +22,37 @@ const vectorIconFontsDir = path.join(
 const vectorIconFontAssetRe =
   /\/assets\/node_modules\/[^"'`)\s]+\/Fonts\/([A-Za-z0-9_]+)\.[a-f0-9]+\.ttf/g;
 
+// ENVIRONMENT is the single deployment label for the whole platform. The Expo
+// bundle has its own, narrower vocabulary (src/config/env.ts accepts only
+// development | e2e | staging | production and silently falls back to
+// `development` for anything else), so the mapping is explicit and fails loudly
+// on an unknown label rather than quietly shipping a `development` bundle.
+// `local` maps to `e2e` because the Make-managed local patient web stack IS the
+// E2E harness (test-support endpoints, insecure-cookie allowance, Playwright).
+const EXPO_ENVIRONMENT_BY_DEPLOYMENT_LABEL = {
+  local: "e2e",
+  e2e: "e2e",
+  test: "e2e",
+  dev: "development",
+  development: "development",
+  staging: "staging",
+  prod: "production",
+  production: "production",
+};
+
+function resolveExpoEnvironment() {
+  const label = (process.env.ENVIRONMENT ?? "").trim() || "production";
+  const expoEnvironment = EXPO_ENVIRONMENT_BY_DEPLOYMENT_LABEL[label];
+  if (!expoEnvironment) {
+    console.error(
+      `ENVIRONMENT=${label} is not a known deployment label for the patient app export. ` +
+        `Expected one of: ${Object.keys(EXPO_ENVIRONMENT_BY_DEPLOYMENT_LABEL).join(", ")}.`,
+    );
+    process.exit(1);
+  }
+  return expoEnvironment;
+}
+
 fs.rmSync(outputDir, { recursive: true, force: true });
 fs.mkdirSync(outputDir, { recursive: true });
 
@@ -30,7 +61,7 @@ const env = {
   SPINESENSE_PATIENT_WEB_EXPORT: "1",
   SPINESENSE_WEB_OUTPUT: "single",
   SPINESENSE_SKIP_REANIMATED_BABEL_PLUGIN: "1",
-  EXPO_PUBLIC_ENVIRONMENT: process.env.PATIENT_APP_ENVIRONMENT ?? "production",
+  EXPO_PUBLIC_ENVIRONMENT: resolveExpoEnvironment(),
   EXPO_PUBLIC_API_BASE_URL:
     process.env.PATIENT_APP_API_BASE_URL ?? "/api/proxy/api/v1",
   EXPO_PUBLIC_EPIC_FHIR_ENABLED:

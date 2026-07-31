@@ -27,7 +27,8 @@ describe('middleware CSP', () => {
   })
 
   it('uses exact storage connect sources from NEXT_PUBLIC_STORAGE_DOMAINS', () => {
-    vi.stubEnv('PATIENT_APP_ENVIRONMENT', 'production')
+    vi.stubEnv('ENVIRONMENT', 'production')
+    vi.stubEnv('PATIENT_WEB_LOCAL_MINIO_PUBLIC_ORIGIN', '')
     vi.stubEnv(
       'NEXT_PUBLIC_STORAGE_DOMAINS',
       'https://storage.example.test https://cdn.example.test:8443',
@@ -84,6 +85,10 @@ describe('middleware CSP', () => {
 
   it('allows the health route only with the exact Front Door ID in enforce mode', () => {
     vi.stubEnv('ENVIRONMENT', 'production')
+    // A hosted tier rejects http:// storage origins outright, so pin the
+    // HTTPS-only storage profile a deployed environment actually runs.
+    vi.stubEnv('NEXT_PUBLIC_STORAGE_DOMAINS', 'https://patient-documents.example.test')
+    vi.stubEnv('PATIENT_WEB_LOCAL_MINIO_PUBLIC_ORIGIN', '')
     vi.stubEnv('FRONT_DOOR_ORIGIN_GUARD_MODE', 'enforce')
     vi.stubEnv('AZURE_FRONT_DOOR_ID', FRONT_DOOR_ID)
 
@@ -100,6 +105,10 @@ describe('middleware CSP', () => {
 
   it('audits and continues through CSP processing for a rejected shell request', () => {
     vi.stubEnv('ENVIRONMENT', 'staging')
+    // A hosted tier rejects http:// storage origins outright, so pin the
+    // HTTPS-only storage profile a deployed environment actually runs.
+    vi.stubEnv('NEXT_PUBLIC_STORAGE_DOMAINS', 'https://patient-documents.example.test')
+    vi.stubEnv('PATIENT_WEB_LOCAL_MINIO_PUBLIC_ORIGIN', '')
     vi.stubEnv('FRONT_DOOR_ORIGIN_GUARD_MODE', 'audit')
     vi.stubEnv('AZURE_FRONT_DOOR_ID', FRONT_DOOR_ID)
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
