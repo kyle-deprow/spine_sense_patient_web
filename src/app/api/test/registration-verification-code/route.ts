@@ -4,38 +4,28 @@ import { readJsonBody } from "@/lib/server/backend";
 import { jsonNoStore } from "@/lib/server/responses";
 import {
   forwardPatientWebTestSupport,
-  getExactSyntheticRunId,
   hasPatientWebTestSupportAccess,
   isExactSyntheticEmail,
-  isUuid,
   readExactTestSupportObject,
   testSupportBackendFailure,
   testSupportUnavailableResponse,
 } from "@/lib/server/test-support";
-
-const CLEANUP_STATUS = "cleanup_stack_owned" as const;
 
 export async function POST(request: NextRequest) {
   if (!hasPatientWebTestSupportAccess(request)) {
     return jsonNoStore({ detail: "Not found" }, { status: 404 });
   }
 
-  const record = await readExactTestSupportObject(request, ["email", "run_id"]);
-  const runId = record?.run_id;
+  const record = await readExactTestSupportObject(request, ["email"]);
   const email = record?.email;
-  const emailRunId = getExactSyntheticRunId(email);
-  if (
-    !isUuid(runId) ||
-    !isExactSyntheticEmail(email) ||
-    emailRunId?.toLowerCase() !== runId.toLowerCase()
-  ) {
+  if (!isExactSyntheticEmail(email)) {
     return jsonNoStore({ detail: "Not found" }, { status: 404 });
   }
 
   try {
     const backendResponse = await forwardPatientWebTestSupport(
-      "/test/e2e-cleanup",
-      { run_id: runId, email },
+      "/test/registration-verification-code",
+      { email },
     );
     if (backendResponse === null) return testSupportUnavailableResponse();
     if (!backendResponse.ok) {
@@ -43,15 +33,16 @@ export async function POST(request: NextRequest) {
     }
 
     const backendBody = await readJsonBody<unknown>(backendResponse);
-    if (
-      backendBody == null ||
-      typeof backendBody !== "object" ||
-      Array.isArray(backendBody) ||
-      (backendBody as Record<string, unknown>).status !== CLEANUP_STATUS
-    ) {
+    const code =
+      backendBody != null &&
+      typeof backendBody === "object" &&
+      !Array.isArray(backendBody)
+        ? (backendBody as Record<string, unknown>).code
+        : undefined;
+    if (typeof code !== "string" || !/^\d{6}$/u.test(code)) {
       return testSupportUnavailableResponse();
     }
-    return jsonNoStore({ status: CLEANUP_STATUS });
+    return jsonNoStore({ code });
   } catch {
     return testSupportUnavailableResponse();
   }

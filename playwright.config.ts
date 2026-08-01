@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import scopeManifest from "./e2e/scopes.json";
 
 import { acceptedConsentStorageState } from "./e2e/fixtures/cookieConsent";
 
@@ -6,10 +7,40 @@ const baseURL = process.env.PATIENT_WEB_BASE_URL ?? "http://127.0.0.1:43101";
 const outputDir =
   process.env.PATIENT_WEB_E2E_OUTPUT_DIR ??
   "/tmp/spine-sense-patient-web-test-results";
+const requestedScopes = (process.env.E2E_SCOPES ?? "full")
+  .split(",")
+  .map((scope) => scope.trim())
+  .filter(Boolean);
+const unknownScopes = requestedScopes.filter(
+  (scope) => !(scope in scopeManifest.scopes),
+);
+if (unknownScopes.length > 0) {
+  throw new Error(
+    `E2E_SCOPES contains unsupported scope(s): ${unknownScopes.join(",")}`,
+  );
+}
+const selectedTags = requestedScopes.map(
+  (scope) =>
+    scopeManifest.scopes[scope as keyof typeof scopeManifest.scopes]?.tag ??
+    `@scope-${scope}`,
+);
+const selectedSpecs = [
+  ...new Set(
+    requestedScopes.map(
+      (scope) =>
+        scopeManifest.scopes[scope as keyof typeof scopeManifest.scopes]?.spec,
+    ),
+  ),
+].filter((spec): spec is string => typeof spec === "string");
+
+if (selectedSpecs.length === 0) {
+  throw new Error("E2E_SCOPES did not resolve to any approved Playwright spec");
+}
 
 export default defineConfig({
-  testDir: "./e2e",
-  testMatch: ["full-assessment.spec.ts"],
+  testDir: ".",
+  testMatch: selectedSpecs,
+  grep: new RegExp(selectedTags.join("|")),
   outputDir,
   timeout: 120_000,
   expect: {
@@ -17,7 +48,9 @@ export default defineConfig({
   },
   fullyParallel: false,
   workers: 1,
-  retries: process.env.CI ? 1 : 0,
+  // Recovery is classified inside the canonical journey. A Playwright-level
+  // retry would replay deterministic app, clinical, or authorization failures.
+  retries: 0,
   reporter: [["list"]],
   use: {
     baseURL,
