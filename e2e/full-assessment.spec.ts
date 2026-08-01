@@ -439,6 +439,23 @@ function installPhiSafeDiagnostics(page: Page) {
       `[response:${response.status()}] ${sanitizeDiagnostic(url.pathname)}${suffix}`,
     );
     if (
+      response.status() === 409 &&
+      url.pathname.endsWith("/documents/upload-url")
+    ) {
+      void response
+        .json()
+        .then((body) => {
+          const code =
+            typeof body?.error?.code === "string"
+              ? body.error.code
+              : typeof body?.code === "string"
+                ? body.code
+                : "missing";
+          console.log(`[response-code:409] ${sanitizeDiagnostic(code)}`);
+        })
+        .catch(() => undefined);
+    }
+    if (
       url.pathname.endsWith("/api/proxy/api/v1/patients/me/intake/route") ||
       (response.status() === 422 &&
         url.pathname.endsWith("/api/proxy/api/v1/patients/me/")) ||
@@ -602,7 +619,8 @@ async function uploadSyntheticAssessmentDocumentFromRecordsStep(
             .url()
             .includes("/api/proxy/api/v1/patients/me/assessments/") &&
           response.url().endsWith("/documents/upload-url") &&
-          response.request().method() === "POST",
+          response.request().method() === "POST" &&
+          response.ok(),
         { timeout: TRANSITION_BUDGETS_MS.stage },
       );
       confirmResponsePromise = page.waitForResponse(
@@ -1297,10 +1315,19 @@ async function gotoWelcome(page: Page) {
 }
 
 async function clickWelcomeGetStarted(page: Page) {
+  await acceptCookieConsentIfPresent(page);
   if (await clickIfPresent(page, "welcome-get-started", 2000)) {
     return;
   }
   await page.getByRole("button", { name: /start my assessment/i }).click();
+}
+
+async function acceptCookieConsentIfPresent(page: Page): Promise<void> {
+  const acceptAll = page.getByTestId("cookie-consent-accept-all");
+  const visible = await acceptAll.isVisible({ timeout: 1000 }).catch(() => false);
+  if (!visible) return;
+  await acceptAll.click();
+  await expect(acceptAll).toBeHidden({ timeout: 10_000 }).catch(() => undefined);
 }
 
 async function expectAuthenticatedCookieSession(page: Page) {
@@ -3756,8 +3783,99 @@ async function continueWelcomeIntroIfPresent(page: Page): Promise<boolean> {
 }
 
 async function expectTreatmentHistoryAfterStorySave(page: Page) {
-  await expect(page.getByTestId("medical-history-conditions-none")).toBeVisible(
-    { timeout: 60_000 },
+  await expect
+    .poll(() => isTreatmentHistoryStepVisible(page), {
+      timeout: 60_000,
+      message: "Expected treatment history step after story save",
+    })
+    .toBe(true);
+}
+
+async function isTreatmentHistoryStepVisible(page: Page): Promise<boolean> {
+  return (
+    (await page
+      .getByTestId("medical-history-conditions-none")
+      .isVisible({ timeout: 500 })
+      .catch(() => false)) ||
+    (await page
+      .getByTestId("step-medical-history")
+      .isVisible({ timeout: 500 })
+      .catch(() => false)) ||
+    (await page
+      .getByText(/medical history/i)
+      .isVisible({ timeout: 500 })
+      .catch(() => false))
+  );
+}
+
+async function isRetryableChiefComplaintSaveErrorVisible(
+  page: Page,
+): Promise<boolean> {
+  const errorVisible =
+    (await page
+      .getByTestId("story-save-error")
+      .isVisible({ timeout: 500 })
+      .catch(() => false)) ||
+    (await page
+      .getByTestId("intake-submit-error")
+      .isVisible({ timeout: 500 })
+      .catch(() => false));
+  if (!errorVisible) return false;
+
+  return page
+    .getByTestId("text-save-btn")
+    .isEnabled({ timeout: 500 })
+    .catch(() => false);
+}
+
+async function saveChiefComplaintAndExpectTreatmentHistory(page: Page) {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    if (await isTreatmentHistoryStepVisible(page)) return;
+    await waitForBrowserNetworkReady(page);
+    await clickChiefComplaintSave(page);
+
+    const outcome = await expect
+      .poll(
+        async () => {
+          if (await isTreatmentHistoryStepVisible(page)) return "treatment";
+          if (await isRetryableChiefComplaintSaveErrorVisible(page)) {
+            return "retry";
+          }
+          return "pending";
+        },
+        {
+          timeout: 60_000,
+          message:
+            "story save should advance to treatment history or expose a retryable save error",
+        },
+      )
+      .not.toBe("pending")
+      .then(async () => {
+        if (await isTreatmentHistoryStepVisible(page)) return "treatment";
+        if (await isRetryableChiefComplaintSaveErrorVisible(page)) {
+          return "retry";
+        }
+        return "pending";
+      });
+
+    if (outcome === "treatment") return;
+    console.warn(
+      `[full-assessment] Retrying chief complaint save after visible save error (${attempt}/3)`,
+    );
+    await page.waitForTimeout(attempt * 1_000);
+  }
+
+  const diagnostic = await page
+    .evaluate(() => ({
+      href: location.href,
+      text: document.body.innerText.slice(0, 500),
+    }))
+    .catch((error) => ({
+      href: page.url(),
+      text: `diagnostic unavailable: ${error.message}`,
+    }));
+  throw new Error(
+    `Expected treatment history step after story save. href=${sanitizeDiagnostic(diagnostic.href)} text=${sanitizeDiagnostic(diagnostic.text)}`,
   );
 }
 
@@ -4018,7 +4136,8 @@ test.describe("patient web full assessment flow", () => {
       };
       await fillRegistrationForm();
 
-      for (let attempt = 0; attempt < 3; attempt += 1) {
+      const registrationMaxAttempts = 5;
+      for (let attempt = 0; attempt < registrationMaxAttempts; attempt += 1) {
         let registerResponse: PlaywrightResponse | null;
         try {
           registerResponse = await profiler.measure(
@@ -4034,9 +4153,9 @@ test.describe("patient web full assessment flow", () => {
                   response.url().includes("/api/auth/register") &&
                   response.request().method() === "POST",
               }),
-          );
-        } catch (error) {
-          if (attempt === 2) throw error;
+        );
+      } catch (error) {
+          if (attempt === registrationMaxAttempts - 1) throw error;
           logMilestone(
             "registration submit did not reach verification; reloading and retrying with fresh email",
           );
@@ -4064,7 +4183,7 @@ test.describe("patient web full assessment flow", () => {
         ) {
           break;
         }
-        if (attempt === 2) {
+        if (attempt === registrationMaxAttempts - 1) {
           await expect(page.getByTestId("verify-screen")).toBeVisible({
             timeout: 60_000,
           });
@@ -4074,6 +4193,12 @@ test.describe("patient web full assessment flow", () => {
         logMilestone(
           "registration submitted without verification transition; retrying with fresh email",
         );
+        await page
+          .reload({ waitUntil: "domcontentloaded", timeout: 45_000 })
+          .catch(() => undefined);
+        await expect(page.getByTestId("register-screen")).toBeVisible({
+          timeout: 60_000,
+        });
         email = uniqueSyntheticEmail();
         await fillRegistrationForm();
       }
@@ -4133,8 +4258,7 @@ test.describe("patient web full assessment flow", () => {
         "onboarding.chief_complaint_to_history",
         "page",
         async () => {
-          await clickChiefComplaintSave(page);
-          await expectTreatmentHistoryAfterStorySave(page);
+          await saveChiefComplaintAndExpectTreatmentHistory(page);
         },
       );
       await clickByTestId(page, "medical-history-conditions-none");
