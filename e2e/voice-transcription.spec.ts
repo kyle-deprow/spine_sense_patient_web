@@ -1961,7 +1961,6 @@ test.describe("patient web long-audio story streaming", () => {
       narrative: string | null;
       revision: number;
       input_method: string | null;
-      streaming_enabled: boolean;
     }>(page, "/api/v1/patients/me/intake/story");
     expect(story.narrative, "the server must own the transcript").toBeTruthy();
     // The client stores `narrative.trim()`, so compare against the trimmed
