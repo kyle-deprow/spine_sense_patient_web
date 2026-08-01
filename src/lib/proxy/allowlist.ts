@@ -63,6 +63,10 @@ const TREATMENT_FOLLOWUPS_RE = new RegExp(
   `^\\/api\\/v1\\/patients\\/me\\/treatments\\/${UUID_RE}\\/followups$`,
   "i",
 );
+const MEDICATION_ITEM_RE = new RegExp(
+  `^\\/api\\/v1\\/patients\\/me\\/medications\\/${UUID_RE}$`,
+  "i",
+);
 const MISCRIBE_PREFIX = "/api/v1/patients/me/miscribe";
 const MISCRIBE_RECORDINGS_PREFIX = `${MISCRIBE_PREFIX}/recordings`;
 const MISCRIBE_RECORDING_RE = `^\\/api\\/v1\\/patients\\/me\\/miscribe\\/recordings\\/${UUID_RE}`;
@@ -230,6 +234,21 @@ export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
     prefix: "/api/v1/patients/me/treatments",
     methods: ["POST"],
     pathPattern: TREATMENT_FOLLOWUPS_RE,
+  },
+  // Medication list/create plus the per-item taking/stopped toggle. The Track
+  // screen fails closed when this query errors, so without these entries the
+  // whole Treatments tab is unusable on web. The backend independently
+  // enforces per-patient access; DELETE stays unexposed because no web client
+  // calls it. Mounted slash-free on the backend — no trailing-slash entry.
+  {
+    prefix: "/api/v1/patients/me/medications",
+    methods: ["GET", "POST"],
+    match: "exact",
+  },
+  {
+    prefix: "/api/v1/patients/me/medications",
+    methods: ["PATCH"],
+    pathPattern: MEDICATION_ITEM_RE,
   },
   // Tester/dev comment channel — @test.com accounts only. Exposing it here is
   // safe on its own: the backend independently enforces tester-only access and

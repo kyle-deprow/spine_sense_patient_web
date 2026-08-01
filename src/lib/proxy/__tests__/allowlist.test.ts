@@ -858,6 +858,71 @@ describe("proxy allowlist", () => {
     ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
   });
 
+  // The Track screen loads medications alongside treatments and fails closed
+  // when either query errors, so a missing medications route blanks the whole
+  // Treatments tab on web (observed live 2026-08-01: GET returned 404
+  // proxy_path_not_allowed while treatments returned 200). The backend mounts
+  // /patients/me/medications without a trailing slash, so no normalization.
+  it("allows the medication routes the Track screen depends on", () => {
+    const medicationId = "10000000-0000-4000-8000-000000000001";
+    const cases = [
+      ["GET", "/api/v1/patients/me/medications"],
+      ["POST", "/api/v1/patients/me/medications"],
+      ["PATCH", `/api/v1/patients/me/medications/${medicationId}`],
+    ] as const;
+
+    for (const [method, targetPath] of cases) {
+      expect(
+        validateProxyTarget(
+          targetPath.slice(1).split("/"),
+          method,
+          `/api/proxy${targetPath}`,
+        ),
+      ).toEqual({
+        ok: true,
+        targetPath,
+      });
+    }
+  });
+
+  it("keeps the medication routes narrow at the BFF boundary", () => {
+    const medicationId = "10000000-0000-4000-8000-000000000001";
+
+    // Verbs the web app does not use must not be forwarded.
+    expect(
+      validateProxyTarget(
+        ["api", "v1", "patients", "me", "medications"],
+        "DELETE",
+        "/api/proxy/api/v1/patients/me/medications",
+      ),
+    ).toEqual({ ok: false, status: 405, code: "proxy_method_not_allowed" });
+
+    expect(
+      validateProxyTarget(
+        ["api", "v1", "patients", "me", "medications", medicationId],
+        "GET",
+        `/api/proxy/api/v1/patients/me/medications/${medicationId}`,
+      ),
+    ).toEqual({ ok: false, status: 405, code: "proxy_method_not_allowed" });
+
+    // Malformed ids and unknown children must be rejected outright.
+    expect(
+      validateProxyTarget(
+        ["api", "v1", "patients", "me", "medications", "not-a-uuid"],
+        "PATCH",
+        "/api/proxy/api/v1/patients/me/medications/not-a-uuid",
+      ),
+    ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
+
+    expect(
+      validateProxyTarget(
+        ["api", "v1", "patients", "me", "medications", medicationId, "unknown"],
+        "GET",
+        `/api/proxy/api/v1/patients/me/medications/${medicationId}/unknown`,
+      ),
+    ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
+  });
+
   it("allows patient-owned FHIR management and import routes through the PHI proxy", () => {
     const connectionId = "10000000-0000-4000-8000-000000000001";
     const importId = "10000000-0000-4000-8000-000000000002";
