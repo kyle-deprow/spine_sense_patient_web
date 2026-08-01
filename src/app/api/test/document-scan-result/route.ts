@@ -4,7 +4,6 @@ import { readJsonBody } from "@/lib/server/backend";
 import { jsonNoStore } from "@/lib/server/responses";
 import {
   forwardPatientWebTestSupport,
-  getExactSyntheticRunId,
   hasPatientWebTestSupportAccess,
   isExactSyntheticEmail,
   isUuid,
@@ -13,29 +12,34 @@ import {
   testSupportUnavailableResponse,
 } from "@/lib/server/test-support";
 
-const CLEANUP_STATUS = "cleanup_stack_owned" as const;
+const VERDICTS = new Set(["clean", "malicious", "error"]);
 
 export async function POST(request: NextRequest) {
   if (!hasPatientWebTestSupportAccess(request)) {
     return jsonNoStore({ detail: "Not found" }, { status: 404 });
   }
 
-  const record = await readExactTestSupportObject(request, ["email", "run_id"]);
-  const runId = record?.run_id;
+  const record = await readExactTestSupportObject(request, [
+    "document_id",
+    "email",
+    "verdict",
+  ]);
+  const documentId = record?.document_id;
   const email = record?.email;
-  const emailRunId = getExactSyntheticRunId(email);
+  const verdict = record?.verdict;
   if (
-    !isUuid(runId) ||
+    !isUuid(documentId) ||
     !isExactSyntheticEmail(email) ||
-    emailRunId?.toLowerCase() !== runId.toLowerCase()
+    typeof verdict !== "string" ||
+    !VERDICTS.has(verdict)
   ) {
     return jsonNoStore({ detail: "Not found" }, { status: 404 });
   }
 
   try {
     const backendResponse = await forwardPatientWebTestSupport(
-      "/test/e2e-cleanup",
-      { run_id: runId, email },
+      "/test/document-scan-result",
+      { document_id: documentId, email, verdict },
     );
     if (backendResponse === null) return testSupportUnavailableResponse();
     if (!backendResponse.ok) {
@@ -43,15 +47,33 @@ export async function POST(request: NextRequest) {
     }
 
     const backendBody = await readJsonBody<unknown>(backendResponse);
+    const body =
+      backendBody != null &&
+      typeof backendBody === "object" &&
+      !Array.isArray(backendBody)
+        ? (backendBody as Record<string, unknown>)
+        : null;
     if (
-      backendBody == null ||
-      typeof backendBody !== "object" ||
-      Array.isArray(backendBody) ||
-      (backendBody as Record<string, unknown>).status !== CLEANUP_STATUS
+      body?.document_id !== documentId &&
+      !(
+        typeof body?.document_id === "string" &&
+        body.document_id.toLowerCase() === documentId.toLowerCase()
+      )
     ) {
       return testSupportUnavailableResponse();
     }
-    return jsonNoStore({ status: CLEANUP_STATUS });
+    if (
+      body?.processing_status !== "complete" ||
+      body?.scan_status !== verdict
+    ) {
+      return testSupportUnavailableResponse();
+    }
+
+    return jsonNoStore({
+      document_id: documentId,
+      processing_status: "complete",
+      scan_status: verdict,
+    });
   } catch {
     return testSupportUnavailableResponse();
   }

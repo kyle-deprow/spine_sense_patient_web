@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "default_scope": "full",
+  "scopes": {
+    "full": {
+      "tag": "@full-assessment",
+      "spec": "e2e/full-assessment.spec.ts",
+      "start_checkpoint": "fresh",
+      "end_checkpoint": "results_ready",
+      "timeout_class": "full",
+      "real_analysis": true,
+      "paths": [
+        "e2e/full-assessment.spec.ts",
+        "e2e/fullAssessmentJourney.ts",
+        "e2e/checkpoints.ts",
+        "e2e/journey",
+        "e2e/support",
+        "e2e/fixtures",
+        "src/lib/e2e",
+        "e2e/scoped-assessment.spec.ts",
+        "e2e/scopes.json",
+        "playwright.config.ts"
+      ],
+      "checkpoint": "results_ready"
+    },
+    "auth": {
+      "tag": "@scope-auth",
+      "spec": "e2e/scoped-assessment.spec.ts",
+      "start_checkpoint": "fresh",
+      "end_checkpoint": "verified_pending_consent",
+      "timeout_class": "short",
+      "real_analysis": false,
+      "paths": ["e2e/stages/accountVerification.ts"],
+      "checkpoint": "verified_pending_consent"
+    },
+    "consent-onboarding": {
+      "tag": "@scope-consent-onboarding",
+      "spec": "e2e/scoped-assessment.spec.ts",
+      "start_checkpoint": "verified_pending_consent",
+      "end_checkpoint": "records_ready",
+      "timeout_class": "short",
+      "real_analysis": false,
+      "paths": ["e2e/stages/consentOnboarding.ts"],
+      "checkpoint": "records_ready"
+    },
+    "documents": {
+      "tag": "@scope-documents",
+      "spec": "e2e/scoped-assessment.spec.ts",
+      "start_checkpoint": "records_ready",
+      "end_checkpoint": "screening_ready",
+      "timeout_class": "documents",
+      "real_analysis": false,
+      "paths": [
+        "e2e/stages/recordsDocuments.ts",
+        "e2e/stages/recordsUpload.ts"
+      ],
+      "checkpoint": "screening_ready"
+    },
+    "screening": {
+      "tag": "@scope-screening",
+      "spec": "e2e/scoped-assessment.spec.ts",
+      "start_checkpoint": "screening_ready",
+      "end_checkpoint": "adaptive_ready",
+      "timeout_class": "screening",
+      "real_analysis": false,
+      "paths": ["e2e/stages/screening.ts"],
+      "checkpoint": "adaptive_ready"
+    },
+    "adaptive": {
+      "tag": "@scope-adaptive",
+      "spec": "e2e/scoped-assessment.spec.ts",
+      "start_checkpoint": "adaptive_ready",
+      "end_checkpoint": "review_ready",
+      "timeout_class": "adaptive",
+      "real_analysis": false,
+      "paths": ["e2e/stages/adaptive.ts"],
+      "checkpoint": "review_ready"
+    },
+    "analysis": {
+      "tag": "@scope-analysis",
+      "spec": "e2e/scoped-assessment.spec.ts",
+      "start_checkpoint": "review_ready",
+      "end_checkpoint": "results_ready",
+      "timeout_class": "analysis",
+      "real_analysis": true,
+      "paths": ["e2e/stages/reviewAnalysis.ts"],
+      "checkpoint": "results_ready"
+    },
+    "results-report": {
+      "tag": "@scope-results-report",
+      "spec": "e2e/scoped-assessment.spec.ts",
+      "start_checkpoint": "review_ready",
+      "end_checkpoint": "results_ready",
+      "timeout_class": "report",
+      "real_analysis": false,
+      "paths": ["e2e/stages/resultsReport.ts"],
+      "checkpoint": "results_ready"
+    }
+  }
+}

@@ -13,29 +13,34 @@ import {
   testSupportUnavailableResponse,
 } from "@/lib/server/test-support";
 
-const CLEANUP_STATUS = "cleanup_stack_owned" as const;
+const RESULTS_FIXTURE = "results-report-v1";
 
 export async function POST(request: NextRequest) {
   if (!hasPatientWebTestSupportAccess(request)) {
     return jsonNoStore({ detail: "Not found" }, { status: 404 });
   }
 
-  const record = await readExactTestSupportObject(request, ["email", "run_id"]);
+  const record = await readExactTestSupportObject(request, [
+    "email",
+    "fixture",
+    "run_id",
+  ]);
   const runId = record?.run_id;
   const email = record?.email;
-  const emailRunId = getExactSyntheticRunId(email);
+  const fixture = record?.fixture;
   if (
     !isUuid(runId) ||
     !isExactSyntheticEmail(email) ||
-    emailRunId?.toLowerCase() !== runId.toLowerCase()
+    getExactSyntheticRunId(email)?.toLowerCase() !== runId.toLowerCase() ||
+    fixture !== RESULTS_FIXTURE
   ) {
     return jsonNoStore({ detail: "Not found" }, { status: 404 });
   }
 
   try {
     const backendResponse = await forwardPatientWebTestSupport(
-      "/test/e2e-cleanup",
-      { run_id: runId, email },
+      "/test/results-fixture",
+      { run_id: runId, email, fixture },
     );
     if (backendResponse === null) return testSupportUnavailableResponse();
     if (!backendResponse.ok) {
@@ -43,15 +48,16 @@ export async function POST(request: NextRequest) {
     }
 
     const backendBody = await readJsonBody<unknown>(backendResponse);
-    if (
-      backendBody == null ||
-      typeof backendBody !== "object" ||
-      Array.isArray(backendBody) ||
-      (backendBody as Record<string, unknown>).status !== CLEANUP_STATUS
-    ) {
+    const body =
+      backendBody != null &&
+      typeof backendBody === "object" &&
+      !Array.isArray(backendBody)
+        ? (backendBody as Record<string, unknown>)
+        : null;
+    if (body?.status !== "fixture_ready" || body.fixture !== RESULTS_FIXTURE) {
       return testSupportUnavailableResponse();
     }
-    return jsonNoStore({ status: CLEANUP_STATUS });
+    return jsonNoStore({ status: "fixture_ready", fixture: RESULTS_FIXTURE });
   } catch {
     return testSupportUnavailableResponse();
   }
