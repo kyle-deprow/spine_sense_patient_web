@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const TEST_TOKEN = "test-support-token-with-at-least-32-chars";
+const BACKEND_TEST_TOKEN = "backend-support-token-with-at-least-32-chars";
 
 function makeRequest(token?: string): NextRequest {
   return new NextRequest("https://patient-web.example.com/api/test/health", {
@@ -13,11 +14,24 @@ function makeRequest(token?: string): NextRequest {
 describe("patient web test-support health route", () => {
   beforeEach(() => {
     vi.stubEnv("ENVIRONMENT", "test");
+    vi.stubEnv("BACKEND_INTERNAL_URL", "http://backend.internal");
+    vi.stubEnv(
+      "PATIENT_WEB_CSRF_SECRET",
+      "health-route-test-csrf-secret-at-least-32-bytes",
+    );
+    vi.stubEnv("PATIENT_WEB_CLIENT_IP_MODE", "single-bucket");
+    vi.stubEnv("PATIENT_WEB_CREDENTIAL_RATE_LIMIT_STORE", "memory");
+    vi.stubEnv("PATIENT_WEB_ALLOWED_ORIGINS", "https://patient.example.test");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(Response.json({ status: "ok" })),
+    );
   });
 
   afterEach(() => {
     vi.resetModules();
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
   });
 
   it("is hidden unless test support is explicitly enabled", async () => {
@@ -32,6 +46,7 @@ describe("patient web test-support health route", () => {
   it("requires the configured bearer token", async () => {
     vi.stubEnv("PATIENT_WEB_TEST_SUPPORT_ENABLED", "true");
     vi.stubEnv("PATIENT_WEB_TEST_SUPPORT_TOKEN", TEST_TOKEN);
+    vi.stubEnv("PATIENT_WEB_BACKEND_TEST_SUPPORT_TOKEN", BACKEND_TEST_TOKEN);
 
     const { POST } = await import("./route");
 
@@ -42,6 +57,27 @@ describe("patient web test-support health route", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toContain("no-store");
     expect(await response.json()).toEqual({ status: "ok" });
+    expect(fetch).toHaveBeenCalledWith(
+      new URL("/test/health", "http://backend.internal"),
+      expect.objectContaining({
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${BACKEND_TEST_TOKEN}`,
+          "content-type": "application/json",
+        },
+      }),
+    );
+  });
+
+  it("fails closed when the backend support credential is unavailable", async () => {
+    vi.stubEnv("PATIENT_WEB_TEST_SUPPORT_ENABLED", "true");
+    vi.stubEnv("PATIENT_WEB_TEST_SUPPORT_TOKEN", TEST_TOKEN);
+
+    const { POST } = await import("./route");
+    const response = await POST(makeRequest(TEST_TOKEN));
+
+    expect(response.status).toBe(503);
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it.each([undefined, "", "preview", "unknown"])(

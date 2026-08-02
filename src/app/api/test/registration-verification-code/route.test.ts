@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const TEST_TOKEN = "test-support-token-with-at-least-32-chars";
+const BACKEND_TEST_TOKEN = "backend-support-token-with-at-least-32-chars";
 const EMAIL =
   "casey.assessment.123e4567-e89b-42d3-a456-426614174000@e2e.example.com";
 
@@ -24,6 +25,7 @@ describe("patient web registration-code support route", () => {
     vi.stubEnv("ENVIRONMENT", "test");
     vi.stubEnv("PATIENT_WEB_TEST_SUPPORT_ENABLED", "true");
     vi.stubEnv("PATIENT_WEB_TEST_SUPPORT_TOKEN", TEST_TOKEN);
+    vi.stubEnv("PATIENT_WEB_BACKEND_TEST_SUPPORT_TOKEN", BACKEND_TEST_TOKEN);
     vi.stubEnv("BACKEND_INTERNAL_URL", "http://backend.internal");
     vi.stubEnv(
       "PATIENT_WEB_CSRF_SECRET",
@@ -63,7 +65,7 @@ describe("patient web registration-code support route", () => {
         method: "POST",
         body: JSON.stringify({ email: EMAIL }),
         headers: {
-          authorization: `Bearer ${TEST_TOKEN}`,
+          authorization: `Bearer ${BACKEND_TEST_TOKEN}`,
           "content-type": "application/json",
         },
       }),
@@ -97,5 +99,17 @@ describe("patient web registration-code support route", () => {
 
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({ detail: "Not found" });
+  });
+
+  it("fails closed when the separate backend support token is unavailable", async () => {
+    vi.stubEnv("PATIENT_WEB_BACKEND_TEST_SUPPORT_TOKEN", "");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const { POST } = await import("./route");
+
+    const response = await POST(makeRequest({ email: EMAIL }));
+
+    expect(response.status).toBe(503);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

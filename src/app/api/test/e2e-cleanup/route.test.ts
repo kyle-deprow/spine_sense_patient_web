@@ -31,6 +31,7 @@ describe("patient web test cleanup route", () => {
     vi.stubEnv("PATIENT_WEB_CREDENTIAL_RATE_LIMIT_STORE", "memory");
     vi.stubEnv("REDIS_URL", "");
     vi.stubEnv("BACKEND_INTERNAL_URL", "http://127.0.0.1:8000");
+    vi.stubEnv("PATIENT_WEB_BACKEND_TEST_SUPPORT_TOKEN", TEST_TOKEN);
     vi.stubEnv(
       "PATIENT_WEB_CSRF_SECRET",
       "cleanup-test-csrf-secret-at-least-32-bytes",
