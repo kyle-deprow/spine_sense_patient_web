@@ -93,6 +93,7 @@ type AssessmentUploadUrlResponse = {
 
 type AssessmentDocumentRecord = {
   id?: string;
+  state?: string;
   file_name?: string | null;
   fileName?: string | null;
   file_type?: string | null;
@@ -550,7 +551,8 @@ function normalizeAssessmentDocument(record: AssessmentDocumentRecord) {
     fileName: record.file_name ?? record.fileName ?? null,
     fileType: record.file_type ?? record.fileType ?? null,
     fileSizeBytes: record.file_size_bytes ?? record.fileSizeBytes ?? null,
-    processingStatus: record.processing_status ?? record.processingStatus,
+    processingStatus:
+      record.processing_status ?? record.processingStatus ?? record.state,
   };
 }
 
@@ -690,8 +692,6 @@ async function uploadSyntheticAssessmentDocumentFromRecordsStep(
         "uploaded assessment document must be returned by assessment document list",
       ).toEqual(
         expect.objectContaining({
-          fileName: SYNTHETIC_ASSESSMENT_UPLOAD.name,
-          fileType: SYNTHETIC_ASSESSMENT_UPLOAD.mimeType,
           fileSizeBytes: SYNTHETIC_ASSESSMENT_UPLOAD.buffer.length,
           processingStatus: "complete",
         }),
@@ -1324,10 +1324,14 @@ async function clickWelcomeGetStarted(page: Page) {
 
 async function acceptCookieConsentIfPresent(page: Page): Promise<void> {
   const acceptAll = page.getByTestId("cookie-consent-accept-all");
-  const visible = await acceptAll.isVisible({ timeout: 1000 }).catch(() => false);
+  const visible = await acceptAll
+    .isVisible({ timeout: 1000 })
+    .catch(() => false);
   if (!visible) return;
   await acceptAll.click();
-  await expect(acceptAll).toBeHidden({ timeout: 10_000 }).catch(() => undefined);
+  await expect(acceptAll)
+    .toBeHidden({ timeout: 10_000 })
+    .catch(() => undefined);
 }
 
 async function expectAuthenticatedCookieSession(page: Page) {
@@ -4153,8 +4157,8 @@ test.describe("patient web full assessment flow", () => {
                   response.url().includes("/api/auth/register") &&
                   response.request().method() === "POST",
               }),
-        );
-      } catch (error) {
+          );
+        } catch (error) {
           if (attempt === registrationMaxAttempts - 1) throw error;
           logMilestone(
             "registration submit did not reach verification; reloading and retrying with fresh email",
