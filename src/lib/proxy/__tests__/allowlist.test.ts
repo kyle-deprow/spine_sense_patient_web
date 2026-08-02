@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isPatientAssessmentDocumentDeleteTarget,
   isPatientDocumentDeleteTarget,
   validateProxyTarget,
 } from "@/lib/proxy/allowlist";
@@ -507,9 +508,17 @@ describe("proxy allowlist", () => {
   it("limits bodyless DELETE support to exact patient document targets", () => {
     const documentPath =
       "/api/v1/patients/me/documents/10000000-0000-4000-8000-000000000001";
+    const assessmentDocumentPath =
+      "/api/v1/patients/me/assessments/10000000-0000-4000-8000-000000000001/documents/10000000-0000-4000-8000-000000000002";
 
     expect(isPatientDocumentDeleteTarget("DELETE", documentPath)).toBe(true);
     expect(isPatientDocumentDeleteTarget("POST", documentPath)).toBe(false);
+    expect(
+      isPatientAssessmentDocumentDeleteTarget("DELETE", assessmentDocumentPath),
+    ).toBe(true);
+    expect(
+      isPatientAssessmentDocumentDeleteTarget("POST", assessmentDocumentPath),
+    ).toBe(false);
     expect(
       isPatientDocumentDeleteTarget(
         "DELETE",
@@ -518,6 +527,12 @@ describe("proxy allowlist", () => {
     ).toBe(false);
     expect(
       isPatientDocumentDeleteTarget("DELETE", `${documentPath}/findings`),
+    ).toBe(false);
+    expect(
+      isPatientAssessmentDocumentDeleteTarget(
+        "DELETE",
+        `${assessmentDocumentPath}/confirm`,
+      ),
     ).toBe(false);
   });
 

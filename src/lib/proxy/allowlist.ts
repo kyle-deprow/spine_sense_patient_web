@@ -449,6 +449,15 @@ export function isPatientDocumentDeleteTarget(
   );
 }
 
+export function isPatientAssessmentDocumentDeleteTarget(
+  method: string,
+  targetPath: string,
+): boolean {
+  return (
+    method.toUpperCase() === "DELETE" && ASSESSMENT_DOCUMENT_RE.test(targetPath)
+  );
+}
+
 function matchesRoute(targetPath: string, route: AllowedProxyRoute): boolean {
   if (route.pathPattern) return route.pathPattern.test(targetPath);
   if (targetPath === route.prefix) return true;

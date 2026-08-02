@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { COOKIE_NAMES } from "@/lib/auth/cookies";
 import { validateUnsafeRequest } from "@/lib/auth/csrf";
 import {
+  isPatientAssessmentDocumentDeleteTarget,
   isPatientDocumentDeleteTarget,
   validateProxyTarget,
 } from "@/lib/proxy/allowlist";
@@ -89,10 +90,9 @@ async function handler(request: NextRequest, context: ProxyContext) {
     return jsonNoStore({ error: "unsupported_media_type" }, { status: 415 });
   }
 
-  const isDocumentDelete = isPatientDocumentDeleteTarget(
-    request.method,
-    target.targetPath,
-  );
+  const isDocumentDelete =
+    isPatientDocumentDeleteTarget(request.method, target.targetPath) ||
+    isPatientAssessmentDocumentDeleteTarget(request.method, target.targetPath);
   const requestBodyEmpty = isDocumentDelete
     ? await hasEmptyRequestBody(request)
     : undefined;

@@ -611,6 +611,133 @@ describe("proxy route handler", () => {
     expect(new Headers(requestInit?.headers).has("content-type")).toBe(false);
   });
 
+  it("forwards bodyless onboarding assessment document DELETEs without requiring Content-Type", async () => {
+    mockedBackendFetch.mockResolvedValue(new Response(null, { status: 204 }));
+    const csrf = createCsrfToken(CSRF_SECRET, "assessment-document-delete");
+    const assessmentId = "10000000-0000-4000-8000-000000000001";
+    const documentId = "10000000-0000-4000-8000-000000000002";
+    const path = [
+      "api",
+      "v1",
+      "patients",
+      "me",
+      "assessments",
+      assessmentId,
+      "documents",
+      documentId,
+    ];
+    const request = makeProxyRequest(
+      `/api/proxy/${path.join("/")}`,
+      "DELETE",
+      {
+        spine_patient_sess: "access-token",
+        spine_patient_csrf: csrf,
+      },
+      {
+        [CSRF_HEADER]: csrf,
+        Origin: ORIGIN,
+      },
+    );
+
+    const response = await DELETE(request, makeContext(path));
+
+    expect(response.status).toBe(204);
+    expect(mockedBackendFetch).toHaveBeenCalledWith(
+      `/api/v1/patients/me/assessments/${assessmentId}/documents/${documentId}`,
+      expect.objectContaining({ method: "DELETE" }),
+      {},
+    );
+    const requestInit = mockedBackendFetch.mock.calls[0]?.[1];
+    expect(requestInit).not.toHaveProperty("body");
+    expect(new Headers(requestInit?.headers).has("content-type")).toBe(false);
+  });
+
+  it.each([
+    [
+      "without CSRF proof",
+      { spine_patient_sess: "access-token" },
+      { Origin: ORIGIN },
+      undefined,
+      "csrf_missing",
+    ],
+    [
+      "from a forbidden origin",
+      {
+        spine_patient_sess: "access-token",
+        spine_patient_csrf: createCsrfToken(CSRF_SECRET, "assessment-origin"),
+      },
+      {
+        [CSRF_HEADER]: createCsrfToken(CSRF_SECRET, "assessment-origin"),
+        Origin: "https://evil.example.test",
+      },
+      undefined,
+      "origin_forbidden",
+    ],
+    [
+      "with mismatched CSRF proof",
+      {
+        spine_patient_sess: "access-token",
+        spine_patient_csrf: createCsrfToken(CSRF_SECRET, "assessment-cookie"),
+      },
+      {
+        [CSRF_HEADER]: createCsrfToken(CSRF_SECRET, "assessment-header"),
+        Origin: ORIGIN,
+      },
+      undefined,
+      "csrf_mismatch",
+    ],
+    [
+      "with a body but no accepted Content-Type",
+      {
+        spine_patient_sess: "access-token",
+        spine_patient_csrf: createCsrfToken(CSRF_SECRET, "assessment-body"),
+      },
+      {
+        [CSRF_HEADER]: createCsrfToken(CSRF_SECRET, "assessment-body"),
+        Origin: ORIGIN,
+      },
+      "unexpected body",
+      "content_type_unsupported",
+    ],
+  ] as const)(
+    "rejects onboarding assessment document DELETEs %s",
+    async (_title, cookies, headers, body, reason) => {
+      const assessmentId = "10000000-0000-4000-8000-000000000001";
+      const documentId = "10000000-0000-4000-8000-000000000002";
+      const path = [
+        "api",
+        "v1",
+        "patients",
+        "me",
+        "assessments",
+        assessmentId,
+        "documents",
+        documentId,
+      ];
+      const request = makeProxyRequest(
+        `/api/proxy/${path.join("/")}`,
+        "DELETE",
+        cookies,
+        headers,
+        body,
+      );
+
+      const response = await DELETE(request, makeContext(path));
+
+      expect(response.status).toBe(
+        reason === "content_type_unsupported" ? 415 : 403,
+      );
+      expect(mockedBackendFetch).not.toHaveBeenCalled();
+      expect(mockedAuditLog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "phi.proxy.denied",
+          reason,
+          status: reason === "content_type_unsupported" ? 415 : 403,
+        }),
+      );
+    },
+  );
+
   it("forwards empty-stream document DELETEs without consuming the request", async () => {
     mockedBackendFetch.mockResolvedValue(new Response(null, { status: 204 }));
     const csrf = createCsrfToken(CSRF_SECRET, "empty-stream-delete");
