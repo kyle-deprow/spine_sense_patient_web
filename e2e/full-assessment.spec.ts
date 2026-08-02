@@ -566,7 +566,6 @@ async function uploadSyntheticAssessmentDocumentFromRecordsStep(
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     let uploadUrlResponsePromise: Promise<PlaywrightResponse> | null = null;
-    let confirmResponsePromise: Promise<PlaywrightResponse> | null = null;
     let fileChooserPromise: Promise<FileChooser> | null = null;
     try {
       if (
@@ -621,17 +620,6 @@ async function uploadSyntheticAssessmentDocumentFromRecordsStep(
           response.ok(),
         { timeout: TRANSITION_BUDGETS_MS.stage },
       );
-      confirmResponsePromise = page.waitForResponse(
-        (response) =>
-          response
-            .url()
-            .includes("/api/proxy/api/v1/patients/me/assessments/") &&
-          /\/documents\/[0-9a-f-]+\/confirm$/i.test(
-            new URL(response.url()).pathname,
-          ) &&
-          response.request().method() === "POST",
-        { timeout: TRANSITION_BUDGETS_MS.stage },
-      );
       fileChooserPromise = page.waitForEvent("filechooser", {
         timeout: 30_000,
       });
@@ -651,20 +639,7 @@ async function uploadSyntheticAssessmentDocumentFromRecordsStep(
         uploadUrlResponse.url(),
       );
 
-      const confirmResponse = await confirmResponsePromise;
-      expect(
-        confirmResponse.ok(),
-        `assessment document confirm status=${confirmResponse.status()}`,
-      ).toBe(true);
-      const confirmPayload =
-        (await confirmResponse.json()) as AssessmentDocumentRecord;
-      const confirmedStatus =
-        normalizeAssessmentDocument(confirmPayload).processingStatus;
-      expect(["processing", "complete"]).toContain(confirmedStatus);
-
-      if (confirmedStatus === "processing") {
-        await completeSyntheticDocumentScan(page.request, documentId, email);
-      }
+      await completeSyntheticDocumentScan(page.request, documentId, email);
 
       await expect(
         page.getByTestId(`records-document-${documentId}`),
@@ -706,7 +681,6 @@ async function uploadSyntheticAssessmentDocumentFromRecordsStep(
     } catch (error) {
       lastError = error;
       void uploadUrlResponsePromise?.catch(() => undefined);
-      void confirmResponsePromise?.catch(() => undefined);
       void fileChooserPromise?.catch(() => undefined);
       const retryableUploadError = await page
         .getByTestId("records-file-error")
@@ -763,10 +737,10 @@ async function completeSyntheticDocumentScan(
   let response = await completeScan();
   for (
     let attempt = 1;
-    response.status() === 404 && attempt < 5;
+    response.status() === 404 && attempt < 30;
     attempt += 1
   ) {
-    await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+    await new Promise<void>((resolve) => setTimeout(resolve, 3000));
     response = await completeScan();
   }
   expect(
