@@ -312,7 +312,7 @@ describe("forced mid-flow E2E failure hook", () => {
       resolve(process.cwd(), "e2e/scopedAssessment.ts"),
       "utf8",
     );
-    expect(scopedRunner).toContain("withStackOwnedE2eLifecycle({");
+    expect(scopedRunner).toContain("withAuthorizedE2eLifecycle({");
     expect(scopedRunner).toContain("adaptivePrepareTracker.stop()");
     expect(scopedRunner).toContain("await profiler.attach(testInfo)");
   });

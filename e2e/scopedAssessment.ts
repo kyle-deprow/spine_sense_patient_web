@@ -26,7 +26,7 @@ import { runResultsReportStage } from "./stages/resultsReport";
 import { runAnalysisStage } from "./stages/reviewAnalysis";
 import { runReturnHomeStage } from "./stages/returnHome";
 import { runScreeningStage } from "./stages/screening";
-import { withStackOwnedE2eLifecycle } from "./support/lifecycle";
+import { withAuthorizedE2eLifecycle } from "./support/lifecycle";
 import { createE2ERunIdentity } from "./support/runIdentity";
 import type { JourneyContext } from "./journey/context";
 
@@ -181,7 +181,7 @@ export function defineScopedAssessment(
     test.setTimeout(FULL_FLOW_TIMEOUT_MS);
     const identity = createE2ERunIdentity();
 
-    await withStackOwnedE2eLifecycle({
+    await withAuthorizedE2eLifecycle({
       identity,
       action: async () => {
         await page.emulateMedia({ reducedMotion: "no-preference" });
