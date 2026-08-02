@@ -32,15 +32,17 @@ The default `E2E_SCOPES=full` invocation remains the sole canonical journey.
 For focused validation, the manifest also exposes opt-in checkpoint scopes in
 `e2e/scoped-assessment.spec.ts`; those scopes prepare their start checkpoint
 through the same BFF/product APIs and reuse the canonical stage actions. A
-scope cannot fabricate the server-authored results checkpoint.
+`results_ready` is prepared only through the strict `results-report-v1` named
+server fixture; the analysis scope still invokes real server analysis.
 
 Each invocation creates a UUID-backed synthetic email and sends the exact
 `{run_id, email}` identity to the guarded backend support endpoints. The
 canonical Make lifecycle owns disposal by running the journey in an isolated
 stack and removing its database/object-storage volumes on success or failure.
-The compatibility cleanup endpoint still validates the identity and records
-the control-plane event, but does not delete application data. Browser tests do
-not call it or interpret its response as deletion. Before any journey mutation,
+The cleanup endpoint validates the identity but returns conflict until a
+reviewed exact-run database, cache, and object-store deletion capability exists;
+it never reports stack disposal as application-data deletion. Browser tests do
+not call it. Before any journey mutation,
 the browser lifecycle requires `PATIENT_WEB_E2E_STACK_DISPOSABLE=true`; the root
 Make lifecycle supplies that marker only for its isolated Compose stack. Direct
 `pnpm test:e2e` invocations therefore fail closed unless an operator explicitly

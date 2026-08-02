@@ -48,7 +48,7 @@ describe("patient web test cleanup route", () => {
       "fetch",
       vi.fn().mockResolvedValue(
         Response.json({
-          status: "cleanup_stack_owned",
+          status: "cleanup_complete",
           secret: "must-not-leak",
         }),
       ),
@@ -126,7 +126,7 @@ describe("patient web test cleanup route", () => {
     },
   );
 
-  it("accepts an exact synthetic run identity and reports stack-owned disposal", async () => {
+  it("accepts only a backend-confirmed exact-run deletion", async () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("PATIENT_WEB_TEST_SUPPORT_ENABLED", "true");
     vi.stubEnv("PATIENT_WEB_TEST_SUPPORT_TOKEN", TEST_TOKEN);
@@ -137,7 +137,24 @@ describe("patient web test cleanup route", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toContain("no-store");
-    expect(await response.json()).toEqual({ status: "cleanup_stack_owned" });
+    expect(await response.json()).toEqual({ status: "cleanup_complete" });
+  });
+
+  it("propagates the backend fail-closed cleanup conflict", async () => {
+    vi.stubEnv("PATIENT_WEB_TEST_SUPPORT_ENABLED", "true");
+    vi.stubEnv("PATIENT_WEB_TEST_SUPPORT_TOKEN", TEST_TOKEN);
+    vi.mocked(fetch).mockResolvedValueOnce(
+      Response.json(
+        { detail: "Exact-run cleanup unavailable" },
+        { status: 409 },
+      ),
+    );
+
+    const { POST } = await import("./route");
+    const response = await POST(makeRequest(TEST_TOKEN, true));
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "support_conflict" });
   });
 
   it("rejects missing or mismatched run identity", async () => {
@@ -180,7 +197,7 @@ describe("patient web test cleanup route", () => {
     const response = await POST(makeRequest(TEST_TOKEN, true));
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ status: "cleanup_stack_owned" });
+    expect(await response.json()).toEqual({ status: "cleanup_complete" });
     expect(fetchMock).toHaveBeenCalledWith(
       new URL("/test/e2e-cleanup", "http://127.0.0.1:8000"),
       expect.objectContaining({

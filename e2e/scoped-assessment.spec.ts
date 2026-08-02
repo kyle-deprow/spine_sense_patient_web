@@ -10,7 +10,6 @@ import {
   createJourneyContext,
   FULL_FLOW_TIMEOUT_MS,
 } from "./fullAssessmentJourney";
-import { prepareResultsReportFixture } from "./journey/context";
 import scopeManifest from "./scopes.json";
 import { runAccountVerificationStage } from "./stages/accountVerification";
 import { runAdaptiveStage } from "./stages/adaptive";
@@ -80,12 +79,10 @@ const SCOPED_JOURNEYS = [
   },
   {
     name: "results-report",
-    startCheckpoint: "review_ready",
+    startCheckpoint: "results_ready",
     endCheckpoint: "results_ready",
     tag: "@scope-results-report",
     runStage: async (context) => {
-      await prepareResultsReportFixture(context.request, context.identity);
-      await context.page.reload();
       await runResultsReportStage(context);
     },
   },
@@ -116,7 +113,11 @@ function assertScopeManifestAlignment(): void {
 assertScopeManifestAlignment();
 
 for (const journey of SCOPED_JOURNEYS) {
-  if (CHECKPOINT_PREPARATION_MODE[journey.startCheckpoint] !== "api") {
+  if (
+    !["api", "named_fixture"].includes(
+      CHECKPOINT_PREPARATION_MODE[journey.startCheckpoint],
+    )
+  ) {
     throw new Error(
       `Scope ${journey.name} declares unsupported start checkpoint ${journey.startCheckpoint}`,
     );

@@ -13,7 +13,7 @@ import {
   testSupportUnavailableResponse,
 } from "@/lib/server/test-support";
 
-const CLEANUP_STATUS = "cleanup_stack_owned" as const;
+const CLEANUP_STATUS = "cleanup_complete" as const;
 
 export async function POST(request: NextRequest) {
   if (!hasPatientWebTestSupportAccess(request)) {
