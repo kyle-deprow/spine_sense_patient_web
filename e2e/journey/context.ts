@@ -8,6 +8,7 @@ import {
 } from "@playwright/test";
 import { performance } from "node:perf_hooks";
 
+import { SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT } from "../../src/lib/e2e/document-upload-fixture";
 import { fullAssessmentScenario } from "../fixtures/fullAssessmentScenario";
 import { safeRequestId, sanitizeDiagnostic } from "../support/diagnostics";
 import {
@@ -30,6 +31,16 @@ export const BACKEND_DOCUMENT_SCAN_RESULT_URL = validateBffHelperUrl(
   process.env.PATIENT_WEB_BACKEND_DOCUMENT_SCAN_RESULT_URL,
   "PATIENT_WEB_BACKEND_DOCUMENT_SCAN_RESULT_URL",
   "/api/test/document-scan-result",
+);
+export const BACKEND_DOCUMENT_UPLOAD_PERSISTENCE_URL = validateBffHelperUrl(
+  process.env.PATIENT_WEB_BACKEND_DOCUMENT_UPLOAD_PERSISTENCE_URL,
+  "PATIENT_WEB_BACKEND_DOCUMENT_UPLOAD_PERSISTENCE_URL",
+  "/api/test/document-upload-persistence",
+);
+export const BACKEND_DOCUMENT_ANALYSIS_PERSISTENCE_URL = validateBffHelperUrl(
+  process.env.PATIENT_WEB_BACKEND_DOCUMENT_ANALYSIS_PERSISTENCE_URL,
+  "PATIENT_WEB_BACKEND_DOCUMENT_ANALYSIS_PERSISTENCE_URL",
+  "/api/test/document-analysis-persistence",
 );
 export const BACKEND_RESULTS_FIXTURE_URL = validateBffHelperUrl(
   process.env.PATIENT_WEB_BACKEND_RESULTS_FIXTURE_URL,
@@ -59,13 +70,9 @@ export const STRESS_RELOAD_AFTER_SCREENING_QUESTION_ID =
 export const STRESS_BACKTRACK_AFTER_SCREENING_QUESTION_ID =
   fullAssessmentScenario.stress.backtrackAfterScreeningQuestionId;
 export const SYNTHETIC_ASSESSMENT_UPLOAD = {
-  name: "synthetic-e2e-upload.png",
-  mimeType: "image/png",
-  // 1x1 transparent PNG. Keep synthetic; no PHI fixture file is needed.
-  buffer: Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
-    "base64",
-  ),
+  name: SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.name,
+  mimeType: SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.mimeType,
+  buffer: Buffer.from(SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.base64, "base64"),
 } as const;
 
 /**
@@ -194,6 +201,11 @@ export type AssessmentDocumentRecord = {
   processing_status?: string;
   processingStatus?: string;
 };
+
+export type UploadedAssessmentDocument = Readonly<{
+  assessmentId: string;
+  documentId: string;
+}>;
 
 export type AssessmentReportGenerationPayload = {
   id?: unknown;
@@ -776,4 +788,5 @@ export type JourneyContext = {
   questionnaireMutations: QuestionnaireMutation[];
   generatedAdaptiveAnswers: Map<string, unknown>;
   adaptivePrepareTracker: AdaptivePrepareTrackerContract;
+  uploadedAssessmentDocument: UploadedAssessmentDocument | null;
 };

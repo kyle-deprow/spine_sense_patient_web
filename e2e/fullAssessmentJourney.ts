@@ -62,6 +62,7 @@ export function createJourneyContext(options: {
       questionnaireMutations: captureQuestionnaireMutations(page),
       generatedAdaptiveAnswers: new Map<string, unknown>(),
       adaptivePrepareTracker,
+      uploadedAssessmentDocument: null,
     },
     profiler,
     adaptivePrepareTracker,

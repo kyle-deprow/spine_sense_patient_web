@@ -62,16 +62,12 @@ export async function POST(request: NextRequest) {
     ) {
       return testSupportUnavailableResponse();
     }
-    if (
-      body?.processing_status !== "complete" ||
-      body?.scan_status !== verdict
-    ) {
+    if (body?.scan_status !== verdict) {
       return testSupportUnavailableResponse();
     }
 
     return jsonNoStore({
       document_id: documentId,
-      processing_status: "complete",
       scan_status: verdict,
     });
   } catch {

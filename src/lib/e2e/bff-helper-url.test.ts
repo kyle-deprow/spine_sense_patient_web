@@ -18,6 +18,50 @@ describe("patient-web E2E helper URL contract", () => {
     ).toBe(`${bffBaseUrl}${helperPath}`);
   });
 
+  it("accepts the exact document persistence BFF support route", () => {
+    const persistencePath = "/api/test/document-upload-persistence";
+    expect(
+      validateBffHelperUrl(
+        `${bffBaseUrl}${persistencePath}`,
+        "PATIENT_WEB_BACKEND_DOCUMENT_UPLOAD_PERSISTENCE_URL",
+        persistencePath,
+        bffBaseUrl,
+      ),
+    ).toBe(`${bffBaseUrl}${persistencePath}`);
+  });
+
+  it("rejects a direct backend document persistence helper", () => {
+    const persistencePath = "/api/test/document-upload-persistence";
+    expect(() =>
+      validateBffHelperUrl(
+        `https://api.example.test${persistencePath}`,
+        "PATIENT_WEB_BACKEND_DOCUMENT_UPLOAD_PERSISTENCE_URL",
+        persistencePath,
+        bffBaseUrl,
+      ),
+    ).toThrow(/same-origin BFF route/);
+  });
+
+  it("accepts only the same-origin post-analysis persistence helper", () => {
+    const analysisPath = "/api/test/document-analysis-persistence";
+    expect(
+      validateBffHelperUrl(
+        `${bffBaseUrl}${analysisPath}`,
+        "PATIENT_WEB_BACKEND_DOCUMENT_ANALYSIS_PERSISTENCE_URL",
+        analysisPath,
+        bffBaseUrl,
+      ),
+    ).toBe(`${bffBaseUrl}${analysisPath}`);
+    expect(() =>
+      validateBffHelperUrl(
+        `https://api.example.test${analysisPath}`,
+        "PATIENT_WEB_BACKEND_DOCUMENT_ANALYSIS_PERSISTENCE_URL",
+        analysisPath,
+        bffBaseUrl,
+      ),
+    ).toThrow(/same-origin BFF route/);
+  });
+
   it.each([
     "https://api.example.test/api/test/registration-verification-code",
     "https://patient-web.example.test/api/test/document-scan-result",
