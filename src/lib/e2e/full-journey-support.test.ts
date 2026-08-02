@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { withStackOwnedE2eLifecycle } from "../../../e2e/support/lifecycle";
 import {
@@ -18,6 +18,9 @@ import {
 } from "../../../e2e/support/runIdentity";
 
 describe("canonical full journey support", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
   it("creates an exact UUID-backed synthetic identity", () => {
     const identity = createE2ERunIdentity();
 
@@ -209,20 +212,60 @@ describe("canonical full journey support", () => {
     ).toThrow(`${path}.step_data keys must be exactly`);
   });
 
-  it("leaves disposal to the isolated stack when mutations fail", async () => {
+  it("refuses to mutate outside an explicitly disposable stack", async () => {
     const identity = createE2ERunIdentity();
-    const events: string[] = [];
+    const action = vi.fn(async () => "complete");
+
+    await expect(
+      withStackOwnedE2eLifecycle({ identity, action }),
+    ).rejects.toThrow(
+      "refuses to mutate data unless PATIENT_WEB_E2E_STACK_DISPOSABLE=true",
+    );
+    expect(action).not.toHaveBeenCalled();
+
+    vi.stubEnv("PATIENT_WEB_E2E_STACK_DISPOSABLE", "false");
+    await expect(
+      withStackOwnedE2eLifecycle({ identity, action }),
+    ).rejects.toThrow(
+      "refuses to mutate data unless PATIENT_WEB_E2E_STACK_DISPOSABLE=true",
+    );
+    expect(action).not.toHaveBeenCalled();
+  });
+
+  it("runs inside a disposable stack and preserves the action failure", async () => {
+    const identity = createE2ERunIdentity();
+    vi.stubEnv("PATIENT_WEB_E2E_STACK_DISPOSABLE", "true");
 
     await expect(
       withStackOwnedE2eLifecycle({
         identity,
-        action: async () => {
-          events.push("mutation");
-          throw new Error("synthetic failure");
-        },
+        action: async () => "complete",
       }),
-    ).rejects.toThrow("synthetic failure");
+    ).resolves.toBe("complete");
 
-    expect(events).toEqual(["mutation"]);
+    const actionFailure = new Error("action failed");
+    const rejection = withStackOwnedE2eLifecycle({
+      identity,
+      action: async () => {
+        throw actionFailure;
+      },
+    });
+
+    await expect(rejection).rejects.toBe(actionFailure);
+  });
+
+  it("rejects a non-exact identity before mutation", async () => {
+    vi.stubEnv("PATIENT_WEB_E2E_STACK_DISPOSABLE", "true");
+    const action = vi.fn(async () => undefined);
+    await expect(
+      withStackOwnedE2eLifecycle({
+        identity: {
+          runId: "not-a-uuid",
+          email: "patient+not-a-uuid@e2e.example.com",
+        },
+        action,
+      }),
+    ).rejects.toThrow("requires an exact synthetic run identity");
+    expect(action).not.toHaveBeenCalled();
   });
 });

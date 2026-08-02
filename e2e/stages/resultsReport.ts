@@ -1,4 +1,4 @@
-import { expect } from "@playwright/test";
+import { expect, type Locator } from "@playwright/test";
 
 import type { JourneyContext } from "../journey/context";
 import {
@@ -11,6 +11,15 @@ import {
   expectRenderedAssessmentPdf,
   isAssessmentReportGenerationResponse,
 } from "../journey/results";
+
+export async function expectReportOptionsDismissed(
+  options: Locator,
+): Promise<void> {
+  await expect(options).toBeHidden({ timeout: 30_000 });
+  await expect(
+    options.getByTestId("results-report-options-error"),
+  ).toBeHidden();
+}
 
 export async function runResultsReportStage(
   context: JourneyContext,
@@ -56,7 +65,7 @@ export async function runResultsReportStage(
     );
     expect(response.status()).toBe(201);
     await expectRenderedAssessmentPdf(request, response);
-    await expect(page.getByTestId("results-report-error")).toBeHidden();
+    await expectReportOptionsDismissed(options);
     await expectNoBrowserStorage(page);
   });
 }

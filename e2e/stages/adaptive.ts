@@ -43,6 +43,88 @@ const MAX_ADAPTIVE_PENDING_SAVE_ATTEMPTS = 3;
 const ADAPTIVE_PENDING_SAVE_TIMEOUT_MS = 120_000;
 const MAX_ADAPTIVE_PREPARE_RETRY_ATTEMPTS = 3;
 const MAX_ADAPTIVE_PREPARE_RELOAD_RECOVERIES = 2;
+export const MAX_ADAPTIVE_PREPARE_RECOVERY_ACTIONS =
+  MAX_ADAPTIVE_PREPARE_RETRY_ATTEMPTS + MAX_ADAPTIVE_PREPARE_RELOAD_RECOVERIES;
+export const ADAPTIVE_PREPARE_RECOVERY_TIMEOUT_MS = 180_000;
+const ADAPTIVE_PREPARE_CANCELLATION_GRACE_MS = 250;
+
+export function decideAdaptivePrepareRecovery(
+  decision: ReturnType<typeof classifyRecovery>,
+  failureAttempt: number,
+  elapsedMs: number,
+): "retry" | "reload" {
+  if (!decision.retry) {
+    throw new Error(
+      `Adaptive prepare failed without retryable evidence (${decision.reason})`,
+    );
+  }
+  if (elapsedMs >= ADAPTIVE_PREPARE_RECOVERY_TIMEOUT_MS) {
+    throw new Error(
+      `Adaptive prepare recovery exceeded its bounded time limit (${decision.reason})`,
+    );
+  }
+  assertRecoveryAttempt(
+    decision,
+    failureAttempt,
+    MAX_ADAPTIVE_PREPARE_RECOVERY_ACTIONS + 1,
+  );
+  return failureAttempt <= MAX_ADAPTIVE_PREPARE_RETRY_ATTEMPTS
+    ? "retry"
+    : "reload";
+}
+
+export async function runAdaptivePrepareRecoveryBeforeDeadline<T>(
+  remainingMs: number,
+  reason: ReturnType<typeof classifyRecovery>["reason"],
+  operation: () => Promise<T>,
+  cancel: () => Promise<void>,
+  cancellationGraceMs = ADAPTIVE_PREPARE_CANCELLATION_GRACE_MS,
+): Promise<T> {
+  if (remainingMs <= 0) {
+    throw new Error(
+      `Adaptive prepare recovery exceeded its bounded time limit (${reason})`,
+    );
+  }
+
+  const deadlineError = new Error("adaptive-prepare-recovery-deadline");
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const operationPromise = Promise.resolve().then(operation);
+  const deadlinePromise = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => reject(deadlineError), remainingMs);
+  });
+
+  try {
+    return await Promise.race([operationPromise, deadlinePromise]);
+  } catch (error) {
+    if (error !== deadlineError) throw error;
+    const observedOperation = operationPromise.then(
+      () => undefined,
+      () => undefined,
+    );
+    const observedCancellation = Promise.resolve()
+      .then(cancel)
+      .then(
+        () => undefined,
+        () => undefined,
+      );
+    let graceTimeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        Promise.all([observedOperation, observedCancellation]),
+        new Promise<void>((resolve) => {
+          graceTimeout = setTimeout(resolve, Math.max(0, cancellationGraceMs));
+        }),
+      ]);
+    } finally {
+      if (graceTimeout != null) clearTimeout(graceTimeout);
+    }
+    throw new Error(
+      `Adaptive prepare recovery exceeded its bounded time limit (${reason})`,
+    );
+  } finally {
+    if (timeout != null) clearTimeout(timeout);
+  }
+}
 
 export async function answerIssuedAdaptiveQuestion(
   page: Page,
@@ -382,90 +464,130 @@ export async function completeAdaptiveIfPresent(
     "adaptive-error-state",
     "review-screen",
   ]);
-  let retryAttempts = 0;
-  let reloadRecoveries = 0;
+  let recoveryFailureAttempts = 0;
+  let recoveryStartedAt: number | null = null;
+  let lastRecoveryReason: ReturnType<typeof classifyRecovery>["reason"] =
+    "assertion";
+  const remainingRecoveryTime = (): number => {
+    if (recoveryStartedAt == null) {
+      return ADAPTIVE_PREPARE_RECOVERY_TIMEOUT_MS;
+    }
+    const remaining = Math.floor(
+      ADAPTIVE_PREPARE_RECOVERY_TIMEOUT_MS -
+        (performance.now() - recoveryStartedAt),
+    );
+    if (remaining <= 0) {
+      throw new Error(
+        `Adaptive prepare recovery exceeded its bounded time limit (${lastRecoveryReason})`,
+      );
+    }
+    return remaining;
+  };
+  const runRecoveryAction = <T>(operation: () => Promise<T>): Promise<T> =>
+    runAdaptivePrepareRecoveryBeforeDeadline(
+      remainingRecoveryTime(),
+      lastRecoveryReason,
+      operation,
+      () => page.close({ runBeforeUnload: false }),
+    );
   while (
     initialStage === "adaptive-loading-state" ||
     initialStage === "adaptive-loading-error-state"
   ) {
     if (initialStage === "adaptive-loading-error-state") {
-      if (
-        retryAttempts >= MAX_ADAPTIVE_PREPARE_RETRY_ATTEMPTS &&
-        reloadRecoveries >= MAX_ADAPTIVE_PREPARE_RELOAD_RECOVERIES
-      ) {
-        throw new Error(
-          "Adaptive loading recovery exhausted after bounded retries",
-        );
-      }
-      const recoveryAttempt =
-        retryAttempts >= MAX_ADAPTIVE_PREPARE_RETRY_ATTEMPTS
-          ? reloadRecoveries + 1
-          : retryAttempts + 1;
-      const maxRecoveryAttempts =
-        retryAttempts >= MAX_ADAPTIVE_PREPARE_RETRY_ATTEMPTS
-          ? MAX_ADAPTIVE_PREPARE_RELOAD_RECOVERIES + 1
-          : MAX_ADAPTIVE_PREPARE_RETRY_ATTEMPTS + 1;
+      recoveryStartedAt ??= performance.now();
+      recoveryFailureAttempts += 1;
       const decision = prepareTracker.consumeRetryableFailure(
-        recoveryAttempt,
-        maxRecoveryAttempts,
+        recoveryFailureAttempts,
+        MAX_ADAPTIVE_PREPARE_RECOVERY_ACTIONS + 1,
+      );
+      lastRecoveryReason = decision.reason;
+      const recoveryAction = decideAdaptivePrepareRecovery(
+        decision,
+        recoveryFailureAttempts,
+        performance.now() - recoveryStartedAt,
       );
       logMilestone(
-        `transport: adaptive prepare ${decision.reason} failure is eligible for bounded recovery`,
+        `transport: adaptive prepare recovery ${recoveryFailureAttempts}/${MAX_ADAPTIVE_PREPARE_RECOVERY_ACTIONS} (${decision.reason}, ${recoveryAction})`,
       );
-      if (retryAttempts >= MAX_ADAPTIVE_PREPARE_RETRY_ATTEMPTS) {
-        reloadRecoveries += 1;
-        initialStage = await profiler.measure(
-          `adaptive.reload_recovery.${reloadRecoveries}`,
-          "recovery",
-          async () => {
-            await waitForBrowserNetworkReady(page, 15_000);
-            const reloadResponse = await page.reload({
-              waitUntil: "domcontentloaded",
-              timeout: 45_000,
-            });
-            expect(reloadResponse?.ok()).toBeTruthy();
-            await waitForBrowserNetworkReady(page, 15_000);
-            return waitForAssessmentStage(page, [
+      if (recoveryAction === "reload") {
+        const reloadRecovery =
+          recoveryFailureAttempts - MAX_ADAPTIVE_PREPARE_RETRY_ATTEMPTS;
+        initialStage = await runRecoveryAction(() =>
+          profiler.measure(
+            `adaptive.reload_recovery.${reloadRecovery}`,
+            "recovery",
+            async () => {
+              await waitForBrowserNetworkReady(
+                page,
+                Math.min(15_000, remainingRecoveryTime()),
+              );
+              const reloadResponse = await page.reload({
+                waitUntil: "domcontentloaded",
+                timeout: Math.min(45_000, remainingRecoveryTime()),
+              });
+              expect(reloadResponse?.ok()).toBeTruthy();
+              await waitForBrowserNetworkReady(
+                page,
+                Math.min(15_000, remainingRecoveryTime()),
+              );
+              return waitForAssessmentStage(
+                page,
+                [
+                  "adaptive-loading-state",
+                  "adaptive-loading-error-state",
+                  "adaptive-screen",
+                  "adaptive-error-state",
+                  "review-screen",
+                ],
+                remainingRecoveryTime(),
+              );
+            },
+          ),
+        );
+        continue;
+      }
+      initialStage = await runRecoveryAction(() =>
+        profiler.measure("adaptive.retry_loading", "stage", async () => {
+          await waitForEnabledAndClick(
+            page,
+            "adaptive-loading-retry",
+            Math.min(30_000, remainingRecoveryTime()),
+          );
+          return waitForRetryOutcome(
+            page,
+            "adaptive-loading-error-state",
+            [
               "adaptive-loading-state",
-              "adaptive-loading-error-state",
               "adaptive-screen",
               "adaptive-error-state",
               "review-screen",
-            ]);
-          },
-        );
-        retryAttempts = 0;
-        continue;
-      }
-      retryAttempts += 1;
-      initialStage = await profiler.measure(
-        "adaptive.retry_loading",
-        "stage",
-        async () => {
-          await waitForEnabledAndClick(page, "adaptive-loading-retry");
-          return waitForRetryOutcome(page, "adaptive-loading-error-state", [
-            "adaptive-loading-state",
-            "adaptive-screen",
-            "adaptive-error-state",
-            "review-screen",
-          ]);
-        },
+            ],
+            Math.min(30_000, remainingRecoveryTime()),
+          );
+        }),
       );
       continue;
     }
 
     if (initialStage === "adaptive-loading-state") {
-      initialStage = await profiler.measure(
-        "adaptive.loading_to_question",
-        "stage",
-        () =>
-          waitForAssessmentStage(page, [
-            "adaptive-loading-error-state",
-            "adaptive-screen",
-            "adaptive-error-state",
-            "review-screen",
-          ]),
-      );
+      const waitForLoadingOutcome = () =>
+        profiler.measure("adaptive.loading_to_question", "stage", () =>
+          waitForAssessmentStage(
+            page,
+            [
+              "adaptive-loading-error-state",
+              "adaptive-screen",
+              "adaptive-error-state",
+              "review-screen",
+            ],
+            recoveryStartedAt == null ? 360_000 : remainingRecoveryTime(),
+          ),
+        );
+      initialStage =
+        recoveryStartedAt == null
+          ? await waitForLoadingOutcome()
+          : await runRecoveryAction(waitForLoadingOutcome);
       continue;
     }
   }
