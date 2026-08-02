@@ -1,58 +1,75 @@
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
-const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
-export const CSRF_HEADER = 'x-csrf-token'
-const JSON_CONTENT_TYPES = new Set(['application/json'])
-const DEFAULT_UNSAFE_CONTENT_TYPES = JSON_CONTENT_TYPES
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+export const CSRF_HEADER = "x-csrf-token";
+const JSON_CONTENT_TYPES = new Set(["application/json"]);
+const DEFAULT_UNSAFE_CONTENT_TYPES = JSON_CONTENT_TYPES;
 
-export type CsrfValidationResult = { ok: true } | { ok: false; status: 403 | 415; code: string }
+export type CsrfValidationResult =
+  | { ok: true }
+  | { ok: false; status: 403 | 415; code: string };
 
 export function isSafeMethod(method: string): boolean {
-  return SAFE_METHODS.has(method.toUpperCase())
+  return SAFE_METHODS.has(method.toUpperCase());
 }
 
 export function createCsrfToken(
   secret: string,
-  nonce = randomBytes(32).toString('base64url'),
+  nonce = randomBytes(32).toString("base64url"),
 ): string {
-  const signature = signCsrfNonce(secret, nonce)
-  return `${nonce}.${signature}`
+  const signature = signCsrfNonce(secret, nonce);
+  return `${nonce}.${signature}`;
 }
 
 export function verifyCsrfToken(secret: string, token: string): boolean {
-  const [nonce, signature, extra] = token.split('.')
-  if (!nonce || !signature || extra) return false
-  const expected = signCsrfNonce(secret, nonce)
-  return safeEqual(signature, expected)
+  const [nonce, signature, extra] = token.split(".");
+  if (!nonce || !signature || extra) return false;
+  const expected = signCsrfNonce(secret, nonce);
+  return safeEqual(signature, expected);
 }
 
 export function validateUnsafeRequest(
   request: Request,
   csrfCookieValue: string | undefined,
-  options: { csrfSecret: string; allowedOrigins: string[]; allowedContentTypes?: ReadonlySet<string> },
+  options: {
+    csrfSecret: string;
+    allowedOrigins: string[];
+    allowedContentTypes?: ReadonlySet<string>;
+    allowBodylessDelete?: boolean;
+  },
 ): CsrfValidationResult {
-  if (isSafeMethod(request.method)) return { ok: true }
+  if (isSafeMethod(request.method)) return { ok: true };
 
-  const contentTypeResult = validateContentType(
-    request.headers.get('content-type'),
-    options.allowedContentTypes ?? DEFAULT_UNSAFE_CONTENT_TYPES,
-  )
-  if (!contentTypeResult.ok) return contentTypeResult
+  // A bodyless DELETE legitimately has no Content-Type header. Keep the
+  // exemption limited to that exact request shape while continuing to require
+  // origin and CSRF proof below.
+  const allowBodylessDelete =
+    options.allowBodylessDelete === true &&
+    request.method.toUpperCase() === "DELETE" &&
+    request.body === null &&
+    request.headers.get("content-type") === null;
+  const contentTypeResult = allowBodylessDelete
+    ? { ok: true as const }
+    : validateContentType(
+        request.headers.get("content-type"),
+        options.allowedContentTypes ?? DEFAULT_UNSAFE_CONTENT_TYPES,
+      );
+  if (!contentTypeResult.ok) return contentTypeResult;
 
-  const originResult = validateOriginHeaders(request, options.allowedOrigins)
-  if (!originResult.ok) return originResult
+  const originResult = validateOriginHeaders(request, options.allowedOrigins);
+  if (!originResult.ok) return originResult;
 
-  const headerValue = request.headers.get(CSRF_HEADER)
+  const headerValue = request.headers.get(CSRF_HEADER);
   if (!csrfCookieValue || !headerValue) {
-    return { ok: false, status: 403, code: 'csrf_missing' }
+    return { ok: false, status: 403, code: "csrf_missing" };
   }
   if (headerValue !== csrfCookieValue) {
-    return { ok: false, status: 403, code: 'csrf_mismatch' }
+    return { ok: false, status: 403, code: "csrf_mismatch" };
   }
   if (!verifyCsrfToken(options.csrfSecret, headerValue)) {
-    return { ok: false, status: 403, code: 'csrf_invalid' }
+    return { ok: false, status: 403, code: "csrf_invalid" };
   }
-  return { ok: true }
+  return { ok: true };
 }
 
 export function validateOriginHeaders(
@@ -63,54 +80,57 @@ export function validateOriginHeaders(
   // Next.js route handlers see the internal upstream URL (e.g. http://localhost:3000),
   // so auto-seeding would whitelist that internal origin for any caller who can set
   // the Origin header. Use only explicitly configured origins.
-  const allowedOrigins = new Set(configuredAllowedOrigins)
+  const allowedOrigins = new Set(configuredAllowedOrigins);
 
   if (allowedOrigins.size === 0) {
-    return { ok: false, status: 403, code: 'origin_forbidden' }
+    return { ok: false, status: 403, code: "origin_forbidden" };
   }
 
-  const origin = request.headers.get('origin')
+  const origin = request.headers.get("origin");
   if (!origin || !allowedOrigins.has(origin)) {
-    return { ok: false, status: 403, code: 'origin_forbidden' }
+    return { ok: false, status: 403, code: "origin_forbidden" };
   }
 
-  const referer = request.headers.get('referer')
+  const referer = request.headers.get("referer");
   if (referer) {
     try {
       if (!allowedOrigins.has(new URL(referer).origin)) {
-        return { ok: false, status: 403, code: 'referer_forbidden' }
+        return { ok: false, status: 403, code: "referer_forbidden" };
       }
     } catch {
-      return { ok: false, status: 403, code: 'referer_forbidden' }
+      return { ok: false, status: 403, code: "referer_forbidden" };
     }
   }
 
-  return { ok: true }
+  return { ok: true };
 }
 
-export function validateJsonContentType(contentType: string | null): CsrfValidationResult {
-  return validateContentType(contentType, JSON_CONTENT_TYPES)
+export function validateJsonContentType(
+  contentType: string | null,
+): CsrfValidationResult {
+  return validateContentType(contentType, JSON_CONTENT_TYPES);
 }
 
 function validateContentType(
   contentType: string | null,
   allowedContentTypes: ReadonlySet<string>,
 ): CsrfValidationResult {
-  if (!contentType) return { ok: false, status: 415, code: 'content_type_required' }
-  const [mediaType] = contentType.split(';', 1)
+  if (!contentType)
+    return { ok: false, status: 415, code: "content_type_required" };
+  const [mediaType] = contentType.split(";", 1);
   if (!mediaType || !allowedContentTypes.has(mediaType.trim().toLowerCase())) {
-    return { ok: false, status: 415, code: 'content_type_unsupported' }
+    return { ok: false, status: 415, code: "content_type_unsupported" };
   }
-  return { ok: true }
+  return { ok: true };
 }
 
 function signCsrfNonce(secret: string, nonce: string): string {
-  return createHmac('sha256', secret).update(nonce).digest('base64url')
+  return createHmac("sha256", secret).update(nonce).digest("base64url");
 }
 
 function safeEqual(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left)
-  const rightBuffer = Buffer.from(right)
-  if (leftBuffer.length !== rightBuffer.length) return false
-  return timingSafeEqual(leftBuffer, rightBuffer)
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  if (leftBuffer.length !== rightBuffer.length) return false;
+  return timingSafeEqual(leftBuffer, rightBuffer);
 }

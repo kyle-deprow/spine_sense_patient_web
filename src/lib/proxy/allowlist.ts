@@ -440,6 +440,15 @@ export function validateProxyTarget(
   return { ok: true, targetPath };
 }
 
+export function isPatientDocumentDeleteTarget(
+  method: string,
+  targetPath: string,
+): boolean {
+  return (
+    method.toUpperCase() === "DELETE" && DOCUMENT_EXACT_RE.test(targetPath)
+  );
+}
+
 function matchesRoute(targetPath: string, route: AllowedProxyRoute): boolean {
   if (route.pathPattern) return route.pathPattern.test(targetPath);
   if (targetPath === route.prefix) return true;

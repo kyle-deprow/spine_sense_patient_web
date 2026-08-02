@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { validateProxyTarget } from "@/lib/proxy/allowlist";
+import {
+  isPatientDocumentDeleteTarget,
+  validateProxyTarget,
+} from "@/lib/proxy/allowlist";
 
 describe("proxy allowlist", () => {
   it("allows canonical patient routes under /api/proxy/api/v1", () => {
@@ -499,6 +502,23 @@ describe("proxy allowlist", () => {
         targetPath,
       });
     }
+  });
+
+  it("limits bodyless DELETE support to exact patient document targets", () => {
+    const documentPath =
+      "/api/v1/patients/me/documents/10000000-0000-4000-8000-000000000001";
+
+    expect(isPatientDocumentDeleteTarget("DELETE", documentPath)).toBe(true);
+    expect(isPatientDocumentDeleteTarget("POST", documentPath)).toBe(false);
+    expect(
+      isPatientDocumentDeleteTarget(
+        "DELETE",
+        "/api/v1/patients/me/assessments/10000000-0000-4000-8000-000000000001",
+      ),
+    ).toBe(false);
+    expect(
+      isPatientDocumentDeleteTarget("DELETE", `${documentPath}/findings`),
+    ).toBe(false);
   });
 
   it("blocks arbitrary patient document children at the BFF boundary", () => {

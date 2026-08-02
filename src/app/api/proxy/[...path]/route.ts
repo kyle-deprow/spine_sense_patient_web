@@ -3,7 +3,10 @@ import { NextResponse } from "next/server";
 
 import { COOKIE_NAMES } from "@/lib/auth/cookies";
 import { validateUnsafeRequest } from "@/lib/auth/csrf";
-import { validateProxyTarget } from "@/lib/proxy/allowlist";
+import {
+  isPatientDocumentDeleteTarget,
+  validateProxyTarget,
+} from "@/lib/proxy/allowlist";
 import {
   buildProxyRequestHeaders,
   buildProxyResponseHeaders,
@@ -96,6 +99,10 @@ async function handler(request: NextRequest, context: ProxyContext) {
       )
         ? STORY_AUDIO_CSRF_CONTENT_TYPES
         : DEFAULT_CSRF_CONTENT_TYPES,
+      allowBodylessDelete: isPatientDocumentDeleteTarget(
+        request.method,
+        target.targetPath,
+      ),
     },
   );
   if (!csrf.ok) {
