@@ -1,17 +1,25 @@
-import type { E2ERunIdentity } from "./runIdentity";
+import { isExactSyntheticIdentity, type E2ERunIdentity } from "./runIdentity";
+
+function assertDisposableStack(identity: E2ERunIdentity): void {
+  if (!isExactSyntheticIdentity(identity)) {
+    throw new Error("Patient web E2E requires an exact synthetic run identity");
+  }
+  if (process.env.PATIENT_WEB_E2E_STACK_DISPOSABLE !== "true") {
+    throw new Error(
+      "Patient web E2E refuses to mutate data unless PATIENT_WEB_E2E_STACK_DISPOSABLE=true",
+    );
+  }
+}
 
 /**
- * Run one E2E journey inside the disposable stack owned by the Make
- * lifecycle. Application-level DB/cache cleanup is intentionally not a
- * browser-test responsibility.
+ * Guard browser mutation behind the disposable stack owned by the root Make
+ * lifecycle. The outer process owns pre/post volume disposal, including when
+ * Playwright times out or is interrupted.
  */
 export async function withStackOwnedE2eLifecycle<T>(options: {
   identity: E2ERunIdentity;
   action: () => Promise<T>;
 }): Promise<T> {
-  // Keep the exact identity in the lifecycle contract so callers cannot
-  // accidentally fall back to a shared/default patient identity. Disposal is
-  // performed by `docker compose down --volumes` in the isolated Make stack.
-  void options.identity;
+  assertDisposableStack(options.identity);
   return options.action();
 }

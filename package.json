@@ -13,7 +13,7 @@
     "type-check": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test",
+    "test:e2e": "node scripts/run-playwright-e2e.cjs test",
     "smoke:bundle": "node scripts/check-browser-bundle.cjs",
     "validate:local": "pnpm lint && pnpm type-check && pnpm test && pnpm build:patient-app && pnpm build && pnpm smoke:bundle",
     "release:validate": "pnpm validate:local",

@@ -5,15 +5,22 @@ through the patient-web BFF: `e2e/full-assessment.spec.ts`. Run it through the
 root Make lifecycle so the API, BFF, and synthetic support state are configured
 consistently:
 
-- `make patient-web-up`
-- `make patient-web-test`
 - `make patient-web-e2e`
+- `make patient-web-e2e-changed E2E_BASE=<base> E2E_HEAD=<head>`
 
-The package runner is intentionally explicit:
+`patient-web-test` and the package runner are inner lifecycle commands. Use
+them only when an operator owns an equivalent disposable stack and explicitly
+sets the disposable-stack contract:
 
 ```bash
-pnpm test:e2e
+PATIENT_WEB_E2E_STACK_DISPOSABLE=true pnpm test:e2e
 ```
+
+`pnpm test:e2e` is the supported package entrypoint. Its Node wrapper sets the
+failure-snapshot suppression before Playwright loads. Raw
+`pnpm exec playwright test` is unsupported unless the process is explicitly
+started with `PLAYWRIGHT_NO_COPY_PROMPT=1`; global setup rejects a missing or
+non-exact gate before browser execution.
 
 It collects only the canonical full-assessment spec in the Chromium project.
 The journey uses synthetic identities, server-owned clinical state, BFF-only
@@ -32,17 +39,25 @@ Each invocation creates a UUID-backed synthetic email and sends the exact
 canonical Make lifecycle owns disposal by running the journey in an isolated
 stack and removing its database/object-storage volumes on success or failure.
 The compatibility cleanup endpoint still validates the identity and records
-the control-plane event, but does not perform broad application-data deletion.
-Missing or mismatched identities are rejected; no global patient deletion,
-cache flush, or BFF rate-limit reset is permitted. Direct `pnpm test:e2e`
-invocations therefore require an operator-managed disposable stack when
-residue-free cleanup is needed.
+the control-plane event, but does not delete application data. Browser tests do
+not call it or interpret its response as deletion. Before any journey mutation,
+the browser lifecycle requires `PATIENT_WEB_E2E_STACK_DISPOSABLE=true`; the root
+Make lifecycle supplies that marker only for its isolated Compose stack. Direct
+`pnpm test:e2e` invocations therefore fail closed unless an operator explicitly
+owns an equivalent disposable stack.
 
 Performance behavior is explicit through `PATIENT_WEB_E2E_PERFORMANCE_MODE`:
 `observe` is the intentional default, `enforce` fails on configured budgets,
 and `off` omits measurements. Performance JSON attachments remain opt-in via
 `PATIENT_WEB_E2E_PERFORMANCE_ARTIFACTS=true`; traces, screenshots, and videos
-remain off by default.
+remain off. The suite also forces Playwright failure-page accessibility
+snapshots off, preventing `error-context.md` from capturing clinical UI text.
+A pre-browser global setup checks every resolved project and rejects effective
+CLI overrides that enable trace, video, or screenshot capture. Playwright UI
+mode is rejected during config loading because the pinned version can enable
+live tracing after global setup. Debug mode does not enable capture in the
+pinned Playwright version and remains subject to the effective-project check.
+Do not re-enable browser-state artifacts for this journey.
 
 Transient recovery is bounded and classified. Network-change and 502/503/504
 transport failures may recover within their stage budget; application,

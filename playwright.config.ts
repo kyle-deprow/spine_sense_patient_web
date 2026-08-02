@@ -1,5 +1,8 @@
 import { defineConfig, devices } from "@playwright/test";
 import scopeManifest from "./e2e/scopes.json";
+import { rejectPlaywrightUiMode } from "./e2e/support/artifactPolicy";
+
+rejectPlaywrightUiMode(process.argv);
 
 import { acceptedConsentStorageState } from "./e2e/fixtures/cookieConsent";
 
@@ -42,6 +45,7 @@ export default defineConfig({
   testMatch: selectedSpecs,
   grep: new RegExp(selectedTags.join("|")),
   outputDir,
+  globalSetup: "./e2e/support/artifactPolicy.ts",
   timeout: 120_000,
   expect: {
     timeout: 30_000,
