@@ -20,6 +20,7 @@ describe('middleware CSP', () => {
 
     expect(csp).toContain("script-src 'self' 'nonce-nonce-value'")
     expect(csp).toContain("style-src-elem 'self' 'nonce-nonce-value'")
+    expect(csp).toContain("font-src 'self'")
     expect(csp).toContain("worker-src 'none'")
     expect(csp).toContain("object-src 'none'")
     expect(csp).toContain("frame-ancestors 'none'")

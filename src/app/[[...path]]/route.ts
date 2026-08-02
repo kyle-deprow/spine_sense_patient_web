@@ -157,35 +157,40 @@ function rewriteViewportMeta(html: string): string {
 }
 
 const WEB_COMPATIBILITY_STYLES = `<style data-patient-web-compat>
-@font-face { font-family: 'Satoshi-Regular'; src: local('unused'); font-weight: 400; }
-@font-face { font-family: 'Satoshi-Medium'; src: local('unused'); font-weight: 500; }
-@font-face { font-family: 'Satoshi-Bold'; src: local('unused'); font-weight: 700; }
-@font-face { font-family: 'ClashDisplay-Semibold'; src: local('unused'); font-weight: 600; }
+@font-face { font-family: 'Satoshi-Regular'; src: url('/assets/fonts/Satoshi-Regular.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Satoshi-Medium'; src: url('/assets/fonts/Satoshi-Medium.otf') format('opentype'); font-weight: 500; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Satoshi-Bold'; src: url('/assets/fonts/Satoshi-Bold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: swap; }
+@font-face { font-family: 'ClashDisplay-Semibold'; src: url('/assets/fonts/ClashDisplay-Semibold.otf') format('opentype'); font-weight: 600; font-style: normal; font-display: swap; }
+@font-face { font-family: 'ClashDisplay-Bold'; src: url('/assets/fonts/ClashDisplay-Bold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: swap; }
 
 [style*="font-family"][style*="Satoshi-Regular"],
 [class*="r-ctd730"] {
-  font-family: ${SYSTEM_FONT_STACK} !important;
+  font-family: 'Satoshi-Regular', ${SYSTEM_FONT_STACK} !important;
   font-weight: 400;
 }
 [style*="font-family"][style*="Satoshi-Medium"],
 [class*="r-18jse50"] {
-  font-family: ${SYSTEM_FONT_STACK} !important;
+  font-family: 'Satoshi-Medium', ${SYSTEM_FONT_STACK} !important;
   font-weight: 500;
 }
 [style*="font-family"][style*="Satoshi-Bold"],
 [class*="r-1my5303"] {
-  font-family: ${SYSTEM_FONT_STACK} !important;
+  font-family: 'Satoshi-Bold', ${SYSTEM_FONT_STACK} !important;
   font-weight: 700;
 }
 [style*="font-family"][style*="ClashDisplay"],
 [class*="r-1ai7t6e"] {
-  font-family: ${SYSTEM_FONT_STACK} !important;
+  font-family: 'ClashDisplay-Semibold', ${SYSTEM_FONT_STACK} !important;
   font-weight: 600;
+}
+[style*="font-family"][style*="ClashDisplay-Bold"] {
+  font-family: 'ClashDisplay-Bold', ${SYSTEM_FONT_STACK} !important;
+  font-weight: 700;
 }
 
 html,
 body {
-  font-family: ${SYSTEM_FONT_STACK};
+  font-family: 'Satoshi-Regular', ${SYSTEM_FONT_STACK};
 }
 
 input,

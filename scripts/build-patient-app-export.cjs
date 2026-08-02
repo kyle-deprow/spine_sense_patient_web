@@ -19,6 +19,14 @@ const vectorIconFontsDir = path.join(
   "react-native-vector-icons",
   "Fonts",
 );
+const brandFontFiles = [
+  "ClashDisplay-Bold.otf",
+  "ClashDisplay-Semibold.otf",
+  "Satoshi-Bold.otf",
+  "Satoshi-Medium.otf",
+  "Satoshi-Regular.otf",
+];
+const brandFontsDir = path.join(patientAppDir, "assets", "fonts");
 const vectorIconFontAssetRe =
   /\/assets\/node_modules\/[^"'`)\s]+\/Fonts\/([A-Za-z0-9_]+)\.[a-f0-9]+\.ttf/g;
 
@@ -103,6 +111,7 @@ if (!fs.existsSync(path.join(outputDir, "index.html"))) {
 }
 
 copyVectorIconFontAssets();
+copyBrandFontAssets();
 
 process.exit(0);
 
@@ -152,6 +161,24 @@ function copyVectorIconFontAssets() {
 
   console.log(
     `Copied ${requested.size} Expo vector icon font asset(s) into ${outputDir}`,
+  );
+}
+
+function copyBrandFontAssets() {
+  const targetDir = path.join(outputDir, "assets", "fonts");
+  fs.mkdirSync(targetDir, { recursive: true });
+
+  for (const fileName of brandFontFiles) {
+    const source = path.join(brandFontsDir, fileName);
+    if (!fs.existsSync(source)) {
+      console.error(`Patient app brand font is missing: ${source}`);
+      process.exit(1);
+    }
+    fs.copyFileSync(source, path.join(targetDir, fileName));
+  }
+
+  console.log(
+    `Copied ${brandFontFiles.length} brand font asset(s) into ${targetDir}`,
   );
 }
 

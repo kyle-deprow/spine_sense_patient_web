@@ -38,6 +38,10 @@ describe('patient app export route', () => {
       'font/ttf',
     ],
     ['Satoshi-Regular.otf', 'font/otf'],
+    ['Satoshi-Medium.otf', 'font/otf'],
+    ['Satoshi-Bold.otf', 'font/otf'],
+    ['ClashDisplay-Semibold.otf', 'font/otf'],
+    ['ClashDisplay-Bold.otf', 'font/otf'],
   ])('serves %s with the expected font content type', async (fileName, contentType) => {
     await makeExportFile(fileName, new Uint8Array([0, 1, 2, 3]))
 
@@ -69,6 +73,22 @@ describe('patient app export route', () => {
     expect(html).toContain('<style nonce="test-nonce" data-patient-web-compat>')
     expect(html).not.toContain("font-family: 'Ionicons'")
     expect(html).not.toContain('@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts')
+    for (const [family, fileName] of [
+      ['Satoshi-Regular', 'Satoshi-Regular.otf'],
+      ['Satoshi-Medium', 'Satoshi-Medium.otf'],
+      ['Satoshi-Bold', 'Satoshi-Bold.otf'],
+      ['ClashDisplay-Semibold', 'ClashDisplay-Semibold.otf'],
+      ['ClashDisplay-Bold', 'ClashDisplay-Bold.otf'],
+    ]) {
+      expect(html).toContain(
+        `@font-face { font-family: '${family}'; src: url('/assets/fonts/${fileName}') format('opentype');`,
+      )
+    }
+    expect(html).toContain("font-family: 'Satoshi-Bold', -apple-system")
+    expect(html).toContain("font-family: 'ClashDisplay-Bold', -apple-system")
+    expect(html).not.toContain(
+      'font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display"',
+    )
     expect(html).toContain('[class*="r-1my5303"]')
     expect(html).toContain('[data-testid="sticky-tab-wrapper"]')
     expect(html).toContain('<script data-patient-web-style-nonce nonce="test-nonce">')
