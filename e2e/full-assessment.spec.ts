@@ -1993,12 +1993,14 @@ async function requestFreshVerificationChallenge(page: Page): Promise<void> {
 
     const terminalResponse = outcome.responses.at(-1);
     if (terminalResponse == null) {
+      if (await isPostVerificationState(page)) return;
       lastError = new Error(
         `verification resend failed without a response; failed_requests=${outcome.failedRequests.length}`,
       );
       continue;
     }
     const terminalBody = responseBodies.get(terminalResponse) ?? "";
+    if (await isPostVerificationState(page)) return;
     lastError = new Error(
       `verification resend failed status=${terminalResponse.status()}`,
     );
