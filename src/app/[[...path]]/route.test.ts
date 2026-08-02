@@ -177,6 +177,34 @@ describe('patient app export route', () => {
     expect(html).toContain('input:not([id^="ss-zoom-exempt-"])')
   })
 
+  it('keeps textareas scrollable while single-line inputs still truncate', async () => {
+    await makeExportFile(
+      'index.html',
+      '<!doctype html><html><head><title>SpineSense</title></head><body></body></html>',
+    )
+
+    const response = await GET(
+      new NextRequest('http://localhost/', {
+        headers: { 'x-nonce': 'test-nonce' },
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    const html = await response.text()
+    const compatBlock = html.match(/<style[^>]*data-patient-web-compat>([\s\S]*?)<\/style>/)?.[1] ?? ''
+
+    // A story longer than the box must stay reachable: overflow hidden on a
+    // textarea removes the scrollbar, wheel, and touch panning entirely.
+    const textareaOverflowRules = [...compatBlock.matchAll(/([^{}]+){[^}]*overflow[^}]*}/g)]
+      .filter(([, selector]) => /(^|,)\s*textarea\s*(,|$)/m.test((selector ?? '').trim()))
+    expect(textareaOverflowRules.map(([rule]) => rule).join('\n')).not.toContain('overflow: hidden')
+    expect(compatBlock).toMatch(/textarea\s*{[^}]*overflow-y:\s*auto\s*!important/)
+
+    // The single-line input truncation behavior stays.
+    expect(compatBlock).toMatch(/input\s*{[^}]*overflow:\s*hidden\s*!important/)
+    expect(compatBlock).toMatch(/input\s*{[^}]*text-overflow:\s*ellipsis\s*!important/)
+  })
+
   it('does not inject compatibility CSS into malformed HTML without a head', async () => {
     await makeExportFile('index.html', '<main>Patient app</main>')
 

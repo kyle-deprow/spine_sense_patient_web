@@ -193,12 +193,20 @@ body {
   font-family: 'Satoshi-Regular', ${SYSTEM_FONT_STACK};
 }
 
-input,
-textarea {
+input {
   box-sizing: border-box !important;
   max-width: 100% !important;
   overflow: hidden !important;
   text-overflow: ellipsis !important;
+}
+
+/* Textareas must keep native scrolling: overflow hidden here made any story
+   longer than the box unreachable (no scrollbar, no wheel, no touch pan), and
+   text-overflow never applies to multiline fields anyway. */
+textarea {
+  box-sizing: border-box !important;
+  max-width: 100% !important;
+  overflow-y: auto !important;
 }
 
 /* iOS Safari auto-zooms any focused input that renders below 16px and never
