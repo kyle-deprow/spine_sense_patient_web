@@ -7,7 +7,9 @@ const nextConfig: NextConfig = {
   skipTrailingSlashRedirect: true,
   outputFileTracingIncludes: {
     '/*': [
-      './patient-app-export/**/*',
+      ...(process.env.PATIENT_APP_WEB_EXPORT_DIR
+        ? []
+        : ['./patient-app-export/**/*']),
       './node_modules/.pnpm/@img+sharp-libvips-*/**/*',
       './node_modules/.pnpm/@img+sharp-*/node_modules/@img/sharp-libvips-*/**/*',
       './node_modules/.pnpm/sharp@0.35.0/node_modules/@img/sharp-libvips-*/**/*',
