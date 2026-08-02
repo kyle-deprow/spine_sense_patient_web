@@ -13,6 +13,7 @@ const assessmentPath =
 function screeningMutations(): QuestionnaireMutation[] {
   return [
     {
+      method: "PATCH",
       path: `${assessmentPath}/screening/answers`,
       payload: {
         answers: Object.fromEntries([
@@ -29,6 +30,7 @@ function screeningMutations(): QuestionnaireMutation[] {
       },
     },
     {
+      method: "POST",
       path: `${assessmentPath}/screening/complete`,
       payload: { expected_revision: 1 },
     },
@@ -53,6 +55,7 @@ describe("questionnaire request contract checkpoints", () => {
 
   it("requires adaptive completion while retaining exact raw answer checks", () => {
     const adaptiveCompletion: QuestionnaireMutation = {
+      method: "POST",
       path: `${assessmentPath}/adaptive/complete-with-answers`,
       payload: {
         answers: { INF_STIFF_SPINE: "no" },
@@ -69,6 +72,7 @@ describe("questionnaire request contract checkpoints", () => {
       validate(
         [
           {
+            method: "POST",
             path: adaptiveCompletion.path,
             payload: {
               answers: { INF_STIFF_SPINE: "no" },

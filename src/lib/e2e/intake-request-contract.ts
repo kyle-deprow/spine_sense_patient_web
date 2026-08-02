@@ -79,6 +79,7 @@ function expectedStepData(step: string, scenario: IntakeScenario): JsonRecord {
 
 /** Validate one captured browser-wire intake mutation; fail closed on drift. */
 export function assertExactIntakeRequestContract(
+  method: "POST" | "PUT" | "PATCH",
   path: string,
   payload: unknown,
   scenario: IntakeScenario,
@@ -86,6 +87,7 @@ export function assertExactIntakeRequestContract(
   if (!isRecord(payload)) throw new Error(`${path} must send a JSON object`);
 
   if (path.endsWith("/intake/route")) {
+    if (method !== "POST") throw new Error(`${path} method must be POST`);
     assertKeys(payload, ["narrative"], path);
     assertEqual(
       payload.narrative,
@@ -97,6 +99,7 @@ export function assertExactIntakeRequestContract(
 
   const stepMatch = path.match(/\/intake\/steps\/([^/]+)$/);
   if (stepMatch?.[1] != null) {
+    if (method !== "PUT") throw new Error(`${path} method must be PUT`);
     assertKeys(payload, ["step_data"], path);
     if (!isRecord(payload.step_data))
       throw new Error(`${path}.step_data must be an object`);
@@ -106,7 +109,32 @@ export function assertExactIntakeRequestContract(
     return;
   }
 
+  if (path === "/api/proxy/api/v1/patients/me/intake/story") {
+    if (method !== "PUT") throw new Error(`${path} method must be PUT`);
+    assertKeys(
+      payload,
+      ["narrative", "input_method", "expected_revision"],
+      path,
+    );
+    assertEqual(
+      payload.narrative,
+      scenario.onboarding.chiefComplaint,
+      `${path}.narrative`,
+    );
+    assertEqual(payload.input_method, "text", `${path}.input_method`);
+    if (
+      !Number.isSafeInteger(payload.expected_revision) ||
+      (payload.expected_revision as number) < 0
+    ) {
+      throw new Error(
+        `${path}.expected_revision must be a non-negative integer`,
+      );
+    }
+    return;
+  }
+
   if (path.endsWith("/intake/progress/complete")) {
+    if (method !== "POST") throw new Error(`${path} method must be POST`);
     assertKeys(payload, [], path);
     return;
   }

@@ -60,6 +60,17 @@ function uploadUrlFailureMessage(
   return `assessment document upload-url status=${response.status()} code=${code}`;
 }
 
+export async function waitForDocumentConfirmOrUploadError(
+  confirmResponse: Promise<PlaywrightResponse>,
+  uploadError: Promise<"upload_error">,
+): Promise<PlaywrightResponse> {
+  const outcome = await Promise.race([confirmResponse, uploadError]);
+  if (outcome === "upload_error") {
+    throw new Error("Assessment document byte upload failed before confirmation");
+  }
+  return outcome;
+}
+
 export async function uploadSyntheticAssessmentDocumentFromRecordsStep(
   page: Page,
   email: string,
@@ -69,6 +80,7 @@ export async function uploadSyntheticAssessmentDocumentFromRecordsStep(
     let observedStatus: number | undefined;
     let uploadUrlResponsePromise: Promise<PlaywrightResponse> | null = null;
     let confirmResponsePromise: Promise<PlaywrightResponse> | null = null;
+    let uploadErrorPromise: Promise<"upload_error"> | null = null;
     let fileChooserPromise: Promise<FileChooser> | null = null;
     try {
       if (
@@ -130,6 +142,11 @@ export async function uploadSyntheticAssessmentDocumentFromRecordsStep(
           response.request().method() === "POST",
         { timeout: TRANSITION_BUDGETS_MS.stage },
       );
+      uploadErrorPromise = page
+        .getByTestId("records-file-error")
+        .waitFor({ state: "visible", timeout: TRANSITION_BUDGETS_MS.stage })
+        .then(() => "upload_error" as const);
+      void uploadErrorPromise.catch(() => undefined);
       await fileChooser.setFiles(SYNTHETIC_ASSESSMENT_UPLOAD);
 
       const uploadUrlResponse = await uploadUrlResponsePromise;
@@ -153,7 +170,10 @@ export async function uploadSyntheticAssessmentDocumentFromRecordsStep(
         uploadUrlResponse.url(),
       );
 
-      const confirmResponse = await confirmResponsePromise;
+      const confirmResponse = await waitForDocumentConfirmOrUploadError(
+        confirmResponsePromise,
+        uploadErrorPromise,
+      );
       observedStatus = confirmResponse.status();
       expect(
         confirmResponse.ok(),
@@ -207,6 +227,7 @@ export async function uploadSyntheticAssessmentDocumentFromRecordsStep(
       lastError = error;
       void uploadUrlResponsePromise?.catch(() => undefined);
       void confirmResponsePromise?.catch(() => undefined);
+      void uploadErrorPromise?.catch(() => undefined);
       void fileChooserPromise?.catch(() => undefined);
       const recovery = classifyRecovery({
         ...(observedStatus == null ? {} : { status: observedStatus }),

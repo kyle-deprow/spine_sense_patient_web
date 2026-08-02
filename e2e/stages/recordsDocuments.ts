@@ -9,6 +9,7 @@ import {
   waitForEnabledAndClick,
 } from "../journey/selectors";
 import { AssessmentEntryNavigationTracker } from "../support/assessmentEntryRecovery";
+import { maybeThrowForcedMidFlowFailure } from "../support/forcedMidFlowFailure";
 import { uploadSyntheticAssessmentDocumentFromRecordsStep } from "./recordsUpload";
 
 const ASSESSMENT_ENTRY_STAGES = [
@@ -102,6 +103,7 @@ export async function runRecordsDocumentsStage(
   await context.step("records and documents", async () => {
     await expect(recordsStepLocator(page)).toBeVisible({ timeout: 60_000 });
     await uploadSyntheticAssessmentDocumentFromRecordsStep(page, email);
+    maybeThrowForcedMidFlowFailure("documents");
     const firstAssessmentScreen = await profiler.measure(
       "onboarding.records_to_assessment_entry",
       "stage",

@@ -25,6 +25,7 @@ import {
   type ProfileTransitionDecision,
 } from "../../src/lib/e2e/profile-transition";
 import type { JourneyContext } from "../journey/context";
+import { maybeThrowForcedMidFlowFailure } from "../support/forcedMidFlowFailure";
 
 export async function isConsentVisible(page: Page): Promise<boolean> {
   return (
@@ -536,6 +537,7 @@ export async function runConsentOnboardingStage(
         });
     }
     await clickByTestId(page, "medical-history-nicotine-no");
+    maybeThrowForcedMidFlowFailure("consent-onboarding");
     await profiler.measure(
       "onboarding.history_to_records",
       "page",

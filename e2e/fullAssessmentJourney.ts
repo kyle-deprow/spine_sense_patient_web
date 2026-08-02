@@ -13,10 +13,6 @@ import { runResultsReportStage } from "./stages/resultsReport";
 import { runAnalysisStage, runReviewStage } from "./stages/reviewAnalysis";
 import { runReturnHomeStage } from "./stages/returnHome";
 import { runScreeningStage } from "./stages/screening";
-import {
-  FORCED_MID_FLOW_FAILURE_STAGE,
-  maybeThrowForcedMidFlowFailure,
-} from "./support/forcedMidFlowFailure";
 import type { StageStep } from "./stages/stage";
 import {
   captureQuestionnaireMutations,
@@ -90,7 +86,6 @@ export async function runJourneyToCheckpoint(
   if (checkpoint === "records_ready") return;
 
   await runRecordsDocumentsStage(context);
-  maybeThrowForcedMidFlowFailure(FORCED_MID_FLOW_FAILURE_STAGE);
   if (checkpoint === "screening_ready") return;
 
   await runScreeningStage(context);

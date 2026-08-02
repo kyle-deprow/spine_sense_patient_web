@@ -11,6 +11,11 @@ import {
   classifyRecovery,
 } from "../../../e2e/support/recoveryPolicy";
 import { fullAssessmentScenario } from "../../../e2e/fixtures/fullAssessmentScenario";
+import { expectClientRequestContracts } from "../../../e2e/journey/contracts";
+import {
+  captureQuestionnaireMutations,
+  type QuestionnaireMutation,
+} from "../../../e2e/journey/context";
 import { assertExactIntakeRequestContract } from "./intake-request-contract";
 import {
   createE2ERunIdentity,
@@ -34,6 +39,79 @@ describe("canonical full journey support", () => {
       expect(readPerformanceMode(mode)).toBe(mode);
     },
   );
+
+  it("captures the exact browser reviewed-story PUT and validates it in the full ledger", () => {
+    let requestListener:
+      | ((request: {
+          url(): string;
+          method(): string;
+          postDataJSON(): unknown;
+        }) => void)
+      | undefined;
+    const page = {
+      on: (event: string, listener: typeof requestListener) => {
+        if (event === "request") requestListener = listener;
+      },
+    } as unknown as Parameters<typeof captureQuestionnaireMutations>[0];
+    const mutations = captureQuestionnaireMutations(page);
+    const emitRequest = (path: string) => {
+      requestListener?.({
+        url: () => `http://127.0.0.1:43101${path}`,
+        method: () => "PUT",
+        postDataJSON: () => ({
+          narrative: fullAssessmentScenario.onboarding.chiefComplaint,
+          input_method: "text",
+          expected_revision: 0,
+        }),
+      });
+    };
+
+    emitRequest("/api/proxy/api/v1/patients/me/intake/story");
+    emitRequest("/api/proxy/api/v1/patients/me/intake/story/derived");
+
+    expect(mutations).toEqual([
+      {
+        method: "PUT",
+        path: "/api/proxy/api/v1/patients/me/intake/story",
+        payload: {
+          narrative: fullAssessmentScenario.onboarding.chiefComplaint,
+          input_method: "text",
+          expected_revision: 0,
+        },
+      },
+    ]);
+
+    const screeningPath =
+      "/api/proxy/api/v1/patients/me/assessments/assessment-123/screening";
+    const fullLedger: QuestionnaireMutation[] = [
+      ...mutations,
+      {
+        method: "PATCH",
+        path: `${screeningPath}/answers`,
+        payload: {
+          answers: Object.fromEntries([
+            ...fullAssessmentScenario.screening.map(({ id, value }) => [
+              id,
+              value,
+            ]),
+            ...fullAssessmentScenario.screeningText.map(({ id, text }) => [
+              id,
+              text,
+            ]),
+          ]),
+          expected_revision: 1,
+        },
+      },
+      {
+        method: "POST",
+        path: `${screeningPath}/complete`,
+        payload: { expected_revision: 2 },
+      },
+    ];
+    expect(() =>
+      expectClientRequestContracts(fullLedger, new Map(), "screening"),
+    ).not.toThrow();
+  });
 
   it("wires observe and enforce through the profiler policy while off disables it", () => {
     expect(isPerformanceProfilingEnabled("observe")).toBe(true);
@@ -94,6 +172,7 @@ describe("canonical full journey support", () => {
   it("accepts only the exact synthetic intake wire contracts", () => {
     expect(() =>
       assertExactIntakeRequestContract(
+        "PUT",
         "/api/proxy/api/v1/patients/me/intake/steps/profile",
         {
           step_data: {
@@ -111,6 +190,7 @@ describe("canonical full journey support", () => {
     ).not.toThrow();
     expect(() =>
       assertExactIntakeRequestContract(
+        "PUT",
         "/api/proxy/api/v1/patients/me/intake/steps/chief-complaint",
         {
           step_data: {
@@ -123,6 +203,7 @@ describe("canonical full journey support", () => {
     ).not.toThrow();
     expect(() =>
       assertExactIntakeRequestContract(
+        "PUT",
         "/api/proxy/api/v1/patients/me/intake/steps/treatment-history",
         {
           step_data: {
@@ -139,12 +220,85 @@ describe("canonical full journey support", () => {
     ).not.toThrow();
     expect(() =>
       assertExactIntakeRequestContract(
+        "POST",
         "/api/proxy/api/v1/patients/me/intake/progress/complete",
         {},
         fullAssessmentScenario,
       ),
     ).not.toThrow();
+    expect(() =>
+      assertExactIntakeRequestContract(
+        "PUT",
+        "/api/proxy/api/v1/patients/me/intake/story",
+        {
+          narrative: fullAssessmentScenario.onboarding.chiefComplaint,
+          input_method: "text",
+          expected_revision: 0,
+        },
+        fullAssessmentScenario,
+      ),
+    ).not.toThrow();
   });
+
+  it.each([
+    ["POST", "/api/proxy/api/v1/patients/me/intake/story", 0, "method"],
+    ["PUT", "/api/v1/patients/me/intake/story", 0, "path"],
+    ["PUT", "/api/proxy/api/v1/patients/me/intake/story", -1, "revision"],
+    ["PUT", "/api/proxy/api/v1/patients/me/intake/story", 1.5, "revision"],
+  ] as const)(
+    "rejects reviewed intake story contract drift: %s %s %s",
+    (method, path, expectedRevision, _reason) => {
+      expect(() =>
+        assertExactIntakeRequestContract(
+          method,
+          path,
+          {
+            narrative: fullAssessmentScenario.onboarding.chiefComplaint,
+            input_method: "text",
+            expected_revision: expectedRevision,
+          },
+          fullAssessmentScenario,
+        ),
+      ).toThrow();
+    },
+  );
+
+  it.each([
+    {
+      narrative: "different raw narrative",
+      input_method: "text",
+      expected_revision: 0,
+    },
+    {
+      narrative: fullAssessmentScenario.onboarding.chiefComplaint,
+      input_method: "voice",
+      expected_revision: 0,
+    },
+    {
+      narrative: fullAssessmentScenario.onboarding.chiefComplaint,
+      input_method: "text",
+      expected_revision: 0,
+      urgency: "routine",
+    },
+    {
+      narrative: fullAssessmentScenario.onboarding.chiefComplaint,
+      input_method: "text",
+      expected_revision: 0,
+      questionnaireOutput: {},
+    },
+  ])(
+    "rejects mismatched or derived reviewed intake story payload %#",
+    (payload) => {
+      expect(() =>
+        assertExactIntakeRequestContract(
+          "PUT",
+          "/api/proxy/api/v1/patients/me/intake/story",
+          payload,
+          fullAssessmentScenario,
+        ),
+      ).toThrow();
+    },
+  );
 
   it("fails closed for malformed intake step and progress payloads", () => {
     const profilePath = "/api/proxy/api/v1/patients/me/intake/steps/profile";
@@ -162,6 +316,7 @@ describe("canonical full journey support", () => {
 
     expect(() =>
       assertExactIntakeRequestContract(
+        "PUT",
         profilePath,
         { step_data: { ...validProfile.step_data, urgency: "routine" } },
         fullAssessmentScenario,
@@ -169,6 +324,7 @@ describe("canonical full journey support", () => {
     ).toThrow();
     expect(() =>
       assertExactIntakeRequestContract(
+        "PUT",
         profilePath,
         { step_data: { ...validProfile.step_data, activity_level: undefined } },
         fullAssessmentScenario,
@@ -176,6 +332,7 @@ describe("canonical full journey support", () => {
     ).toThrow();
     expect(() =>
       assertExactIntakeRequestContract(
+        "PUT",
         "/api/proxy/api/v1/patients/me/intake/progress",
         { step_key: "profile", step_data: validProfile.step_data },
         fullAssessmentScenario,
@@ -183,6 +340,7 @@ describe("canonical full journey support", () => {
     ).toThrow();
     expect(() =>
       assertExactIntakeRequestContract(
+        "PUT",
         "/api/proxy/api/v1/patients/me/intake/steps/chief-complaint",
         {
           step_data: {
@@ -200,6 +358,7 @@ describe("canonical full journey support", () => {
     const path = "/api/proxy/api/v1/patients/me/intake/steps/treatment-history";
     expect(() =>
       assertExactIntakeRequestContract(
+        "PUT",
         path,
         {
           step_data:

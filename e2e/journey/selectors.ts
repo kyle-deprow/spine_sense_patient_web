@@ -38,13 +38,16 @@ export async function waitForAnyVisibleTestId(
   page: Page,
   testIds: readonly string[],
   timeout = 60_000,
+  signal?: AbortSignal,
 ): Promise<string> {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     for (const testId of testIds) {
+      if (signal?.aborted) throw new Error("Assessment stage wait canceled");
       if (await isVisibleByTestIdOrSemantic(page, testId, 500)) {
         return testId;
       }
+      if (signal?.aborted) throw new Error("Assessment stage wait canceled");
     }
   }
 
@@ -57,8 +60,9 @@ export async function waitForAssessmentStage(
   page: Page,
   testIds: readonly string[],
   timeout = 360_000,
+  signal?: AbortSignal,
 ): Promise<string> {
-  return waitForAnyVisibleTestId(page, testIds, timeout);
+  return waitForAnyVisibleTestId(page, testIds, timeout, signal);
 }
 
 export async function waitForRetryOutcome(
@@ -83,13 +87,17 @@ export function semanticLocatorForTestId(
 ): Locator | null {
   switch (testId) {
     case "adaptive-loading-state":
+      return page.getByTestId("adaptive-loading");
+    case "adaptive-loading-error-state":
       return page
         .getByText(
-          /Preparing follow-up questions|Generating follow-up questions/i,
+          /Could not prepare follow-up questions|Follow-up questions are taking too long/i,
         )
         .first();
-    case "adaptive-loading-error-state":
-      return page.getByText(/Could not prepare follow-up questions/i).first();
+    case "adaptive-loading-timeout":
+      return page
+        .getByText(/^Follow-up questions are taking too long$/i)
+        .first();
     case "adaptive-loading-retry":
       return page
         .getByRole("button", { name: /retry preparing follow-up questions/i })
@@ -199,8 +207,11 @@ export async function waitForDynamicQuestionAdvance(
       }
     }
 
+    // Route transitions can briefly unmount the current questionnaire before
+    // the authoritative next-stage screen mounts. Keep waiting for an exact
+    // next-stage surface instead of treating that transient gap as a result.
     if (!(await isVisibleByTestIdOrSemantic(page, currentScreenTestId, 250))) {
-      return "left-current-screen";
+      continue;
     }
 
     const currentQuestionTestId = await visibleDynamicQuestionTestId(
