@@ -301,7 +301,7 @@ describe("forced mid-flow E2E failure hook", () => {
 
   it("keeps forced failure injection out of the scoped and full runners", () => {
     for (const fileName of [
-      "e2e/scoped-assessment.spec.ts",
+      "e2e/scopedAssessment.ts",
       "e2e/fullAssessmentJourney.ts",
     ]) {
       const source = readFileSync(resolve(process.cwd(), fileName), "utf8");
@@ -309,7 +309,7 @@ describe("forced mid-flow E2E failure hook", () => {
     }
 
     const scopedRunner = readFileSync(
-      resolve(process.cwd(), "e2e/scoped-assessment.spec.ts"),
+      resolve(process.cwd(), "e2e/scopedAssessment.ts"),
       "utf8",
     );
     expect(scopedRunner).toContain("withStackOwnedE2eLifecycle({");
