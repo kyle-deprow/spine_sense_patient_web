@@ -4,7 +4,6 @@ import { expect, type APIResponse } from "@playwright/test";
 
 import {
   ADAPTIVE_ANSWERS_BY_ID,
-  BACKEND_DOCUMENT_SCAN_RESULT_URL,
   BACKEND_REGISTRATION_CODE_URL,
   browserMutationHeaders,
   documentIdFromUploadResponse,
@@ -12,14 +11,12 @@ import {
   expectNoTokenLeak,
   getRegistrationVerificationCode,
   isRecord,
-  normalizeAssessmentDocument,
   recordQuestionnaireMutation,
   SCREENING_ANSWERS_BY_ID,
   SCREENING_TEXT_ANSWERS_BY_ID,
   SYNTHETIC_ASSESSMENT_UPLOAD,
   TEST_SUPPORT_TOKEN,
   prepareResultsReportFixture,
-  type AssessmentDocumentRecord,
   type JourneyContext,
 } from "./journey/context";
 import { fullAssessmentScenario } from "./fixtures/fullAssessmentScenario";
@@ -31,6 +28,11 @@ import {
   warmCsrfSession,
 } from "./stages/accountVerification";
 import { recordsStepLocator } from "./stages/recordsDocuments";
+import {
+  completeSyntheticDocumentScan,
+  verifySyntheticDocumentUploadPersistence,
+  waitForAssessmentDocumentComplete,
+} from "./stages/recordsUpload";
 import { waitForAnyVisibleTestId } from "./journey/selectors";
 
 export const PATIENT_WEB_CHECKPOINTS = [
@@ -1165,45 +1167,6 @@ export async function createAssessment(
   return assessment;
 }
 
-async function completeSyntheticDocumentScan(
-  context: JourneyContext,
-  documentId: string,
-): Promise<void> {
-  if (!BACKEND_DOCUMENT_SCAN_RESULT_URL || !TEST_SUPPORT_TOKEN) {
-    throw new Error(
-      "Checkpoint records_ready requires the existing exact synthetic document-scan support route; refusing to assume a clean scan",
-    );
-  }
-  const response = await context.request.post(
-    BACKEND_DOCUMENT_SCAN_RESULT_URL,
-    {
-      headers: {
-        authorization: `Bearer ${TEST_SUPPORT_TOKEN}`,
-        "content-type": "application/json",
-      },
-      data: {
-        document_id: documentId,
-        email: context.email,
-        verdict: "clean",
-      },
-      timeout: 90_000,
-    },
-  );
-  if (!response.ok()) {
-    throw new Error(
-      `Checkpoint document scan support failed status=${response.status()}`,
-    );
-  }
-  const payload = requireRecord(
-    await response.json(),
-    "document scan response",
-  );
-  expect(payload.processing_status ?? payload.processingStatus).toBe(
-    "complete",
-  );
-  expect(payload.scan_status ?? payload.scanStatus).toBe("clean");
-}
-
 async function prepareDocument(
   context: JourneyContext,
   assessmentId: string,
@@ -1270,26 +1233,18 @@ async function prepareDocument(
     confirmed.processing_status ?? confirmed.processingStatus;
   expect(["processing", "complete"]).toContain(processingStatus);
   if (processingStatus === "processing") {
-    await completeSyntheticDocumentScan(context, documentId);
+    await completeSyntheticDocumentScan(
+      context.request,
+      documentId,
+      context.email,
+    );
   }
 
-  const listed = requireRecord(
-    await bffJson<unknown>(
-      context,
-      "GET",
-      `/api/proxy/api/v1/patients/me/assessments/${assessmentId}/documents`,
-    ),
-    "assessment documents response",
+  const item = await waitForAssessmentDocumentComplete(
+    context.page.request,
+    assessmentId,
+    documentId,
   );
-  const item = Array.isArray(listed.items)
-    ? listed.items
-        .map((entry) =>
-          isRecord(entry)
-            ? normalizeAssessmentDocument(entry as AssessmentDocumentRecord)
-            : null,
-        )
-        .find((entry) => entry?.id === documentId)
-    : undefined;
   expect(item, "synthetic document must be server-owned and listed").toEqual(
     expect.objectContaining({
       id: documentId,
@@ -1298,6 +1253,12 @@ async function prepareDocument(
       fileSizeBytes: SYNTHETIC_ASSESSMENT_UPLOAD.buffer.length,
     }),
   );
+  await verifySyntheticDocumentUploadPersistence(context.request, {
+    assessmentId,
+    documentId,
+    email: context.email,
+  });
+  context.uploadedAssessmentDocument = { assessmentId, documentId };
 }
 
 function screeningAnswer(questionId: string): unknown {

@@ -8,6 +8,7 @@ import {
 import { expectAnalysisRequestContracts } from "../journey/contracts";
 import { isRecord } from "../journey/context";
 import { maybeThrowForcedMidFlowFailure } from "../support/forcedMidFlowFailure";
+import { verifyAnalyzedDocument } from "./documentAnalysis";
 
 export function expectCompletedAnalysisResponse(
   responseUrl: string,
@@ -136,6 +137,7 @@ export async function runAnalysisStage(context: JourneyContext): Promise<void> {
     await expect(page.getByText("Assessment Results")).toBeVisible();
     await expect(page.getByTestId("results-disclaimer")).toBeVisible();
     await expect(page.getByTestId("results-diagnosis")).toBeVisible();
+    await verifyAnalyzedDocument(context);
   });
 }
 

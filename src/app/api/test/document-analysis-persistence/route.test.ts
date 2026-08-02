@@ -3,13 +3,38 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const TEST_TOKEN = "test-support-token-with-at-least-32-chars";
 const DOCUMENT_ID = "123e4567-e89b-42d3-a456-426614174000";
+const ASSESSMENT_ID = "223e4567-e89b-42d3-a456-426614174000";
 const EMAIL =
   "casey.assessment.123e4567-e89b-42d3-a456-426614174000@e2e.example.com";
-const BODY = { document_id: DOCUMENT_ID, email: EMAIL, verdict: "clean" };
+const BODY = {
+  assessment_id: ASSESSMENT_ID,
+  document_id: DOCUMENT_ID,
+  email: EMAIL,
+};
+const FACTS = {
+  assessment_id: ASSESSMENT_ID,
+  document_id: DOCUMENT_ID,
+  analysis: { assessment_complete: true, status: "complete" },
+  document: {
+    scan_status: "clean",
+    ocr_status: "complete",
+    ocr_text_sha256_matches: true,
+  },
+  summary: {
+    status: "complete",
+    materialized_for_assessment: true,
+    completed_at_present: true,
+    category_present: true,
+    document_type_present: true,
+    summary_present: true,
+    findings_present: true,
+    source_sha256_matches_ocr_text: true,
+  },
+};
 
 function makeRequest(body: unknown, token = TEST_TOKEN): NextRequest {
   return new NextRequest(
-    "https://patient-web.example.com/api/test/document-scan-result",
+    "https://patient-web.example.com/api/test/document-analysis-persistence",
     {
       method: "POST",
       headers: {
@@ -21,7 +46,7 @@ function makeRequest(body: unknown, token = TEST_TOKEN): NextRequest {
   );
 }
 
-describe("patient web document-scan support route", () => {
+describe("patient web document-analysis-persistence support route", () => {
   beforeEach(() => {
     vi.stubEnv("ENVIRONMENT", "test");
     vi.stubEnv("PATIENT_WEB_TEST_SUPPORT_ENABLED", "true");
@@ -29,7 +54,7 @@ describe("patient web document-scan support route", () => {
     vi.stubEnv("BACKEND_INTERNAL_URL", "http://backend.internal");
     vi.stubEnv(
       "PATIENT_WEB_CSRF_SECRET",
-      "document-scan-test-csrf-secret-at-least-32-bytes",
+      "document-analysis-test-csrf-secret-at-least-32-bytes",
     );
     vi.stubEnv("PATIENT_WEB_CLIENT_IP_MODE", "single-bucket");
     vi.stubEnv("PATIENT_WEB_CREDENTIAL_RATE_LIMIT_STORE", "memory");
@@ -42,13 +67,12 @@ describe("patient web document-scan support route", () => {
     vi.unstubAllGlobals();
   });
 
-  it("forwards the strict body and returns only the clean scan acknowledgement", async () => {
+  it("returns only exact post-analysis metadata facts", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       Response.json({
-        ...BODY,
-        processing_status: "processing",
-        scan_status: "clean",
-        secret: "must-not-leak",
+        ...FACTS,
+        summary: { ...FACTS.summary, summary_text: "must-not-leak" },
+        analysis_payload: { document_text: "must-not-leak" },
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -58,21 +82,19 @@ describe("patient web document-scan support route", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toContain("no-store");
-    expect(await response.json()).toEqual({
-      document_id: DOCUMENT_ID,
-      scan_status: "clean",
-    });
+    expect(await response.json()).toEqual(FACTS);
     expect(fetchMock).toHaveBeenCalledWith(
-      new URL("/test/document-scan-result", "http://backend.internal"),
+      new URL("/test/document-analysis-persistence", "http://backend.internal"),
       expect.objectContaining({ body: JSON.stringify(BODY) }),
     );
   });
 
   it.each([
     { ...BODY, unexpected: true },
+    { ...BODY, assessment_id: "not-a-uuid" },
     { ...BODY, document_id: "not-a-uuid" },
-    { ...BODY, verdict: "unknown" },
-  ])("rejects malformed or extra support data: %j", async (body) => {
+    { ...BODY, email: "patient@example.com" },
+  ])("rejects non-exact post-analysis metadata requests: %j", async (body) => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const { POST } = await import("./route");
@@ -81,13 +103,34 @@ describe("patient web document-scan support route", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("maps an upstream conflict without exposing its response body", async () => {
+  it("fails closed when analysis-document materialization is unproven", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json({
+          ...FACTS,
+          summary: { ...FACTS.summary, materialized_for_assessment: false },
+        }),
+      ),
+    );
+    const { POST } = await import("./route");
+
+    const response = await POST(makeRequest(BODY));
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "service_unavailable" });
+  });
+
+  it("maps backend mismatch details to a metadata-only conflict", async () => {
     vi.stubGlobal(
       "fetch",
       vi
         .fn()
         .mockResolvedValue(
-          Response.json({ detail: "backend secret" }, { status: 409 }),
+          Response.json(
+            { mismatches: ["summary_present"], detail: "must-not-leak" },
+            { status: 409 },
+          ),
         ),
     );
     const { POST } = await import("./route");

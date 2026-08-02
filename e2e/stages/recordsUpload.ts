@@ -8,6 +8,7 @@ import {
 
 import {
   BACKEND_DOCUMENT_SCAN_RESULT_URL,
+  BACKEND_DOCUMENT_UPLOAD_PERSISTENCE_URL,
   SYNTHETIC_ASSESSMENT_UPLOAD,
   TEST_SUPPORT_TOKEN,
   TRANSITION_BUDGETS_MS,
@@ -16,7 +17,9 @@ import {
   normalizeAssessmentDocument,
   type AssessmentDocumentRecord,
   type AssessmentUploadUrlResponse,
+  type UploadedAssessmentDocument,
 } from "../journey/context";
+import { SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT } from "../../src/lib/e2e/document-upload-fixture";
 import {
   classifyRecovery,
   assertRecoveryAttempt,
@@ -26,6 +29,20 @@ import { actionableLocatorForTestId } from "../journey/selectors";
 type SafeResponseMetadata = Readonly<{
   code?: string;
 }>;
+
+type NormalizedAssessmentDocument = ReturnType<
+  typeof normalizeAssessmentDocument
+>;
+
+export type DocumentConfirmationReadiness =
+  | Readonly<{
+      source: "response";
+      response: PlaywrightResponse;
+    }>
+  | Readonly<{
+      source: "persisted";
+      document: NormalizedAssessmentDocument;
+    }>;
 
 export function safeResponseMetadata(payload: unknown): SafeResponseMetadata {
   if (
@@ -60,13 +77,32 @@ function uploadUrlFailureMessage(
   return `assessment document upload-url status=${response.status()} code=${code}`;
 }
 
-export async function waitForDocumentConfirmOrUploadError(
+export async function waitForDocumentConfirmationOrPersistence(
   confirmResponse: Promise<PlaywrightResponse>,
+  persistedDocument: () => Promise<NormalizedAssessmentDocument>,
   uploadError: Promise<"upload_error">,
-): Promise<PlaywrightResponse> {
-  const outcome = await Promise.race([confirmResponse, uploadError]);
+): Promise<DocumentConfirmationReadiness> {
+  void confirmResponse.catch(() => undefined);
+  const confirmation = confirmResponse
+    .then(
+      (response): DocumentConfirmationReadiness => ({
+        source: "response",
+        response,
+      }),
+    )
+    .catch(() =>
+      persistedDocument().then(
+        (document): DocumentConfirmationReadiness => ({
+          source: "persisted",
+          document,
+        }),
+      ),
+    );
+  const outcome = await Promise.race([confirmation, uploadError]);
   if (outcome === "upload_error") {
-    throw new Error("Assessment document byte upload failed before confirmation");
+    throw new Error(
+      "Assessment document byte upload failed before confirmation",
+    );
   }
   return outcome;
 }
@@ -74,7 +110,7 @@ export async function waitForDocumentConfirmOrUploadError(
 export async function uploadSyntheticAssessmentDocumentFromRecordsStep(
   page: Page,
   email: string,
-): Promise<void> {
+): Promise<UploadedAssessmentDocument> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     let observedStatus: number | undefined;
@@ -140,7 +176,7 @@ export async function uploadSyntheticAssessmentDocumentFromRecordsStep(
             new URL(response.url()).pathname,
           ) &&
           response.request().method() === "POST",
-        { timeout: TRANSITION_BUDGETS_MS.stage },
+        { timeout: 30_000 },
       );
       uploadErrorPromise = page
         .getByTestId("records-file-error")
@@ -170,24 +206,50 @@ export async function uploadSyntheticAssessmentDocumentFromRecordsStep(
         uploadUrlResponse.url(),
       );
 
-      const confirmResponse = await waitForDocumentConfirmOrUploadError(
+      const confirmation = await waitForDocumentConfirmationOrPersistence(
         confirmResponsePromise,
+        () =>
+          waitForPersistedDocumentConfirmation(
+            page.request,
+            assessmentId,
+            documentId,
+          ),
         uploadErrorPromise,
       );
-      observedStatus = confirmResponse.status();
-      expect(
-        confirmResponse.ok(),
-        `assessment document confirm status=${confirmResponse.status()}`,
-      ).toBe(true);
-      const confirmPayload =
-        (await confirmResponse.json()) as AssessmentDocumentRecord;
-      const confirmedStatus =
-        normalizeAssessmentDocument(confirmPayload).processingStatus;
-      expect(["processing", "complete"]).toContain(confirmedStatus);
-
-      if (confirmedStatus === "processing") {
+      let confirmedDocument: NormalizedAssessmentDocument;
+      if (confirmation.source === "response") {
+        observedStatus = confirmation.response.status();
+        expect(
+          new URL(confirmation.response.url()).pathname,
+          "assessment document confirm response must match the issued assessment and document",
+        ).toBe(
+          `/api/proxy/api/v1/patients/me/assessments/${assessmentId}/documents/${documentId}/confirm`,
+        );
+        expect(
+          confirmation.response.ok(),
+          `assessment document confirm status=${confirmation.response.status()}`,
+        ).toBe(true);
+        confirmedDocument = normalizeAssessmentDocument(
+          (await confirmation.response.json()) as AssessmentDocumentRecord,
+        );
+        expect(
+          confirmedDocument.id,
+          "assessment document confirm response must match the issued document",
+        ).toBe(documentId);
+      } else {
+        confirmedDocument = confirmation.document;
+      }
+      expect(["processing", "complete"]).toContain(
+        confirmedDocument.processingStatus,
+      );
+      if (confirmedDocument.processingStatus === "processing") {
         await completeSyntheticDocumentScan(page.request, documentId, email);
       }
+      const landed = await waitForAssessmentDocumentComplete(
+        page.request,
+        assessmentId,
+        documentId,
+      );
 
       await expect(
         page.getByTestId(`records-document-${documentId}`),
@@ -198,20 +260,6 @@ export async function uploadSyntheticAssessmentDocumentFromRecordsStep(
         page.getByText(SYNTHETIC_ASSESSMENT_UPLOAD.name),
       ).toBeVisible();
 
-      const listResponse = await page.request.get(
-        `/api/proxy/api/v1/patients/me/assessments/${assessmentId}/documents`,
-      );
-      observedStatus = listResponse.status();
-      expect(
-        listResponse.ok(),
-        `assessment document list status=${listResponse.status()}`,
-      ).toBe(true);
-      const listPayload = (await listResponse.json()) as {
-        items?: AssessmentDocumentRecord[];
-      };
-      const landed = listPayload.items
-        ?.map(normalizeAssessmentDocument)
-        .find((record) => record.id === documentId);
       expect(
         landed,
         "uploaded assessment document must be returned by assessment document list",
@@ -222,7 +270,12 @@ export async function uploadSyntheticAssessmentDocumentFromRecordsStep(
           fileSizeBytes: SYNTHETIC_ASSESSMENT_UPLOAD.buffer.length,
         }),
       );
-      return;
+      await verifySyntheticDocumentUploadPersistence(page.request, {
+        assessmentId,
+        documentId,
+        email,
+      });
+      return { assessmentId, documentId };
     } catch (error) {
       lastError = error;
       void uploadUrlResponsePromise?.catch(() => undefined);
@@ -245,7 +298,86 @@ export async function uploadSyntheticAssessmentDocumentFromRecordsStep(
       );
 }
 
-async function completeSyntheticDocumentScan(
+export async function waitForAssessmentDocumentComplete(
+  request: APIRequestContext,
+  assessmentId: string,
+  documentId: string,
+  timeout = 120_000,
+  pollInterval = 2000,
+): Promise<NormalizedAssessmentDocument> {
+  const deadline = Date.now() + timeout;
+  let lastStatus: number | undefined;
+  let lastState: string | undefined;
+  do {
+    const response = await request.get(
+      `/api/proxy/api/v1/patients/me/assessments/${assessmentId}/documents`,
+    );
+    lastStatus = response.status();
+    if (response.ok()) {
+      const payload = (await response.json()) as {
+        items?: AssessmentDocumentRecord[];
+      };
+      const document = payload.items
+        ?.map(normalizeAssessmentDocument)
+        .find((record) => record.id === documentId);
+      lastState = document?.state;
+      if (document?.state === "complete") return document;
+      if (document?.state === "failed") {
+        throw new Error(
+          "Assessment document entered failed state before OCR readiness",
+        );
+      }
+    }
+    if (Date.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, pollInterval));
+    }
+  } while (Date.now() < deadline);
+
+  throw new Error(
+    `Assessment document did not become OCR-ready status=${lastStatus ?? "unknown"} state=${lastState ?? "missing"}`,
+  );
+}
+
+async function waitForPersistedDocumentConfirmation(
+  request: APIRequestContext,
+  assessmentId: string,
+  documentId: string,
+): Promise<NormalizedAssessmentDocument> {
+  let lastStatus: number | undefined;
+  for (let attempt = 1; attempt <= 60; attempt += 1) {
+    const response = await request.get(
+      `/api/proxy/api/v1/patients/me/assessments/${assessmentId}/documents`,
+    );
+    lastStatus = response.status();
+    if (response.ok()) {
+      const payload = (await response.json()) as {
+        items?: AssessmentDocumentRecord[];
+      };
+      const document = payload.items
+        ?.map(normalizeAssessmentDocument)
+        .find((record) => record.id === documentId);
+      if (
+        document?.processingStatus === "processing" ||
+        document?.processingStatus === "complete"
+      ) {
+        return document;
+      }
+      if (document?.processingStatus === "failed") {
+        throw new Error(
+          "Assessment document entered failed state before confirmation recovery",
+        );
+      }
+    }
+    if (attempt < 60) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+  throw new Error(
+    `Assessment document confirmation was not persisted status=${lastStatus ?? "unknown"}`,
+  );
+}
+
+export async function completeSyntheticDocumentScan(
   request: APIRequestContext,
   documentId: string,
   email: string,
@@ -274,7 +406,15 @@ async function completeSyntheticDocumentScan(
       },
       timeout: 90_000,
     });
-  const response = await completeScan();
+  let response = await completeScan();
+  for (
+    let attempt = 1;
+    response.status() === 404 && attempt < 30;
+    attempt += 1
+  ) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 3000));
+    response = await completeScan();
+  }
   const payload = (await response.json()) as AssessmentDocumentRecord & {
     scan_status?: string;
     scanStatus?: string;
@@ -284,7 +424,95 @@ async function completeSyntheticDocumentScan(
     response.status(),
     `document scan completion failed status=${response.status()} code=${metadata.code ?? "unknown"}`,
   ).toBe(200);
-  const normalized = normalizeAssessmentDocument(payload);
-  expect(normalized.processingStatus).toBe("complete");
   expect(payload.scan_status ?? payload.scanStatus).toBe("clean");
+}
+
+export async function verifySyntheticDocumentUploadPersistence(
+  request: APIRequestContext,
+  options: {
+    assessmentId: string;
+    documentId: string;
+    email: string;
+  },
+): Promise<void> {
+  if (!BACKEND_DOCUMENT_UPLOAD_PERSISTENCE_URL) {
+    throw new Error(
+      "PATIENT_WEB_BACKEND_DOCUMENT_UPLOAD_PERSISTENCE_URL is required for document upload database verification",
+    );
+  }
+  if (!TEST_SUPPORT_TOKEN) {
+    throw new Error(
+      "PATIENT_WEB_TEST_SUPPORT_TOKEN is required for document upload database verification",
+    );
+  }
+
+  const response = await request.post(BACKEND_DOCUMENT_UPLOAD_PERSISTENCE_URL, {
+    headers: {
+      authorization: `Bearer ${TEST_SUPPORT_TOKEN}`,
+      "content-type": "application/json",
+    },
+    data: {
+      document_id: options.documentId,
+      assessment_id: options.assessmentId,
+      email: options.email,
+      expected_content_type: SYNTHETIC_ASSESSMENT_UPLOAD.mimeType,
+      expected_file_size_bytes: SYNTHETIC_ASSESSMENT_UPLOAD.buffer.length,
+      expected_content_sha256: SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.contentSha256,
+      expected_processing_status: "complete",
+      expected_scan_status: "clean",
+    },
+    timeout: 30_000,
+  });
+  const payload = (await response.json()) as {
+    code?: string;
+    database?: {
+      patient_document?: boolean;
+      assessment_document_link?: boolean;
+      upload_generation?: boolean;
+      processing_status?: string;
+      scan_status?: string;
+      generation_state?: string;
+      content_sha256_matches?: boolean;
+      final_receipt?: boolean;
+      ocr_status?: string;
+      ocr_source_sha256_matches?: boolean;
+      extracted_text_present?: boolean;
+      ocr_text_sha256_matches?: boolean;
+      ocr_page_count_positive?: boolean;
+    };
+    object?: {
+      promoted?: boolean;
+      receipt_matches?: boolean;
+      content_sha256_matches?: boolean;
+      size_matches?: boolean;
+    };
+  };
+  const metadata = safeResponseMetadata(payload);
+  expect(
+    response.status(),
+    `document upload persistence verification failed status=${response.status()} code=${metadata.code ?? "unknown"}`,
+  ).toBe(200);
+  expect(payload.database).toEqual(
+    expect.objectContaining({
+      patient_document: true,
+      assessment_document_link: true,
+      upload_generation: true,
+      processing_status: "complete",
+      scan_status: "clean",
+      generation_state: "clean",
+      content_sha256_matches: true,
+      final_receipt: true,
+      ocr_status: "complete",
+      ocr_source_sha256_matches: true,
+      extracted_text_present: true,
+      ocr_text_sha256_matches: true,
+      ocr_page_count_positive: true,
+    }),
+  );
+  expect(payload.object).toEqual({
+    promoted: true,
+    receipt_matches: true,
+    content_sha256_matches: true,
+    size_matches: true,
+  });
 }

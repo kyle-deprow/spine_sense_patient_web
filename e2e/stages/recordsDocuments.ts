@@ -102,7 +102,8 @@ export async function runRecordsDocumentsStage(
   const { page, profiler, scenario, email } = context;
   await context.step("records and documents", async () => {
     await expect(recordsStepLocator(page)).toBeVisible({ timeout: 60_000 });
-    await uploadSyntheticAssessmentDocumentFromRecordsStep(page, email);
+    context.uploadedAssessmentDocument =
+      await uploadSyntheticAssessmentDocumentFromRecordsStep(page, email);
     maybeThrowForcedMidFlowFailure("documents");
     const firstAssessmentScreen = await profiler.measure(
       "onboarding.records_to_assessment_entry",

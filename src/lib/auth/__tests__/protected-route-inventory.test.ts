@@ -40,6 +40,8 @@ describe("unsafe browser route origin-policy inventory", () => {
         ...PROTECTED_UNSAFE_ROUTES,
         "src/app/api/proxy/[...path]/route.ts",
         "src/app/api/test/document-scan-result/route.ts",
+        "src/app/api/test/document-analysis-persistence/route.ts",
+        "src/app/api/test/document-upload-persistence/route.ts",
         "src/app/api/test/e2e-cleanup/route.ts",
         "src/app/api/test/health/route.ts",
         "src/app/api/test/registration-verification-code/route.ts",
@@ -50,6 +52,8 @@ describe("unsafe browser route origin-policy inventory", () => {
 
   it.each([
     "src/app/api/test/document-scan-result/route.ts",
+    "src/app/api/test/document-analysis-persistence/route.ts",
+    "src/app/api/test/document-upload-persistence/route.ts",
     "src/app/api/test/e2e-cleanup/route.ts",
     "src/app/api/test/health/route.ts",
     "src/app/api/test/registration-verification-code/route.ts",
