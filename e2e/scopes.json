@@ -89,7 +89,7 @@
     "results-report": {
       "tag": "@scope-results-report",
       "spec": "e2e/scoped-assessment.spec.ts",
-      "start_checkpoint": "review_ready",
+      "start_checkpoint": "results_ready",
       "end_checkpoint": "results_ready",
       "timeout_class": "report",
       "real_analysis": false,
