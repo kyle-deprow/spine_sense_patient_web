@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -56,7 +57,7 @@ describe("Playwright artifact policy integration", () => {
     );
     temporaryRoots.push(root);
     const configPath = join(root, "playwright.config.ts");
-    const specPath = join(root, "probe.spec.ts");
+    const specPath = join(root, "e2e", "full-assessment.spec.ts");
     const safeOutputDir = join(root, "safe-output");
     const rawOutputDir = join(root, "raw-output");
     const unsafeOutputDir = join(root, "unsafe-output");
@@ -74,13 +75,14 @@ describe("Playwright artifact policy integration", () => {
 
           export default defineConfig(packageConfig, {
             testDir: ${JSON.stringify(root)},
-            testMatch: "probe.spec.ts",
+            testMatch: "e2e/full-assessment.spec.ts",
             grep: /.*/,
             outputDir: process.env.ARTIFACT_PROBE_OUTPUT_DIR,
             globalSetup: ${JSON.stringify(globalSetup)},
           });
         `,
     );
+    mkdirSync(join(root, "e2e"));
     writeFileSync(
       specPath,
       `
@@ -99,13 +101,19 @@ describe("Playwright artifact policy integration", () => {
       entrypoint: string,
       outputDir: string,
       extraArgs: string[] = [],
+      noCopyPrompt = false,
     ) => {
       const env: NodeJS.ProcessEnv = {
         ...process.env,
         ARTIFACT_PROBE_OUTPUT_DIR: outputDir,
         ARTIFACT_PROBE_SENTINEL: sentinel,
+        E2E_SCOPES: "full",
       };
-      delete env.PLAYWRIGHT_NO_COPY_PROMPT;
+      if (noCopyPrompt) {
+        env.PLAYWRIGHT_NO_COPY_PROMPT = "1";
+      } else {
+        delete env.PLAYWRIGHT_NO_COPY_PROMPT;
+      }
       const result = spawnSync(
         process.execPath,
         [entrypoint, "test", "--config", configPath, ...extraArgs],
@@ -121,7 +129,15 @@ describe("Playwright artifact policy integration", () => {
       return result;
     };
 
-    const safeFailure = run(packageRunner, safeOutputDir);
+    const configOverride = run(packageRunner, safeOutputDir);
+    expect(configOverride.status).toBe(1);
+    expect(`${configOverride.stdout}${configOverride.stderr}`).toContain(
+      "Unsupported Playwright passthrough option",
+    );
+    expect(existsSync(executedMarker)).toBe(false);
+    assertNoBrowserArtifacts(safeOutputDir, sentinel);
+
+    const safeFailure = run(playwrightCli, safeOutputDir, [], true);
     expect(safeFailure.status).toBe(1);
     expect(existsSync(executedMarker)).toBe(true);
     expect(`${safeFailure.stdout}${safeFailure.stderr}`).not.toContain(
@@ -138,10 +154,12 @@ describe("Playwright artifact policy integration", () => {
     expect(existsSync(executedMarker)).toBe(false);
     assertNoBrowserArtifacts(rawOutputDir, sentinel);
 
-    const unsafeOverride = run(packageRunner, unsafeOutputDir, [
-      "--trace",
-      "on",
-    ]);
+    const unsafeOverride = run(
+      playwrightCli,
+      unsafeOutputDir,
+      ["--trace", "on"],
+      true,
+    );
     expect(unsafeOverride.status).toBe(1);
     expect(`${unsafeOverride.stdout}${unsafeOverride.stderr}`).toContain(
       "PHI-safe Playwright artifact policy requires chromium.trace=off",
@@ -149,7 +167,12 @@ describe("Playwright artifact policy integration", () => {
     expect(existsSync(executedMarker)).toBe(false);
     assertNoBrowserArtifacts(unsafeOutputDir, sentinel);
 
-    const uiMode = run(packageRunner, uiOutputDir, ["--ui-host=127.0.0.1"]);
+    const uiMode = run(
+      playwrightCli,
+      uiOutputDir,
+      ["--ui-host=127.0.0.1"],
+      true,
+    );
     expect(uiMode.status).toBe(1);
     expect(`${uiMode.stdout}${uiMode.stderr}`).toContain(
       "PHI-safe Playwright artifact policy rejects UI mode (--ui-host=127.0.0.1)",

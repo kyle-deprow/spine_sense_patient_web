@@ -32,57 +32,65 @@ import type { JourneyContext } from "./journey/context";
 
 type ScopedJourney = Readonly<{
   name: Exclude<ScopeName, "full">;
+  spec: string;
   startCheckpoint: PatientWebCheckpoint;
   endState: ScopeEndState;
   tag: string;
   runStage: (context: JourneyContext) => Promise<void>;
 }>;
 
-const SCOPED_JOURNEYS = [
-  {
+const SCOPED_JOURNEYS = {
+  auth: {
     name: "auth",
+    spec: "e2e/scopes/auth.spec.ts",
     startCheckpoint: "fresh",
     endState: "verified_pending_consent",
     tag: "@scope-auth",
     runStage: runAccountVerificationStage,
   },
-  {
+  "consent-onboarding": {
     name: "consent-onboarding",
+    spec: "e2e/scopes/consent-onboarding.spec.ts",
     startCheckpoint: "verified_pending_consent",
     endState: "records_ready",
     tag: "@scope-consent-onboarding",
     runStage: runConsentOnboardingStage,
   },
-  {
+  documents: {
     name: "documents",
+    spec: "e2e/scopes/documents.spec.ts",
     startCheckpoint: "records_ready",
     endState: "screening_ready",
     tag: "@scope-documents",
     runStage: runRecordsDocumentsStage,
   },
-  {
+  screening: {
     name: "screening",
+    spec: "e2e/scopes/screening.spec.ts",
     startCheckpoint: "screening_ready",
     endState: "adaptive_ready",
     tag: "@scope-screening",
     runStage: runScreeningStage,
   },
-  {
+  adaptive: {
     name: "adaptive",
+    spec: "e2e/scopes/adaptive.spec.ts",
     startCheckpoint: "adaptive_ready",
     endState: "review_ready",
     tag: "@scope-adaptive",
     runStage: runAdaptiveStage,
   },
-  {
+  analysis: {
     name: "analysis",
+    spec: "e2e/scopes/analysis.spec.ts",
     startCheckpoint: "review_ready",
     endState: "results_ready",
     tag: "@scope-analysis",
     runStage: runAnalysisStage,
   },
-  {
+  "results-report": {
     name: "results-report",
+    spec: "e2e/scopes/results-report.spec.ts",
     startCheckpoint: "results_ready",
     endState: "home_complete",
     tag: "@scope-results-report",
@@ -91,11 +99,13 @@ const SCOPED_JOURNEYS = [
       await runReturnHomeStage(context);
     },
   },
-] as const satisfies readonly ScopedJourney[];
+} as const satisfies Readonly<
+  Record<Exclude<ScopeName, "full">, ScopedJourney>
+>;
 
 function assertScopeManifestAlignment(): void {
   assertScopeBoundaryManifest(scopeManifest.scopes);
-  for (const journey of SCOPED_JOURNEYS) {
+  for (const journey of Object.values(SCOPED_JOURNEYS)) {
     const definition =
       scopeManifest.scopes[journey.name as keyof typeof scopeManifest.scopes];
     if (definition == null) {
@@ -103,7 +113,7 @@ function assertScopeManifestAlignment(): void {
     }
 
     if (
-      definition.spec !== "e2e/scoped-assessment.spec.ts" ||
+      definition.spec !== journey.spec ||
       definition.tag !== journey.tag ||
       definition.start_checkpoint !== journey.startCheckpoint ||
       definition.end_checkpoint !== journey.endState
@@ -117,7 +127,7 @@ function assertScopeManifestAlignment(): void {
 
 assertScopeManifestAlignment();
 
-for (const journey of SCOPED_JOURNEYS) {
+for (const journey of Object.values(SCOPED_JOURNEYS)) {
   const contract = SCOPE_BOUNDARY_CONTRACTS[journey.name];
   if (
     contract.startCheckpoint !== journey.startCheckpoint ||
@@ -160,7 +170,10 @@ function logScopeTiming(
   );
 }
 
-for (const journey of SCOPED_JOURNEYS) {
+export function defineScopedAssessment(
+  scope: Exclude<ScopeName, "full">,
+): void {
+  const journey = SCOPED_JOURNEYS[scope];
   test(`${journey.name} checkpoint ${journey.tag}`, async ({
     page,
     request,

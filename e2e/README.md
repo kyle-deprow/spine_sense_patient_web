@@ -6,7 +6,9 @@ root Make lifecycle so the API, BFF, and synthetic support state are configured
 consistently:
 
 - `make patient-web-e2e`
+- `make patient-web-e2e-plan E2E_BASE=<base> E2E_HEAD=<head>`
 - `make patient-web-e2e-changed E2E_BASE=<base> E2E_HEAD=<head>`
+- `uv run ss local patient-web run --scopes screening`
 
 `patient-web-test` and the package runner are inner lifecycle commands. Use
 them only when an operator owns an equivalent disposable stack and explicitly
@@ -22,16 +24,19 @@ failure-snapshot suppression before Playwright loads. Raw
 started with `PLAYWRIGHT_NO_COPY_PROMPT=1`; global setup rejects a missing or
 non-exact gate before browser execution.
 
-It collects only the canonical full-assessment spec in the Chromium project.
+The package runner resolves approved manifest scopes to exact spec arguments;
+the Playwright configuration does not use title filtering as a scope API.
+Without an explicit scope, the runner selects only the canonical full spec.
 The journey uses synthetic identities, server-owned clinical state, BFF-only
 browser traffic, and in-memory browser sessions. It does not use Playwright
 `storageState`, durable browser storage, backend bearer tokens in JavaScript, or
 arbitrary route mocks.
 
 The default `E2E_SCOPES=full` invocation remains the sole canonical journey.
-For focused validation, the manifest also exposes opt-in checkpoint scopes in
-`e2e/scoped-assessment.spec.ts`; those scopes prepare their start checkpoint
-through the same BFF/product APIs and reuse the canonical stage actions. A
+For focused validation, the manifest also exposes opt-in checkpoint specs in
+`e2e/scopes/`; those specs prepare their start checkpoint through the shared
+`e2e/scopedAssessment.ts` runner, use the same BFF/product APIs, and reuse the
+canonical stage actions. A
 `results_ready` is prepared only through the strict `results-report-v1` named
 server fixture; the analysis scope still invokes real server analysis.
 The analysis scope validates the completed server schema and correlates the
