@@ -28,6 +28,8 @@ const BACKEND_REGISTRATION_CODE_URL =
   process.env.PATIENT_WEB_BACKEND_REGISTRATION_CODE_URL;
 const BACKEND_DOCUMENT_SCAN_RESULT_URL =
   process.env.PATIENT_WEB_BACKEND_DOCUMENT_SCAN_RESULT_URL;
+const BACKEND_DOCUMENT_UPLOAD_PERSISTENCE_URL =
+  process.env.PATIENT_WEB_BACKEND_DOCUMENT_UPLOAD_PERSISTENCE_URL;
 const GATEWAY_CLEANUP_URL = process.env.PATIENT_WEB_GATEWAY_E2E_CLEANUP_URL;
 const TEST_SUPPORT_TOKEN = process.env.PATIENT_WEB_TEST_SUPPORT_TOKEN;
 const EXPECT_SECURE_COOKIES =
@@ -696,6 +698,11 @@ async function uploadSyntheticAssessmentDocumentFromRecordsStep(
           processingStatus: "complete",
         }),
       );
+      await verifySyntheticDocumentUploadPersistence(page.request, {
+        assessmentId,
+        documentId,
+        email,
+      });
       return;
     } catch (error) {
       lastError = error;
@@ -774,6 +781,66 @@ async function completeSyntheticDocumentScan(
   const normalized = normalizeAssessmentDocument(payload);
   expect(normalized.processingStatus).toBe("complete");
   expect(payload.scan_status ?? payload.scanStatus).toBe("clean");
+}
+
+async function verifySyntheticDocumentUploadPersistence(
+  request: APIRequestContext,
+  options: {
+    assessmentId: string;
+    documentId: string;
+    email: string;
+  },
+): Promise<void> {
+  if (!BACKEND_DOCUMENT_UPLOAD_PERSISTENCE_URL) {
+    throw new Error(
+      "PATIENT_WEB_BACKEND_DOCUMENT_UPLOAD_PERSISTENCE_URL is required for document upload database verification",
+    );
+  }
+  if (!TEST_SUPPORT_TOKEN) {
+    throw new Error(
+      "PATIENT_WEB_TEST_SUPPORT_TOKEN is required for document upload database verification",
+    );
+  }
+  const response = await request.post(BACKEND_DOCUMENT_UPLOAD_PERSISTENCE_URL, {
+    headers: {
+      authorization: `Bearer ${TEST_SUPPORT_TOKEN}`,
+      "content-type": "application/json",
+    },
+    data: {
+      document_id: options.documentId,
+      assessment_id: options.assessmentId,
+      email: options.email,
+      expected_content_type: SYNTHETIC_ASSESSMENT_UPLOAD.mimeType,
+      expected_file_size_bytes: SYNTHETIC_ASSESSMENT_UPLOAD.buffer.length,
+      expected_processing_status: "complete",
+      expected_scan_status: "clean",
+    },
+    timeout: 30_000,
+  });
+  expect(
+    response.status(),
+    `document upload database verification failed status=${response.status()}`,
+  ).toBe(200);
+  const payload = (await response.json()) as {
+    database?: {
+      patient_document?: boolean;
+      assessment_document_link?: boolean;
+      upload_generation?: boolean;
+      processing_status?: string;
+      scan_status?: string;
+      generation_state?: string;
+    };
+  };
+  expect(payload.database).toEqual(
+    expect.objectContaining({
+      patient_document: true,
+      assessment_document_link: true,
+      upload_generation: true,
+      processing_status: "complete",
+      scan_status: "clean",
+      generation_state: "clean",
+    }),
+  );
 }
 
 function expectQuestionnaireMutationContracts(
