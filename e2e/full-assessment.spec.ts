@@ -2675,6 +2675,9 @@ async function currentVisibleScreeningQuestionId(page: Page): Promise<string> {
 
 async function waitForScreeningNavIdle(page: Page, timeout = 30_000) {
   const next = page.getByTestId("screening-nav-next");
+  if (!(await next.isVisible({ timeout: 1000 }).catch(() => false))) {
+    await waitForScreeningNavReady(page);
+  }
   await expect(next).toBeVisible({ timeout });
   await expect(next).not.toHaveAttribute("aria-busy", "true", { timeout });
   await expect(next).not.toContainText(/Saving/i, { timeout });
