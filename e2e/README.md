@@ -11,8 +11,8 @@ consistently:
 - `uv run ss local patient-web run --scopes screening`
 
 `patient-web-test` and the package runner are inner lifecycle commands. Use
-them only when an operator owns an equivalent disposable stack and explicitly
-sets the disposable-stack contract:
+them locally only when an operator owns an equivalent disposable stack and
+explicitly sets the disposable-stack contract:
 
 ```bash
 PATIENT_WEB_E2E_STACK_DISPOSABLE=true pnpm test:e2e
@@ -69,7 +69,13 @@ not call it. Before any journey mutation,
 the browser lifecycle requires `PATIENT_WEB_E2E_STACK_DISPOSABLE=true`; the root
 Make lifecycle supplies that marker only for its isolated Compose stack. Direct
 `pnpm test:e2e` invocations therefore fail closed unless an operator explicitly
-owns an equivalent disposable stack.
+owns an equivalent disposable stack. The protected `infra-dev.yml` workflow
+may instead authorize a retained synthetic run with
+`PATIENT_WEB_E2E_DEPLOYED_DEV=true` and
+`PATIENT_WEB_E2E_RETAIN_SYNTHETIC_RUN=true`. That mode accepts only the root
+HTTPS `fde-patient-...-dev-....azurefd.net` endpoint emitted by the dev
+deployment, retains its UUID-tagged synthetic records under the dev
+environment's policies, and rejects production-shaped Front Door endpoints.
 
 Performance behavior is explicit through `PATIENT_WEB_E2E_PERFORMANCE_MODE`:
 `observe` is the intentional default, `enforce` fails on configured budgets,

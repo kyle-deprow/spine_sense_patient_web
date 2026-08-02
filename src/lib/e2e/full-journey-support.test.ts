@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { withStackOwnedE2eLifecycle } from "../../../e2e/support/lifecycle";
+import { withAuthorizedE2eLifecycle } from "../../../e2e/support/lifecycle";
 import {
   isPerformanceProfilingEnabled,
   readPerformanceMode,
@@ -371,22 +371,22 @@ describe("canonical full journey support", () => {
     ).toThrow(`${path}.step_data keys must be exactly`);
   });
 
-  it("refuses to mutate outside an explicitly disposable stack", async () => {
+  it("refuses to mutate without an authorized lifecycle", async () => {
     const identity = createE2ERunIdentity();
     const action = vi.fn(async () => "complete");
 
     await expect(
-      withStackOwnedE2eLifecycle({ identity, action }),
+      withAuthorizedE2eLifecycle({ identity, action }),
     ).rejects.toThrow(
-      "refuses to mutate data unless PATIENT_WEB_E2E_STACK_DISPOSABLE=true",
+      "requires a disposable local stack or an explicitly retained Azure dev run",
     );
     expect(action).not.toHaveBeenCalled();
 
     vi.stubEnv("PATIENT_WEB_E2E_STACK_DISPOSABLE", "false");
     await expect(
-      withStackOwnedE2eLifecycle({ identity, action }),
+      withAuthorizedE2eLifecycle({ identity, action }),
     ).rejects.toThrow(
-      "refuses to mutate data unless PATIENT_WEB_E2E_STACK_DISPOSABLE=true",
+      "requires a disposable local stack or an explicitly retained Azure dev run",
     );
     expect(action).not.toHaveBeenCalled();
   });
@@ -396,14 +396,14 @@ describe("canonical full journey support", () => {
     vi.stubEnv("PATIENT_WEB_E2E_STACK_DISPOSABLE", "true");
 
     await expect(
-      withStackOwnedE2eLifecycle({
+      withAuthorizedE2eLifecycle({
         identity,
         action: async () => "complete",
       }),
     ).resolves.toBe("complete");
 
     const actionFailure = new Error("action failed");
-    const rejection = withStackOwnedE2eLifecycle({
+    const rejection = withAuthorizedE2eLifecycle({
       identity,
       action: async () => {
         throw actionFailure;
@@ -413,11 +413,88 @@ describe("canonical full journey support", () => {
     await expect(rejection).rejects.toBe(actionFailure);
   });
 
+  it("runs against Azure dev only with explicit synthetic-data retention", async () => {
+    const identity = createE2ERunIdentity();
+    const action = vi.fn(async () => "complete");
+    vi.stubEnv("PATIENT_WEB_E2E_DEPLOYED_DEV", "true");
+    vi.stubEnv("PATIENT_WEB_E2E_RETAIN_SYNTHETIC_RUN", "true");
+    vi.stubEnv(
+      "PATIENT_WEB_BASE_URL",
+      "https://fde-patient-ssai-spine-dev-eastus-a1b2c3.z01.azurefd.net",
+    );
+
+    await expect(
+      withAuthorizedE2eLifecycle({ identity, action }),
+    ).resolves.toBe("complete");
+    expect(action).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    [
+      "http://fde-patient-ssai-spine-dev-eastus-a1b2c3.z01.azurefd.net",
+      "Front Door origin",
+    ],
+    [
+      "https://fde-patient-ssai-spine-dev-eastus-a1b2c3.z01.azurefd.net:8443",
+      "Front Door origin",
+    ],
+    ["https://app.spinesense.ai", "Front Door origin"],
+    [
+      "https://fde-patient-ssai-spine-dev-eastus-a1b2c3.z01.azurefd.net/path",
+      "Front Door origin",
+    ],
+    [
+      "https://fde-patient-ssai-spine-prod-eastus-standard-a1b2c3.z01.azurefd.net",
+      "Front Door origin",
+    ],
+    ["https://unrelated-dev.azurefd.net", "Front Door origin"],
+  ])("rejects retained Azure dev target %s", async (baseUrl, message) => {
+    const identity = createE2ERunIdentity();
+    const action = vi.fn(async () => undefined);
+    vi.stubEnv("PATIENT_WEB_E2E_DEPLOYED_DEV", "true");
+    vi.stubEnv("PATIENT_WEB_E2E_RETAIN_SYNTHETIC_RUN", "true");
+    vi.stubEnv("PATIENT_WEB_BASE_URL", baseUrl);
+
+    await expect(
+      withAuthorizedE2eLifecycle({ identity, action }),
+    ).rejects.toThrow(message);
+    expect(action).not.toHaveBeenCalled();
+  });
+
+  it("rejects ambiguous local and Azure dev lifecycle ownership", async () => {
+    const identity = createE2ERunIdentity();
+    const action = vi.fn(async () => undefined);
+    vi.stubEnv("PATIENT_WEB_E2E_STACK_DISPOSABLE", "true");
+    vi.stubEnv("PATIENT_WEB_E2E_DEPLOYED_DEV", "true");
+
+    await expect(
+      withAuthorizedE2eLifecycle({ identity, action }),
+    ).rejects.toThrow(
+      "either disposable local or retained Azure dev, not both",
+    );
+    expect(action).not.toHaveBeenCalled();
+  });
+
+  it("rejects Azure dev without the retention acknowledgement", async () => {
+    const identity = createE2ERunIdentity();
+    const action = vi.fn(async () => undefined);
+    vi.stubEnv("PATIENT_WEB_E2E_DEPLOYED_DEV", "true");
+    vi.stubEnv(
+      "PATIENT_WEB_BASE_URL",
+      "https://fde-patient-ssai-spine-dev-eastus-a1b2c3.z01.azurefd.net",
+    );
+
+    await expect(
+      withAuthorizedE2eLifecycle({ identity, action }),
+    ).rejects.toThrow("explicitly retained Azure dev run");
+    expect(action).not.toHaveBeenCalled();
+  });
+
   it("rejects a non-exact identity before mutation", async () => {
     vi.stubEnv("PATIENT_WEB_E2E_STACK_DISPOSABLE", "true");
     const action = vi.fn(async () => undefined);
     await expect(
-      withStackOwnedE2eLifecycle({
+      withAuthorizedE2eLifecycle({
         identity: {
           runId: "not-a-uuid",
           email: "patient+not-a-uuid@e2e.example.com",

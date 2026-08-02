@@ -4,7 +4,7 @@ import {
   FULL_FLOW_TIMEOUT_MS,
   runFullAssessmentJourney,
 } from "./fullAssessmentJourney";
-import { withStackOwnedE2eLifecycle } from "./support/lifecycle";
+import { withAuthorizedE2eLifecycle } from "./support/lifecycle";
 import { createE2ERunIdentity } from "./support/runIdentity";
 
 test.describe("patient web full assessment flow", () => {
@@ -15,7 +15,7 @@ test.describe("patient web full assessment flow", () => {
     test.setTimeout(FULL_FLOW_TIMEOUT_MS);
     const identity = createE2ERunIdentity();
 
-    await withStackOwnedE2eLifecycle({
+    await withAuthorizedE2eLifecycle({
       identity,
       action: () =>
         runFullAssessmentJourney({
