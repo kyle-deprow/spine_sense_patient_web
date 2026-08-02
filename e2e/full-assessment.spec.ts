@@ -611,12 +611,6 @@ async function uploadSyntheticAssessmentDocumentFromRecordsStep(
       if (chooseFileReady !== "enabled") {
         await expect(chooseFileButton).toBeEnabled({ timeout: 1_000 });
       }
-      fileChooserPromise = page.waitForEvent("filechooser", {
-        timeout: 30_000,
-      });
-      await chooseFileButton.click({ timeout: 10_000 });
-      const fileChooser = await fileChooserPromise;
-
       uploadUrlResponsePromise = page.waitForResponse(
         (response) =>
           response
@@ -638,6 +632,11 @@ async function uploadSyntheticAssessmentDocumentFromRecordsStep(
           response.request().method() === "POST",
         { timeout: TRANSITION_BUDGETS_MS.stage },
       );
+      fileChooserPromise = page.waitForEvent("filechooser", {
+        timeout: 30_000,
+      });
+      await chooseFileButton.click({ timeout: 10_000 });
+      const fileChooser = await fileChooserPromise;
       await fileChooser.setFiles(SYNTHETIC_ASSESSMENT_UPLOAD);
 
       const uploadUrlResponse = await uploadUrlResponsePromise;
