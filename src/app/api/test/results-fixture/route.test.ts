@@ -25,6 +25,7 @@ describe("patient web results-fixture support route", () => {
     vi.stubEnv("ENVIRONMENT", "test");
     vi.stubEnv("PATIENT_WEB_TEST_SUPPORT_ENABLED", "true");
     vi.stubEnv("PATIENT_WEB_TEST_SUPPORT_TOKEN", TEST_TOKEN);
+    vi.stubEnv("PATIENT_WEB_BACKEND_TEST_SUPPORT_TOKEN", TEST_TOKEN);
     vi.stubEnv("BACKEND_INTERNAL_URL", "http://backend.internal");
     vi.stubEnv(
       "PATIENT_WEB_CSRF_SECRET",

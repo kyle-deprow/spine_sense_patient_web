@@ -89,7 +89,7 @@ export async function forwardPatientWebTestSupport(
   path: `/test/${string}`,
   body: TestSupportJsonObject,
 ): Promise<Response | null> {
-  const token = process.env.PATIENT_WEB_TEST_SUPPORT_TOKEN ?? "";
+  const token = process.env.PATIENT_WEB_BACKEND_TEST_SUPPORT_TOKEN ?? "";
   if (Buffer.byteLength(token, "utf8") < TEST_SUPPORT_TOKEN_MIN_BYTES) {
     return null;
   }
