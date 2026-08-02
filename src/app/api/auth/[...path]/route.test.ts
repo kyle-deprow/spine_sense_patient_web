@@ -645,4 +645,56 @@ describe("auth catch-all route handler", () => {
       }),
     );
   });
+
+  it("injects the HttpOnly registration verification cookie when resending after a web reload", async () => {
+    mockedBackendFetch.mockResolvedValueOnce(
+      Response.json({
+        message: "Verification code sent. Check your inbox.",
+      }),
+    );
+
+    const response = await POST(
+      makeAuthRequest(
+        "/api/auth/verify/registration/send",
+        {
+          verificationToken: "",
+        },
+        {
+          registrationVerificationToken: "private-registration-challenge-token",
+        },
+      ),
+      makeContext(["verify", "registration", "send"]),
+    );
+
+    expect(response.status).toBe(200);
+    const [, init] = mockedBackendFetch.mock.calls[0] ?? [];
+    expect(init?.body).toBe(
+      JSON.stringify({
+        verification_token: "private-registration-challenge-token",
+      }),
+    );
+  });
+
+  it("normalizes a browser-provided registration verification alias before forwarding", async () => {
+    mockedBackendFetch.mockResolvedValueOnce(
+      Response.json({
+        message: "Verification code sent. Check your inbox.",
+      }),
+    );
+
+    const response = await POST(
+      makeAuthRequest("/api/auth/verify/registration/send", {
+        verificationToken: "private-registration-challenge-token",
+      }),
+      makeContext(["verify", "registration", "send"]),
+    );
+
+    expect(response.status).toBe(200);
+    const [, init] = mockedBackendFetch.mock.calls[0] ?? [];
+    expect(init?.body).toBe(
+      JSON.stringify({
+        verification_token: "private-registration-challenge-token",
+      }),
+    );
+  });
 });

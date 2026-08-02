@@ -220,12 +220,6 @@ async function authRequestBody(
   const body = await request.arrayBuffer();
   if (!isRegistrationVerificationPath(authPath)) return body;
 
-  const cookieToken = request.cookies.get(
-    COOKIE_NAMES.registrationVerification,
-  )?.value;
-  if (typeof cookieToken !== "string" || cookieToken.trim().length === 0)
-    return body;
-
   const contentType = request.headers.get("content-type");
   if (!contentType?.includes("application/json")) return body;
 
@@ -235,15 +229,40 @@ async function authRequestBody(
       return body;
 
     const record = parsed as Record<string, unknown>;
-    const submittedToken =
-      record.verification_token ?? record.verificationToken;
-    if (typeof submittedToken === "string" && submittedToken.trim().length > 0)
-      return body;
-
-    return JSON.stringify({ ...record, verification_token: cookieToken });
+    return JSON.stringify(
+      normalizeRegistrationVerificationBody(record, request),
+    );
   } catch {
     return body;
   }
+}
+
+function normalizeRegistrationVerificationBody(
+  record: Record<string, unknown>,
+  request: NextRequest,
+): Record<string, unknown> {
+  const {
+    verification_token: snakeToken,
+    verificationToken: camelToken,
+    ...safeRecord
+  } = record;
+  const cookieToken = request.cookies.get(
+    COOKIE_NAMES.registrationVerification,
+  )?.value;
+  const token =
+    firstNonEmptyString(cookieToken) ??
+    firstNonEmptyString(snakeToken) ??
+    firstNonEmptyString(camelToken);
+
+  return token === undefined
+    ? safeRecord
+    : { ...safeRecord, verification_token: token };
+}
+
+function firstNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? value : undefined;
 }
 
 function isRegistrationVerificationPath(authPath: string): boolean {
