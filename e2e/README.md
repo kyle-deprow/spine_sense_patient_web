@@ -27,6 +27,12 @@ non-exact gate before browser execution.
 The package runner resolves approved manifest scopes to exact spec arguments;
 the Playwright configuration does not use title filtering as a scope API.
 Without an explicit scope, the runner selects only the canonical full spec.
+Canonical Make runs allocate a unique runtime directory, Compose project,
+claimed host-port set, PID/log/env files, staged standalone build, and
+Playwright output. A locked ownership registry prevents supported concurrent
+runs from claiming each other's ports, and cleanup uses the exact owner record
+instead of shared filenames or port discovery. The shared build workspace is
+locked only while producing each run's independent staged copy.
 The journey uses synthetic identities, server-owned clinical state, BFF-only
 browser traffic, and in-memory browser sessions. It does not use Playwright
 `storageState`, durable browser storage, backend bearer tokens in JavaScript, or
@@ -84,5 +90,7 @@ authorization, schema, clinical, and assertion failures fail fast.
 
 FHIR route behavior, browser security headers, session handling, and other
 functional contracts remain covered by the package's Vitest tests and the
-backend's pytest suite. Production support enablement, cleanup, and
-verify-disabled checks remain owned by the orchestration production runner.
+backend's pytest suite. Production journey execution is blocked because
+retention-safe exact-run cleanup is unavailable. Emergency support disablement
+and verify-disabled checks remain owned by the orchestration production
+runner.
