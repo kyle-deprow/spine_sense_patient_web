@@ -592,6 +592,27 @@ export function documentIdFromUploadResponse(
   return documentId;
 }
 
+export function assessmentDocumentConfirmationFromResponse(payload: unknown) {
+  if (!isRecord(payload)) {
+    throw new Error(
+      "Assessment document confirmation response was not an object",
+    );
+  }
+  const documentId = payload.document_id;
+  if (typeof documentId !== "string" || documentId.length === 0) {
+    throw new Error(
+      "Assessment document confirmation response did not include document_id",
+    );
+  }
+  const processingStatus = payload.processing_status;
+  if (typeof processingStatus !== "string" || processingStatus.length === 0) {
+    throw new Error(
+      "Assessment document confirmation response did not include processing_status",
+    );
+  }
+  return { documentId, processingStatus };
+}
+
 export function normalizeAssessmentDocument(record: AssessmentDocumentRecord) {
   return {
     id: record.id,

@@ -1,6 +1,7 @@
 import type { APIRequestContext, Page } from "@playwright/test";
 import { describe, expect, it, vi } from "vitest";
 
+import { assessmentDocumentConfirmationFromResponse } from "../../../e2e/journey/context";
 import { recordsStepLocator } from "../../../e2e/stages/recordsDocuments";
 import {
   waitForAssessmentDocumentComplete,
@@ -8,6 +9,25 @@ import {
 } from "../../../e2e/stages/recordsUpload";
 
 describe("records documents readiness", () => {
+  it("parses the backend assessment document confirmation contract", () => {
+    expect(
+      assessmentDocumentConfirmationFromResponse({
+        document_id: "123e4567-e89b-42d3-a456-426614174000",
+        processing_status: "processing",
+      }),
+    ).toEqual({
+      documentId: "123e4567-e89b-42d3-a456-426614174000",
+      processingStatus: "processing",
+    });
+
+    expect(() =>
+      assessmentDocumentConfirmationFromResponse({
+        id: "123e4567-e89b-42d3-a456-426614174000",
+        processing_status: "processing",
+      }),
+    ).toThrow("did not include document_id");
+  });
+
   it("resolves readiness from the stable records container only", () => {
     const recordsContainer = {};
     const getByTestId = vi.fn(() => recordsContainer);

@@ -12,6 +12,7 @@ import {
   SYNTHETIC_ASSESSMENT_UPLOAD,
   TEST_SUPPORT_TOKEN,
   TRANSITION_BUDGETS_MS,
+  assessmentDocumentConfirmationFromResponse,
   assessmentIdFromDocumentsUrl,
   documentIdFromUploadResponse,
   normalizeAssessmentDocument,
@@ -216,7 +217,10 @@ export async function uploadSyntheticAssessmentDocumentFromRecordsStep(
           ),
         uploadErrorPromise,
       );
-      let confirmedDocument: NormalizedAssessmentDocument;
+      let confirmedDocument: Pick<
+        NormalizedAssessmentDocument,
+        "id" | "processingStatus"
+      >;
       if (confirmation.source === "response") {
         observedStatus = confirmation.response.status();
         expect(
@@ -229,9 +233,13 @@ export async function uploadSyntheticAssessmentDocumentFromRecordsStep(
           confirmation.response.ok(),
           `assessment document confirm status=${confirmation.response.status()}`,
         ).toBe(true);
-        confirmedDocument = normalizeAssessmentDocument(
-          (await confirmation.response.json()) as AssessmentDocumentRecord,
+        const confirmed = assessmentDocumentConfirmationFromResponse(
+          await confirmation.response.json(),
         );
+        confirmedDocument = {
+          id: confirmed.documentId,
+          processingStatus: confirmed.processingStatus,
+        };
         expect(
           confirmedDocument.id,
           "assessment document confirm response must match the issued document",

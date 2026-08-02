@@ -5,6 +5,7 @@ import { expect, type APIResponse } from "@playwright/test";
 import {
   ADAPTIVE_ANSWERS_BY_ID,
   BACKEND_REGISTRATION_CODE_URL,
+  assessmentDocumentConfirmationFromResponse,
   browserMutationHeaders,
   documentIdFromUploadResponse,
   EXPECTED_SCREENING_GOAL_QUESTION_IDS,
@@ -1217,7 +1218,7 @@ async function prepareDocument(
   }
 
   const confirmPath = `/api/proxy/api/v1/patients/me/assessments/${assessmentId}/documents/${documentId}/confirm`;
-  const confirmed = requireRecord(
+  const confirmed = assessmentDocumentConfirmationFromResponse(
     await bffJson<unknown>(
       context,
       "POST",
@@ -1227,12 +1228,13 @@ async function prepareDocument(
         "x-idempotency-key": context.identity.runId,
       },
     ),
-    "assessment document confirmation response",
   );
-  const processingStatus =
-    confirmed.processing_status ?? confirmed.processingStatus;
-  expect(["processing", "complete"]).toContain(processingStatus);
-  if (processingStatus === "processing") {
+  expect(
+    confirmed.documentId,
+    "assessment document confirm response must match the issued document",
+  ).toBe(documentId);
+  expect(["processing", "complete"]).toContain(confirmed.processingStatus);
+  if (confirmed.processingStatus === "processing") {
     await completeSyntheticDocumentScan(
       context.request,
       documentId,
