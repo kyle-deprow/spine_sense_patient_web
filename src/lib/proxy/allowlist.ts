@@ -40,7 +40,7 @@ const INTAKE_STORY_EXACT_RE = /^\/api\/v1\/patients\/me\/intake\/story$/i;
 const INTAKE_STORY_LIVE_TRANSCRIPTION_SESSION_RE =
   /^\/api\/v1\/patients\/me\/intake\/story\/live-transcription-session$/i;
 const INTAKE_ALLOWED_RE =
-  /^\/api\/v1\/patients\/me\/intake(?:\/(?:progress|progress\/latest|progress\/complete|steps|steps\/[^/]+|complete))?$/i;
+  /^\/api\/v1\/patients\/me\/intake(?:\/(?:progress|progress\/latest|progress\/complete|steps|steps\/[^/]+(?:\/draft)?|complete))?$/i;
 const INTAKE_ROUTE_RE = /^\/api\/v1\/patients\/me\/intake\/route$/i;
 const REPORT_RE = `^\\/api\\/v1\\/patients\\/me\\/reports\\/${UUID_RE}`;
 const REPORT_EXACT_RE = new RegExp(`${REPORT_RE}$`, "i");

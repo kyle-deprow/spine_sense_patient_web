@@ -620,16 +620,18 @@ describe("proxy allowlist", () => {
   });
 
   it("allows patient intake onboarding calls", () => {
-    expect(
-      validateProxyTarget(
-        ["api", "v1", "patients", "me", "intake", "steps", "profile"],
-        "PUT",
-        "/api/proxy/api/v1/patients/me/intake/steps/profile",
-      ),
-    ).toEqual({
-      ok: true,
-      targetPath: "/api/v1/patients/me/intake/steps/profile",
-    });
+    for (const targetPath of [
+      "/api/v1/patients/me/intake/steps/profile",
+      "/api/v1/patients/me/intake/steps/profile/draft",
+    ]) {
+      expect(
+        validateProxyTarget(
+          targetPath.slice(1).split("/"),
+          "PUT",
+          `/api/proxy${targetPath}`,
+        ),
+      ).toEqual({ ok: true, targetPath });
+    }
 
     expect(
       validateProxyTarget(
@@ -649,6 +651,26 @@ describe("proxy allowlist", () => {
       ok: true,
       targetPath: "/api/v1/patients/me/intake/progress/complete",
     });
+  });
+
+  it("keeps intake draft routes exact-match only", () => {
+    expect(
+      validateProxyTarget(
+        [
+          "api",
+          "v1",
+          "patients",
+          "me",
+          "intake",
+          "steps",
+          "profile",
+          "draft",
+          "extra",
+        ],
+        "PUT",
+        "/api/proxy/api/v1/patients/me/intake/steps/profile/draft/extra",
+      ),
+    ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
   });
 
   it("allows only the idempotency-protected treatment creation routes", () => {
