@@ -34,6 +34,18 @@ For focused validation, the manifest also exposes opt-in checkpoint scopes in
 through the same BFF/product APIs and reuse the canonical stage actions. A
 `results_ready` is prepared only through the strict `results-report-v1` named
 server fixture; the analysis scope still invokes real server analysis.
+The analysis scope validates the completed server schema and correlates the
+returned assessment ID to its same-origin BFF route. The results-report scope
+then exercises report generation and the shared return-Home stage; it does not
+claim to validate clinical analysis.
+
+Scope timing logs contain only the approved scope name, phase, and duration.
+They measure checkpoint setup, stage action, and browser finalization. Isolated
+stack disposal timing and exact cleanup evidence remain owned by the outer Make
+lifecycle. Forced failures selected with
+`PATIENT_WEB_E2E_FORCE_FAILURE_AFTER_STAGE=<scope>` fire at deterministic
+milestones inside the shared canonical stage actions, before their end-state
+transitions; stack cleanup remains owned by the outer lifecycle.
 
 Each invocation creates a UUID-backed synthetic email and sends the exact
 `{run_id, email}` identity to the guarded backend support endpoints. The

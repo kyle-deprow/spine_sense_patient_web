@@ -43,6 +43,7 @@ import {
   assertRecoveryAttempt,
   classifyRecovery,
 } from "../support/recoveryPolicy";
+import { maybeThrowForcedMidFlowFailure } from "../support/forcedMidFlowFailure";
 import type { JourneyContext } from "../journey/context";
 import { expectClientRequestContracts } from "../journey/contracts";
 
@@ -143,31 +144,73 @@ export const SCREENING_POST_SUBMIT_READINESS_TEST_IDS = [
   "review-screen",
 ] as const;
 
+export const SCREENING_POST_SUBMIT_FAILURE_TEST_IDS = [
+  "adaptive-loading-error-state",
+  "adaptive-error-state",
+  "emergency-screen",
+  "assessment-processing-failed",
+] as const;
+
+type ScreeningPostSubmitReadiness =
+  (typeof SCREENING_POST_SUBMIT_READINESS_TEST_IDS)[number];
+
+async function observeScreeningPostSubmitReadiness(
+  page: Page,
+  timeout: number,
+): Promise<ScreeningPostSubmitReadiness | null> {
+  let outcome: string;
+  try {
+    outcome = await waitForAnyVisibleTestId(
+      page,
+      [
+        ...SCREENING_POST_SUBMIT_FAILURE_TEST_IDS,
+        ...SCREENING_POST_SUBMIT_READINESS_TEST_IDS,
+      ],
+      timeout,
+    );
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.startsWith("None of these test IDs became visible:")
+    ) {
+      return null;
+    }
+    throw error;
+  }
+
+  if (
+    SCREENING_POST_SUBMIT_FAILURE_TEST_IDS.includes(
+      outcome as (typeof SCREENING_POST_SUBMIT_FAILURE_TEST_IDS)[number],
+    )
+  ) {
+    throw new Error(`Screening submit reached failure state: ${outcome}`);
+  }
+
+  return outcome as ScreeningPostSubmitReadiness;
+}
+
 export async function waitForScreeningPostSubmitReadiness(
   page: Page,
   timeout = 120_000,
-): Promise<string> {
+): Promise<ScreeningPostSubmitReadiness> {
   // The submit transition can briefly leave more than one stage container
-  // visible during route changes. Resolve the expected post-screening stages
-  // in a fixed order instead of composing a locator union, which makes
-  // strict-mode behavior depend on transient DOM overlap.
-  return waitForAnyVisibleTestId(
-    page,
-    SCREENING_POST_SUBMIT_READINESS_TEST_IDS,
-    timeout,
-  );
+  // visible during route changes. Classify failures first, then resolve valid
+  // handoffs in a fixed order so transient DOM overlap stays deterministic.
+  const readiness = await observeScreeningPostSubmitReadiness(page, timeout);
+  if (readiness == null) {
+    throw new Error(
+      `No screening post-submit outcome became visible within ${timeout}ms`,
+    );
+  }
+  return readiness;
 }
 
 export async function submitScreening(
   page: Page,
   profiler: TransitionProfiler,
-) {
-  const existingStage = await waitForAnyVisibleTestId(
-    page,
-    POST_SCREENING_STAGE_TEST_IDS,
-    1000,
-  ).catch(() => null);
-  if (existingStage != null) return;
+): Promise<ScreeningPostSubmitReadiness> {
+  const existingStage = await observeScreeningPostSubmitReadiness(page, 1000);
+  if (existingStage != null) return existingStage;
 
   await expect(page.getByTestId("screening-nav-next")).toBeVisible({
     timeout: 30_000,
@@ -180,17 +223,13 @@ export async function submitScreening(
     "Screening submit must start from the final screening question",
   ).toBe(FINAL_SCREENING_QUESTION_ID);
 
-  await profiler.measure(
+  return profiler.measure(
     "screening.submit_to_post_screening",
     "stage",
     async () => {
       const clickedSubmit = await clickScreeningSubmitIfPresent(page);
       expect(clickedSubmit).toBe(true);
-      await waitForAnyVisibleTestId(
-        page,
-        POST_SCREENING_STAGE_TEST_IDS,
-        120_000,
-      );
+      return waitForScreeningPostSubmitReadiness(page, 120_000);
     },
   );
 }
@@ -1048,14 +1087,17 @@ export async function runScreeningStage(
     await profiler.measure("screening.answer_questions", "stage", () =>
       answerScreening(page, profiler),
     );
-    await profiler.measure("screening.submit", "stage", () =>
-      submitScreening(page, profiler),
+    maybeThrowForcedMidFlowFailure("screening");
+    const postSubmitStage = await profiler.measure(
+      "screening.submit",
+      "stage",
+      () => submitScreening(page, profiler),
     );
+    expect(SCREENING_POST_SUBMIT_READINESS_TEST_IDS).toContain(postSubmitStage);
     expectClientRequestContracts(
       context.questionnaireMutations,
       context.generatedAdaptiveAnswers,
       "screening",
     );
-    await waitForScreeningPostSubmitReadiness(page);
   });
 }

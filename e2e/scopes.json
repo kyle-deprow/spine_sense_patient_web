@@ -6,7 +6,7 @@
       "tag": "@full-assessment",
       "spec": "e2e/full-assessment.spec.ts",
       "start_checkpoint": "fresh",
-      "end_checkpoint": "results_ready",
+      "end_checkpoint": "home_complete",
       "timeout_class": "full",
       "real_analysis": true,
       "paths": [
@@ -20,8 +20,7 @@
         "e2e/scoped-assessment.spec.ts",
         "e2e/scopes.json",
         "playwright.config.ts"
-      ],
-      "checkpoint": "results_ready"
+      ]
     },
     "auth": {
       "tag": "@scope-auth",
@@ -30,8 +29,7 @@
       "end_checkpoint": "verified_pending_consent",
       "timeout_class": "short",
       "real_analysis": false,
-      "paths": ["e2e/stages/accountVerification.ts"],
-      "checkpoint": "verified_pending_consent"
+      "paths": ["e2e/stages/accountVerification.ts"]
     },
     "consent-onboarding": {
       "tag": "@scope-consent-onboarding",
@@ -40,8 +38,7 @@
       "end_checkpoint": "records_ready",
       "timeout_class": "short",
       "real_analysis": false,
-      "paths": ["e2e/stages/consentOnboarding.ts"],
-      "checkpoint": "records_ready"
+      "paths": ["e2e/stages/consentOnboarding.ts"]
     },
     "documents": {
       "tag": "@scope-documents",
@@ -50,11 +47,7 @@
       "end_checkpoint": "screening_ready",
       "timeout_class": "documents",
       "real_analysis": false,
-      "paths": [
-        "e2e/stages/recordsDocuments.ts",
-        "e2e/stages/recordsUpload.ts"
-      ],
-      "checkpoint": "screening_ready"
+      "paths": ["e2e/stages/recordsDocuments.ts", "e2e/stages/recordsUpload.ts"]
     },
     "screening": {
       "tag": "@scope-screening",
@@ -63,8 +56,7 @@
       "end_checkpoint": "adaptive_ready",
       "timeout_class": "screening",
       "real_analysis": false,
-      "paths": ["e2e/stages/screening.ts"],
-      "checkpoint": "adaptive_ready"
+      "paths": ["e2e/stages/screening.ts"]
     },
     "adaptive": {
       "tag": "@scope-adaptive",
@@ -73,8 +65,7 @@
       "end_checkpoint": "review_ready",
       "timeout_class": "adaptive",
       "real_analysis": false,
-      "paths": ["e2e/stages/adaptive.ts"],
-      "checkpoint": "review_ready"
+      "paths": ["e2e/stages/adaptive.ts"]
     },
     "analysis": {
       "tag": "@scope-analysis",
@@ -83,18 +74,17 @@
       "end_checkpoint": "results_ready",
       "timeout_class": "analysis",
       "real_analysis": true,
-      "paths": ["e2e/stages/reviewAnalysis.ts"],
-      "checkpoint": "results_ready"
+      "paths": ["e2e/stages/reviewAnalysis.ts"]
     },
     "results-report": {
       "tag": "@scope-results-report",
       "spec": "e2e/scoped-assessment.spec.ts",
       "start_checkpoint": "results_ready",
-      "end_checkpoint": "results_ready",
+      "end_checkpoint": "home_complete",
       "timeout_class": "report",
       "real_analysis": false,
-      "paths": ["e2e/stages/resultsReport.ts"],
-      "checkpoint": "results_ready"
+      "fixture": "results-report-v1",
+      "paths": ["e2e/stages/resultsReport.ts"]
     }
   }
 }

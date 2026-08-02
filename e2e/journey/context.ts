@@ -133,6 +133,7 @@ export type ScreeningStressState = {
 };
 
 export type QuestionnaireMutation = {
+  method: "POST" | "PUT" | "PATCH";
   path: string;
   payload: unknown;
 };
@@ -168,10 +169,11 @@ export async function browserMutationHeaders(
 /** Add a direct BFF mutation to the same contract ledger as browser actions. */
 export function recordQuestionnaireMutation(
   context: Pick<JourneyContext, "questionnaireMutations">,
+  method: QuestionnaireMutation["method"],
   path: string,
   payload: unknown,
 ): void {
-  context.questionnaireMutations.push({ path, payload });
+  context.questionnaireMutations.push({ method, path, payload });
 }
 
 export type AssessmentUploadUrlResponse = {
@@ -510,7 +512,7 @@ export function captureQuestionnaireMutations(
     const path = new URL(request.url()).pathname;
     if (request.method() === "GET") return;
     if (
-      !/(?:\/intake\/(?:route|steps\/[^/]+|progress(?:\/complete)?$)|\/assessments(?:\/[^/]+)?\/(?:screening|adaptive)\/(?:answers|complete|complete-with-answers)$|\/assessments\/[^/]+\/analysis\/run$)/.test(
+      !/(?:\/intake\/(?:story$|route|steps\/[^/]+|progress(?:\/complete)?$)|\/assessments(?:\/[^/]+)?\/(?:screening|adaptive)\/(?:answers|complete|complete-with-answers)$|\/assessments\/[^/]+\/analysis\/run$)/.test(
         path,
       )
     )
@@ -522,7 +524,9 @@ export function captureQuestionnaireMutations(
     } catch {
       payload = null;
     }
-    mutations.push({ path, payload });
+    const method = request.method();
+    if (method !== "POST" && method !== "PUT" && method !== "PATCH") return;
+    mutations.push({ method, path, payload });
   });
   return mutations;
 }
@@ -750,7 +754,14 @@ export type AdaptivePrepareTrackerContract = {
   consumeRetryableFailure(
     attempt: number,
     maxAttempts: number,
+    evidence?: Readonly<{ productTimeoutVisible?: boolean }>,
   ): RecoveryDecision;
+  assertRecoveryReceiptContinuity(requireRecoveryRequest?: boolean): void;
+  waitForConsumedPrepareClientOutcome(
+    timeoutMs: number,
+  ): Promise<RecoveryDecision>;
+  hasRecoveredPrepareCompletion(): boolean;
+  waitForRecoveredPrepareCompletion(): Promise<void>;
 };
 
 export type JourneyContext = {

@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 import type { Locator } from "@playwright/test";
 
@@ -14,6 +17,17 @@ vi.mock("@playwright/test", () => ({
 import { expectReportOptionsDismissed } from "../../../e2e/stages/resultsReport";
 
 describe("results report readiness", () => {
+  it("uses stable result IDs without a global treatment strategy text locator", () => {
+    const source = readFileSync(
+      resolve(process.cwd(), "e2e/stages/resultsReport.ts"),
+      "utf8",
+    );
+
+    expect(source).not.toContain('page.getByText("Treatment Strategy")');
+    expect(source).toContain('page.getByTestId("results-treatment")');
+    expect(source).toContain('page.getByTestId("results-self-care")');
+  });
+
   it("requires the real report options sheet and its error state to be hidden", async () => {
     const error = {};
     const options = {

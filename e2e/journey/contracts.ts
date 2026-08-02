@@ -254,7 +254,7 @@ export function expectClientRequestContracts(
   const intakeMutations = mutations.filter(({ path }) =>
     path.includes("/intake/"),
   );
-  for (const { path, payload } of intakeMutations) {
+  for (const { method, path, payload } of intakeMutations) {
     expect(
       forbiddenDerivedClinicalKeys(payload),
       path + " must not contain client-derived clinical fields",
@@ -262,7 +262,12 @@ export function expectClientRequestContracts(
     expect(isRecord(payload), path + " must send a JSON object").toBe(true);
     if (!isRecord(payload)) continue;
     expect(() =>
-      assertExactIntakeRequestContract(path, payload, fullAssessmentScenario),
+      assertExactIntakeRequestContract(
+        method,
+        path,
+        payload,
+        fullAssessmentScenario,
+      ),
     ).not.toThrow();
   }
 

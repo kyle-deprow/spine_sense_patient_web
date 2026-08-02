@@ -21,6 +21,7 @@ import {
   assertRecoveryAttempt,
   classifyRecovery,
 } from "../support/recoveryPolicy";
+import { maybeThrowForcedMidFlowFailure } from "../support/forcedMidFlowFailure";
 
 export async function warmCsrfSession(page: Page) {
   const response = await page.request.get("/api/auth/session");
@@ -480,6 +481,7 @@ export async function runAccountVerificationStage(
       timeout: 60_000,
     });
     await expectNoBrowserStorage(page);
+    maybeThrowForcedMidFlowFailure("auth");
     const verifyResponse = await profiler.measure(
       "verification.to_authenticated_session",
       "page",

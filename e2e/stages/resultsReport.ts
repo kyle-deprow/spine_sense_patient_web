@@ -11,6 +11,7 @@ import {
   expectRenderedAssessmentPdf,
   isAssessmentReportGenerationResponse,
 } from "../journey/results";
+import { maybeThrowForcedMidFlowFailure } from "../support/forcedMidFlowFailure";
 
 export async function expectReportOptionsDismissed(
   options: Locator,
@@ -30,7 +31,6 @@ export async function runResultsReportStage(
       timeout: 120_000,
     });
     await page.getByTestId("sticky-tab-wrapper").scrollIntoViewIfNeeded();
-    await expect(page.getByText("Treatment Strategy")).toBeVisible();
     await expect(page.getByTestId("results-treatment")).toBeVisible();
     await expect(page.getByTestId("results-self-care")).toBeVisible();
     await expect(page.getByTestId("results-share")).toBeEnabled();
@@ -52,6 +52,7 @@ export async function runResultsReportStage(
     await expect(
       options.getByTestId("results-report-options-generate"),
     ).toHaveAttribute("aria-label", "Generate PDF");
+    maybeThrowForcedMidFlowFailure("results-report");
     const response = await profiler.measure(
       "results.report_generation",
       "report",

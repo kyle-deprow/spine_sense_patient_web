@@ -22,6 +22,7 @@ import {
 import {
   waitForAssessmentStage,
   waitForAnyVisibleTestId,
+  isVisibleByTestIdOrSemantic,
   waitForDynamicQuestionAdvance,
   waitForEnabledAndClick,
   waitForRetryOutcome,
@@ -38,6 +39,11 @@ import {
   classifyRecovery,
   type RecoveryObservation,
 } from "../support/recoveryPolicy";
+import {
+  isForcedMidFlowFailureSelected,
+  maybeThrowForcedMidFlowFailure,
+  maybeThrowForcedMidFlowFailureUnavailable,
+} from "../support/forcedMidFlowFailure";
 
 const MAX_ADAPTIVE_PENDING_SAVE_ATTEMPTS = 3;
 const ADAPTIVE_PENDING_SAVE_TIMEOUT_MS = 120_000;
@@ -46,6 +52,9 @@ const MAX_ADAPTIVE_PREPARE_RELOAD_RECOVERIES = 2;
 export const MAX_ADAPTIVE_PREPARE_RECOVERY_ACTIONS =
   MAX_ADAPTIVE_PREPARE_RETRY_ATTEMPTS + MAX_ADAPTIVE_PREPARE_RELOAD_RECOVERIES;
 export const ADAPTIVE_PREPARE_RECOVERY_TIMEOUT_MS = 180_000;
+// Product timeout is 45s; allow 1s for the request event to follow timer setup.
+export const ADAPTIVE_PREPARE_PENDING_TIMEOUT_MIN_AGE_MS = 44_000;
+export const ADAPTIVE_PREPARE_RECOVERED_UI_EXIT_TIMEOUT_MS = 30_000;
 const ADAPTIVE_PREPARE_CANCELLATION_GRACE_MS = 250;
 
 export function decideAdaptivePrepareRecovery(
@@ -124,6 +133,58 @@ export async function runAdaptivePrepareRecoveryBeforeDeadline<T>(
   } finally {
     if (timeout != null) clearTimeout(timeout);
   }
+}
+
+export function adaptivePrepareLoadingOutcomeTimeout(
+  recoveredPrepareCompleted: boolean,
+  recoveryStarted: boolean,
+  remainingRecoveryMs: number,
+): number {
+  if (recoveredPrepareCompleted) {
+    return Math.min(
+      ADAPTIVE_PREPARE_RECOVERED_UI_EXIT_TIMEOUT_MS,
+      remainingRecoveryMs,
+    );
+  }
+  return recoveryStarted ? remainingRecoveryMs : 360_000;
+}
+
+export async function waitForAdaptiveLoadingRecoveryOutcome<T>(
+  recoveredPrepareCompleted: boolean,
+  recoveryStarted: boolean,
+  remainingRecoveryTime: () => number,
+  waitForOutcome: (timeoutMs: number, signal?: AbortSignal) => Promise<T>,
+  waitForRecoveredPrepareCompletion: () => Promise<void>,
+): Promise<T> {
+  if (!recoveryStarted) return waitForOutcome(360_000);
+  if (recoveredPrepareCompleted) {
+    return waitForOutcome(
+      adaptivePrepareLoadingOutcomeTimeout(true, true, remainingRecoveryTime()),
+    );
+  }
+
+  const firstWaitController = new AbortController();
+  const firstOutcome = waitForOutcome(
+    remainingRecoveryTime(),
+    firstWaitController.signal,
+  ).then(
+    (outcome) => ({ kind: "outcome", outcome }) as const,
+    (error: unknown) => ({ kind: "error", error }) as const,
+  );
+  const first = await Promise.race([
+    firstOutcome,
+    waitForRecoveredPrepareCompletion().then(
+      () => ({ kind: "recovered-completion" }) as const,
+    ),
+  ]);
+  if (first.kind === "outcome") return first.outcome;
+  if (first.kind === "error") throw first.error;
+  firstWaitController.abort();
+  const canceledWait = await firstOutcome;
+  if (canceledWait.kind === "outcome") return canceledWait.outcome;
+  return waitForOutcome(
+    adaptivePrepareLoadingOutcomeTimeout(true, true, remainingRecoveryTime()),
+  );
 }
 
 export async function answerIssuedAdaptiveQuestion(
@@ -229,9 +290,14 @@ export async function answerIssuedAdaptiveQuestion(
 }
 
 type AdaptivePrepareAttempt = {
+  idempotencyKey?: string | undefined;
   sequence: number;
+  startedAt: number;
+  settled: Promise<void>;
+  markSettled: () => void;
   responseStatus?: number | undefined;
   requestFailure?: string | undefined;
+  transportSettled: boolean;
 };
 
 export class AdaptivePrepareTracker {
@@ -241,7 +307,25 @@ export class AdaptivePrepareTracker {
     AdaptivePrepareAttempt
   >();
   private consumedSequence = 0;
+  private consumedAttempt: AdaptivePrepareAttempt | null = null;
+  private expectedRecoveryIdempotencyKey: string | null = null;
+  private recoveryReceiptContinuityError: string | null = null;
+  private recoveryStarted = false;
+  private recoveredPrepareCompleted = false;
+  private readonly recoveredPrepareCompletion: Promise<void>;
+  private markRecoveredPrepareCompletion: () => void = () => {};
   private page: Page | null = null;
+
+  constructor(private readonly now: () => number = () => performance.now()) {
+    this.recoveredPrepareCompletion = new Promise<void>((resolve) => {
+      this.markRecoveredPrepareCompletion = resolve;
+    });
+  }
+
+  private recordRecoveredPrepareCompletion(): void {
+    this.recoveredPrepareCompleted = true;
+    this.markRecoveredPrepareCompletion();
+  }
 
   private readonly onRequest = (request: PlaywrightRequest) => {
     if (
@@ -250,20 +334,57 @@ export class AdaptivePrepareTracker {
     ) {
       return;
     }
-    const attempt = { sequence: this.attempts.length + 1 };
+    let markSettled: () => void = () => {};
+    const settled = new Promise<void>((resolve) => {
+      markSettled = resolve;
+    });
+    const attempt: AdaptivePrepareAttempt = {
+      idempotencyKey: request.headers()["x-idempotency-key"],
+      sequence: this.attempts.length + 1,
+      startedAt: this.now(),
+      settled,
+      markSettled,
+      transportSettled: false,
+    };
+    if (this.expectedRecoveryIdempotencyKey != null) {
+      if (attempt.idempotencyKey !== this.expectedRecoveryIdempotencyKey) {
+        this.recoveryReceiptContinuityError =
+          "Adaptive prepare recovery changed its idempotency key before authoritative reconciliation";
+      }
+      this.expectedRecoveryIdempotencyKey = null;
+    }
     this.attempts.push(attempt);
     this.attemptsByRequest.set(request, attempt);
   };
 
   private readonly onResponse = (response: PlaywrightResponse) => {
     const attempt = this.attemptsByRequest.get(response.request());
-    if (attempt != null) attempt.responseStatus = response.status();
+    if (attempt != null) {
+      attempt.responseStatus = response.status();
+    }
+  };
+
+  private readonly onRequestFinished = (request: PlaywrightRequest) => {
+    const attempt = this.attemptsByRequest.get(request);
+    if (attempt == null) return;
+    attempt.transportSettled = true;
+    if (
+      this.recoveryStarted &&
+      attempt.responseStatus != null &&
+      attempt.responseStatus >= 200 &&
+      attempt.responseStatus < 300
+    ) {
+      this.recordRecoveredPrepareCompletion();
+    }
+    attempt.markSettled();
   };
 
   private readonly onRequestFailed = (request: PlaywrightRequest) => {
     const attempt = this.attemptsByRequest.get(request);
     if (attempt == null) return;
     attempt.requestFailure = request.failure()?.errorText ?? "requestfailed";
+    attempt.transportSettled = true;
+    attempt.markSettled();
   };
 
   start(page: Page): void {
@@ -273,6 +394,7 @@ export class AdaptivePrepareTracker {
     this.page = page;
     page.on("request", this.onRequest);
     page.on("response", this.onResponse);
+    page.on("requestfinished", this.onRequestFinished);
     page.on("requestfailed", this.onRequestFailed);
   }
 
@@ -280,6 +402,7 @@ export class AdaptivePrepareTracker {
     if (this.page == null) return;
     this.page.off("request", this.onRequest);
     this.page.off("response", this.onResponse);
+    this.page.off("requestfinished", this.onRequestFinished);
     this.page.off("requestfailed", this.onRequestFailed);
     this.page = null;
   }
@@ -287,6 +410,7 @@ export class AdaptivePrepareTracker {
   consumeRetryableFailure(
     attempt: number,
     maxAttempts: number,
+    evidence: Readonly<{ productTimeoutVisible?: boolean }> = {},
   ): ReturnType<typeof classifyRecovery> {
     const observedAttempt = this.attempts.at(-1);
     if (
@@ -298,6 +422,16 @@ export class AdaptivePrepareTracker {
       );
     }
     this.consumedSequence = observedAttempt.sequence;
+    this.consumedAttempt = observedAttempt;
+    this.recoveryStarted = true;
+    if (
+      observedAttempt.transportSettled &&
+      observedAttempt.responseStatus != null &&
+      observedAttempt.responseStatus >= 200 &&
+      observedAttempt.responseStatus < 300
+    ) {
+      this.recordRecoveredPrepareCompletion();
+    }
 
     const observation: RecoveryObservation = {
       ...(observedAttempt.responseStatus == null
@@ -307,22 +441,122 @@ export class AdaptivePrepareTracker {
         ? {}
         : { failureText: observedAttempt.requestFailure }),
     };
-    // Adaptive prepare has no explicit eventual-consistency contract. Keep
-    // that classifier input absent unless the server exposes one explicitly.
-    if (Object.keys(observation).length === 0) {
+    const pendingAgeMs = this.now() - observedAttempt.startedAt;
+    const clientAborted =
+      observedAttempt.requestFailure?.includes("ERR_ABORTED") === true;
+    const exactAgedProductTimeout =
+      evidence.productTimeoutVisible === true &&
+      pendingAgeMs >= ADAPTIVE_PREPARE_PENDING_TIMEOUT_MIN_AGE_MS;
+    if (exactAgedProductTimeout && observedAttempt.idempotencyKey == null) {
       throw new Error(
-        "Adaptive loading error appeared before the correlated prepare attempt completed",
+        "Timed-out adaptive prepare request had no idempotency key",
+      );
+    }
+    if (Object.keys(observation).length === 0 && !exactAgedProductTimeout) {
+      throw new Error(
+        evidence.productTimeoutVisible === true
+          ? "Adaptive loading timeout had no sufficiently aged outstanding prepare request"
+          : "Adaptive loading error appeared before the correlated prepare attempt completed",
       );
     }
 
-    const decision = classifyRecovery(observation);
+    const exactTimeoutReachedServer =
+      exactAgedProductTimeout &&
+      observedAttempt.responseStatus != null &&
+      observedAttempt.responseStatus >= 200 &&
+      observedAttempt.responseStatus < 300;
+    const exactTimeoutHasRetryableClientOutcome =
+      exactAgedProductTimeout &&
+      observedAttempt.responseStatus == null &&
+      (observedAttempt.requestFailure == null || clientAborted);
+    const decision = exactTimeoutReachedServer
+      ? ({ retry: true, reason: "eventual-consistency" } as const)
+      : exactTimeoutHasRetryableClientOutcome
+        ? ({ retry: true, reason: "transient-network" } as const)
+        : classifyRecovery(observation);
     assertRecoveryAttempt(decision, attempt, maxAttempts);
     if (!decision.retry) {
       throw new Error(
         `Adaptive prepare failed without retryable evidence (${decision.reason})`,
       );
     }
+    if (exactAgedProductTimeout) {
+      this.expectedRecoveryIdempotencyKey =
+        observedAttempt.idempotencyKey ?? null;
+    }
     return decision;
+  }
+
+  assertRecoveryReceiptContinuity(requireRecoveryRequest = false): void {
+    if (this.recoveryReceiptContinuityError != null) {
+      throw new Error(this.recoveryReceiptContinuityError);
+    }
+    if (requireRecoveryRequest && this.expectedRecoveryIdempotencyKey != null) {
+      throw new Error(
+        "Adaptive prepare recovery reached a terminal state without a correlated request",
+      );
+    }
+  }
+
+  async waitForConsumedPrepareClientOutcome(
+    timeoutMs: number,
+  ): Promise<ReturnType<typeof classifyRecovery>> {
+    const attempt = this.consumedAttempt;
+    if (attempt == null) {
+      throw new Error("No consumed adaptive prepare attempt is available");
+    }
+    if (!attempt.transportSettled && timeoutMs <= 0) {
+      throw new Error(
+        "Timed-out adaptive prepare did not settle before the recovery deadline",
+      );
+    }
+    if (!attempt.transportSettled) {
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          attempt.settled,
+          new Promise<never>((_resolve, reject) => {
+            timeout = setTimeout(
+              () =>
+                reject(
+                  new Error(
+                    "Timed-out adaptive prepare did not settle before the recovery deadline",
+                  ),
+                ),
+              timeoutMs,
+            );
+          }),
+        ]);
+      } finally {
+        if (timeout != null) clearTimeout(timeout);
+      }
+    }
+    if (
+      attempt.responseStatus != null &&
+      attempt.responseStatus >= 200 &&
+      attempt.responseStatus < 300
+    ) {
+      return { retry: true, reason: "eventual-consistency" };
+    }
+    if (attempt.requestFailure?.includes("ERR_ABORTED")) {
+      return { retry: true, reason: "transient-network" };
+    }
+    return classifyRecovery({
+      ...(attempt.responseStatus == null
+        ? {}
+        : { status: attempt.responseStatus }),
+      ...(attempt.requestFailure == null
+        ? {}
+        : { failureText: attempt.requestFailure }),
+    });
+  }
+
+  hasRecoveredPrepareCompletion(): boolean {
+    return this.recoveredPrepareCompleted;
+  }
+
+  waitForRecoveredPrepareCompletion(): Promise<void> {
+    return this.recoveredPrepareCompletion;
   }
 }
 
@@ -405,6 +639,22 @@ export class AdaptiveAnswerSaveTracker {
     this.page = null;
   }
 
+  assertSuccessfulSave(questionId: string): void {
+    const observedAttempt = this.attempts
+      .filter((candidate) => candidate.questionIds.has(questionId))
+      .at(-1);
+    if (
+      observedAttempt == null ||
+      observedAttempt.responseStatus == null ||
+      observedAttempt.responseStatus < 200 ||
+      observedAttempt.responseStatus >= 300
+    ) {
+      throw new Error(
+        `Adaptive saved advance for ${questionId} did not have a correlated successful response`,
+      );
+    }
+  }
+
   consumeRetryablePendingSave(
     questionId: string,
     attempt: number,
@@ -450,13 +700,47 @@ export class AdaptiveAnswerSaveTracker {
   }
 }
 
+export type AdaptiveForcedFailureCapability = Readonly<{
+  onSavedAdvance: () => void;
+  onTerminalBeforeSavedAdvance: () => void;
+}>;
+
+export type AdaptiveSavedAdvancePath = "normal" | "retry" | "loading";
+
+export function reachAdaptiveSavedAdvanceMilestone(
+  _path: AdaptiveSavedAdvancePath,
+  stage: string,
+  milestoneReached: boolean,
+  capability: AdaptiveForcedFailureCapability | null,
+  assertSuccessfulSave: () => void,
+): boolean {
+  if (capability == null || milestoneReached || stage !== "adaptive-screen") {
+    return milestoneReached;
+  }
+  assertSuccessfulSave();
+  capability.onSavedAdvance();
+  return true;
+}
+
 export async function completeAdaptiveIfPresent(
   page: Page,
   generatedAdaptiveAnswers: Map<string, unknown>,
   profiler: TransitionProfiler,
   prepareTracker: AdaptivePrepareTrackerContract,
+  forcedFailureCapability: AdaptiveForcedFailureCapability | null = null,
 ): Promise<string | null> {
   const adaptiveScreen = page.getByTestId("adaptive-screen");
+  let savedAdvanceMilestoneReached = false;
+  const returnTerminalStage = (stage: string | null): string | null => {
+    if (
+      forcedFailureCapability != null &&
+      !savedAdvanceMilestoneReached &&
+      stage === "review-screen"
+    ) {
+      forcedFailureCapability.onTerminalBeforeSavedAdvance();
+    }
+    return stage;
+  };
   let initialStage = await waitForAssessmentStage(page, [
     "adaptive-loading-state",
     "adaptive-loading-error-state",
@@ -494,13 +778,31 @@ export async function completeAdaptiveIfPresent(
     initialStage === "adaptive-loading-state" ||
     initialStage === "adaptive-loading-error-state"
   ) {
+    prepareTracker.assertRecoveryReceiptContinuity();
     if (initialStage === "adaptive-loading-error-state") {
       recoveryStartedAt ??= performance.now();
       recoveryFailureAttempts += 1;
-      const decision = prepareTracker.consumeRetryableFailure(
+      const productTimeoutVisible = await isVisibleByTestIdOrSemantic(
+        page,
+        "adaptive-loading-timeout",
+        500,
+      );
+      let decision = prepareTracker.consumeRetryableFailure(
         recoveryFailureAttempts,
         MAX_ADAPTIVE_PREPARE_RECOVERY_ACTIONS + 1,
+        { productTimeoutVisible },
       );
+      lastRecoveryReason = decision.reason;
+      if (productTimeoutVisible) {
+        // Prefer an observable server response before retrying. A browser-side
+        // abort does not prove server settlement; the app's deterministic
+        // assessment/revision key lets middleware coordinate that retry instead.
+        decision = await runRecoveryAction(() =>
+          prepareTracker.waitForConsumedPrepareClientOutcome(
+            remainingRecoveryTime(),
+          ),
+        );
+      }
       lastRecoveryReason = decision.reason;
       const recoveryAction = decideAdaptivePrepareRecovery(
         decision,
@@ -571,7 +873,7 @@ export async function completeAdaptiveIfPresent(
     }
 
     if (initialStage === "adaptive-loading-state") {
-      const waitForLoadingOutcome = () =>
+      const waitForLoadingOutcome = (timeoutMs: number, signal?: AbortSignal) =>
         profiler.measure("adaptive.loading_to_question", "stage", () =>
           waitForAssessmentStage(
             page,
@@ -581,30 +883,58 @@ export async function completeAdaptiveIfPresent(
               "adaptive-error-state",
               "review-screen",
             ],
-            recoveryStartedAt == null ? 360_000 : remainingRecoveryTime(),
+            timeoutMs,
+            signal,
           ),
         );
       initialStage =
         recoveryStartedAt == null
-          ? await waitForLoadingOutcome()
-          : await runRecoveryAction(waitForLoadingOutcome);
+          ? await waitForLoadingOutcome(360_000)
+          : await runRecoveryAction(() =>
+              waitForAdaptiveLoadingRecoveryOutcome(
+                prepareTracker.hasRecoveredPrepareCompletion(),
+                true,
+                remainingRecoveryTime,
+                waitForLoadingOutcome,
+                () => prepareTracker.waitForRecoveredPrepareCompletion(),
+              ),
+            );
       continue;
     }
   }
-  if (initialStage !== "adaptive-screen") return initialStage;
+  prepareTracker.assertRecoveryReceiptContinuity(true);
+  if (initialStage !== "adaptive-screen") {
+    return returnTerminalStage(initialStage);
+  }
 
   await expect(page.getByTestId("adaptive-list")).toBeVisible({
     timeout: 30_000,
   });
   const answerSaveTracker = new AdaptiveAnswerSaveTracker();
   answerSaveTracker.start(page);
+  const recordSavedAdvance = (
+    path: AdaptiveSavedAdvancePath,
+    stage: string,
+    questionTestId: string,
+  ): void => {
+    savedAdvanceMilestoneReached = reachAdaptiveSavedAdvanceMilestone(
+      path,
+      stage,
+      savedAdvanceMilestoneReached,
+      forcedFailureCapability,
+      () =>
+        answerSaveTracker.assertSuccessfulSave(
+          questionTestId.replace(/^adaptive-question-/, ""),
+        ),
+    );
+  };
   try {
     for (let index = 0; index < 20; index += 1) {
       if (
         !(await adaptiveScreen.isVisible({ timeout: 1000 }).catch(() => false))
       ) {
-        return waitForAnyVisibleTestId(page, ["review-screen"], 60_000).catch(
-          () => "left-adaptive-screen",
+        return returnTerminalStage(
+          await waitForAnyVisibleTestId(page, ["review-screen"], 60_000),
         );
       }
       await answerIssuedAdaptiveQuestion(page, generatedAdaptiveAnswers);
@@ -649,6 +979,7 @@ export async function completeAdaptiveIfPresent(
             : "stage",
         transitionStartedAt,
       );
+      recordSavedAdvance("normal", nextStage, currentQuestionTestId);
       if (nextStage === "adaptive-sync-retry") {
         const recoveryDeadline =
           performance.now() + ADAPTIVE_PENDING_SAVE_TIMEOUT_MS;
@@ -709,6 +1040,7 @@ export async function completeAdaptiveIfPresent(
             );
           }
         }
+        recordSavedAdvance("retry", recoveredStage, currentQuestionTestId);
         if (recoveredStage === "adaptive-loading-state") {
           const resolvedStage = await profiler.measure(
             "adaptive.loading_to_next_stage",
@@ -720,10 +1052,15 @@ export async function completeAdaptiveIfPresent(
                 "review-screen",
               ]),
           );
-          if (resolvedStage !== "adaptive-screen") return resolvedStage;
+          recordSavedAdvance("loading", resolvedStage, currentQuestionTestId);
+          if (resolvedStage !== "adaptive-screen") {
+            return returnTerminalStage(resolvedStage);
+          }
           continue;
         }
-        if (recoveredStage !== "adaptive-screen") return recoveredStage;
+        if (recoveredStage !== "adaptive-screen") {
+          return returnTerminalStage(recoveredStage);
+        }
         continue;
       }
       if (nextStage === "adaptive-loading-state") {
@@ -737,10 +1074,15 @@ export async function completeAdaptiveIfPresent(
               "review-screen",
             ]),
         );
-        if (resolvedStage !== "adaptive-screen") return resolvedStage;
+        recordSavedAdvance("loading", resolvedStage, currentQuestionTestId);
+        if (resolvedStage !== "adaptive-screen") {
+          return returnTerminalStage(resolvedStage);
+        }
         continue;
       }
-      if (nextStage !== "adaptive-screen") return nextStage;
+      if (nextStage !== "adaptive-screen") {
+        return returnTerminalStage(nextStage);
+      }
     }
 
     throw new Error("Adaptive questionnaire did not exit after 20 questions");
@@ -752,6 +1094,14 @@ export async function completeAdaptiveIfPresent(
 export async function runAdaptiveStage(context: JourneyContext): Promise<void> {
   const { page, profiler, adaptivePrepareTracker } = context;
   await context.step("adaptive assessment", async () => {
+    const forcedFailureCapability: AdaptiveForcedFailureCapability | null =
+      isForcedMidFlowFailureSelected("adaptive")
+        ? {
+            onSavedAdvance: () => maybeThrowForcedMidFlowFailure("adaptive"),
+            onTerminalBeforeSavedAdvance: () =>
+              maybeThrowForcedMidFlowFailureUnavailable("adaptive"),
+          }
+        : null;
     const stage = await profiler.measure(
       "screening.to_adaptive_complete",
       "stage",
@@ -761,6 +1111,7 @@ export async function runAdaptiveStage(context: JourneyContext): Promise<void> {
           context.generatedAdaptiveAnswers,
           profiler,
           adaptivePrepareTracker,
+          forcedFailureCapability,
         ),
     );
     if (stage !== "review-screen") {

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { expect, type APIResponse } from "@playwright/test";
 
 import {
@@ -29,6 +31,7 @@ import {
   warmCsrfSession,
 } from "./stages/accountVerification";
 import { recordsStepLocator } from "./stages/recordsDocuments";
+import { waitForAnyVisibleTestId } from "./journey/selectors";
 
 export const PATIENT_WEB_CHECKPOINTS = [
   "fresh",
@@ -86,7 +89,11 @@ export const CHECKPOINT_CONTRACTS: Readonly<
   },
   onboarding_ready: {
     version: 1,
-    invariants: ["required consents active", "onboarding incomplete"],
+    invariants: [
+      "required consents active",
+      "current informational acknowledgement active",
+      "onboarding incomplete",
+    ],
     nextAction: "submit intake steps",
     cleanupOwnership: RUN_CLEANUP,
   },
@@ -143,8 +150,12 @@ export const CHECKPOINT_PREPARATION_MODE: Readonly<
   results_ready: "named_fixture",
 };
 
+type InternalCheckpointState =
+  | PatientWebCheckpoint
+  | "informational_acknowledgement_pending";
+
 type CheckpointBuildState = {
-  state: PatientWebCheckpoint;
+  state: InternalCheckpointState;
   assessment?: AssessmentState;
   intakeComplete?: boolean;
   resumedScreening?: boolean;
@@ -186,7 +197,7 @@ export function checkpointForAssessmentStatus(
 ): PatientWebCheckpoint {
   switch (status) {
     case "draft":
-      return "records_ready";
+      return hasReadyDocument ? "screening_ready" : "records_ready";
     case "screening_in_progress":
       return hasReadyDocument ? "screening_ready" : "records_ready";
     case "screening_complete":
@@ -215,6 +226,8 @@ type AssessmentState = Readonly<{
   id: string;
   revision: number;
   status: string;
+  storyNarrative?: string | null;
+  storyInputMethod?: string | null;
 }>;
 
 type AdaptiveQuestion = Readonly<{
@@ -230,6 +243,10 @@ const REQUIRED_ONBOARDING_CONSENTS = [
   { consent_type: "terms_of_service", consent_version: "2.0" },
   { consent_type: "ai_analysis", consent_version: "2.0" },
 ] as const;
+const INFORMATIONAL_ONBOARDING_ACKNOWLEDGEMENT = {
+  consent_type: "informational_only",
+  consent_version: "1.0",
+} as const;
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -238,6 +255,17 @@ function checkpointFailure(state: PatientWebCheckpoint, reason: string): Error {
   return new Error(
     `Checkpoint ${state} failed closed: ${reason}. UI replay is not an allowed fallback.`,
   );
+}
+
+class BffCheckpointApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly serverCode?: string,
+  ) {
+    super(message);
+    this.name = "BffCheckpointApiError";
+  }
 }
 
 function requireRecord(value: unknown, label: string): JsonRecord {
@@ -265,6 +293,115 @@ function requireUuid(value: unknown, label: string): string {
   return id;
 }
 
+function parseAssessmentState(
+  value: JsonRecord,
+  label: string,
+): AssessmentState {
+  const storyNarrative = Object.prototype.hasOwnProperty.call(
+    value,
+    "story_narrative",
+  )
+    ? value.story_narrative
+    : value.storyNarrative;
+  const storyInputMethod = Object.prototype.hasOwnProperty.call(
+    value,
+    "story_input_method",
+  )
+    ? value.story_input_method
+    : value.storyInputMethod;
+  if (
+    storyNarrative !== undefined &&
+    storyNarrative !== null &&
+    typeof storyNarrative !== "string"
+  ) {
+    throw new Error(`${label} story narrative must be a string or null`);
+  }
+  if (
+    storyInputMethod !== undefined &&
+    storyInputMethod !== null &&
+    typeof storyInputMethod !== "string"
+  ) {
+    throw new Error(`${label} story input method must be a string or null`);
+  }
+  return {
+    id: requireUuid(value.id, `${label} id`),
+    revision: requireRevision(value.revision, `${label} revision`),
+    status: requireString(value.status, `${label} status`),
+    ...(storyNarrative === undefined
+      ? {}
+      : { storyNarrative: storyNarrative as string | null }),
+    ...(storyInputMethod === undefined
+      ? {}
+      : { storyInputMethod: storyInputMethod as string | null }),
+  };
+}
+
+export async function waitForScreeningReadyUi(
+  page: JourneyContext["page"],
+): Promise<void> {
+  const ready = page.getByTestId("screening-list");
+  const retry = page.getByTestId("screening-retry");
+  await ready.or(retry).waitFor({ state: "visible", timeout: 120_000 });
+  if (await ready.isVisible()) return;
+  if (!(await retry.isVisible())) {
+    throw new Error("screening checkpoint did not render a recognized state");
+  }
+  await retry.click();
+  try {
+    await ready.waitFor({ state: "visible", timeout: 120_000 });
+  } catch {
+    throw new Error(
+      "screening checkpoint remained in retry state without a ready question list",
+    );
+  }
+}
+
+function assertImportedIntakeStory(
+  assessment: AssessmentState,
+  label: string,
+): void {
+  if (
+    assessment.storyNarrative?.trim() !==
+      fullAssessmentScenario.onboarding.chiefComplaint ||
+    assessment.storyInputMethod !== "text"
+  ) {
+    throw new Error(
+      `${label} must own the exact server-imported reviewed intake story`,
+    );
+  }
+}
+
+function selectAssessmentListState(
+  value: JsonRecord,
+  label: string,
+): Readonly<{
+  active: AssessmentState | null;
+  latestCompleted: AssessmentState | null;
+}> {
+  if (!Array.isArray(value.items)) {
+    throw new Error(`${label} items must be an array`);
+  }
+  const assessments = value.items.map((item, index) => {
+    const row = requireRecord(item, `${label} item ${index}`);
+    return parseAssessmentState(row, `${label} item ${index}`);
+  });
+  const active = assessments.filter(
+    ({ status }) => status !== "complete" && status !== "abandoned",
+  );
+  if (active.length > 1) {
+    throw new Error(`${label} returned multiple nonterminal assessments`);
+  }
+  // The backend assessment repository orders this list by created_at DESC.
+  // Preserve that authoritative ordering only when no active row exists.
+  const latestCompleted = assessments.find(
+    ({ status }) => status === "complete",
+  );
+  return {
+    active: active[0] ?? null,
+    latestCompleted: latestCompleted ?? null,
+  };
+}
+
 async function bffJson<T>(
   context: JourneyContext,
   method: "GET" | "POST" | "PATCH" | "PUT",
@@ -287,8 +424,17 @@ async function bffJson<T>(
     timeout: 120_000,
   });
   if (!response.ok()) {
-    throw new Error(
-      `BFF checkpoint API ${method} ${path} failed status=${response.status()}`,
+    let serverCode: string | undefined;
+    try {
+      const errorBody: unknown = await response.json();
+      serverCode = checkpointServerErrorCode(errorBody);
+    } catch {
+      // Status and route remain sufficient when an error body is unavailable.
+    }
+    throw new BffCheckpointApiError(
+      `BFF checkpoint API ${method} ${path} failed status=${response.status()}${serverCode == null ? "" : ` code=${serverCode}`}`,
+      response.status(),
+      serverCode,
     );
   }
   if (response.status() === 204) return undefined as T;
@@ -348,19 +494,105 @@ export async function tryBffJson(
   return value;
 }
 
-function activeRequiredConsents(value: JsonRecord): boolean {
+const PHI_SAFE_CHECKPOINT_ERROR_CODES = new Set([
+  "documents_not_ready",
+  "idempotency_key_payload_mismatch",
+  "idempotency_outcome_unknown",
+  "idempotency_result_unavailable",
+  "patient_profile_incomplete",
+  "revision_conflict",
+  "screening_incomplete",
+  "screening_phase_over",
+  "story_generation_conflict",
+  "story_not_ready",
+]);
+
+function checkpointServerErrorCode(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  const direct = value.code;
+  const nested = isRecord(value.error) ? value.error.code : undefined;
+  const code = typeof direct === "string" ? direct : nested;
+  return typeof code === "string" && PHI_SAFE_CHECKPOINT_ERROR_CODES.has(code)
+    ? code
+    : undefined;
+}
+
+async function readLatestIntakeProgress(
+  context: JourneyContext,
+): Promise<JsonRecord | null> {
+  const path = "/api/proxy/api/v1/patients/me/intake/progress/latest";
+  const response = await context.page.request.get(path, {
+    headers: {
+      origin: new URL(
+        process.env.PATIENT_WEB_BASE_URL ?? "http://127.0.0.1:43101",
+      ).origin,
+    },
+    timeout: 120_000,
+  });
+  if (response.status() === 403) {
+    const profile = await tryBffJson(context, "/api/proxy/api/v1/patients/me/");
+    const hasSnakeCaseDob = Object.prototype.hasOwnProperty.call(
+      profile,
+      "date_of_birth",
+    );
+    const dateOfBirth = profile?.date_of_birth;
+    if (hasSnakeCaseDob && dateOfBirth === null) return null;
+    if (
+      hasSnakeCaseDob &&
+      typeof dateOfBirth === "string" &&
+      dateOfBirth.length > 0
+    ) {
+      throw new Error(
+        `BFF checkpoint probe GET ${path} failed status=403 with a persisted DOB`,
+      );
+    }
+    throw new Error(
+      `BFF checkpoint probe GET ${path} failed status=403 and profile date_of_birth was not explicitly null`,
+    );
+  }
+  if (!response.ok()) {
+    throw new Error(
+      `BFF checkpoint probe GET ${path} failed status=${response.status()}`,
+    );
+  }
+  let value: unknown;
+  try {
+    value = await response.json();
+  } catch {
+    throw new Error(`BFF checkpoint probe GET ${path} returned malformed JSON`);
+  }
+  if (value === null) return null;
+  if (!isRecord(value)) {
+    throw new Error(
+      `BFF checkpoint probe GET ${path} must return an object or null`,
+    );
+  }
+  return value;
+}
+
+function activeConsentState(value: JsonRecord): Readonly<{
+  requiredActive: boolean;
+  informationalV1Active: boolean;
+}> {
   const items = value.items;
-  if (!Array.isArray(items)) return false;
-  return REQUIRED_ONBOARDING_CONSENTS.every((required) =>
+  if (!Array.isArray(items)) {
+    return { requiredActive: false, informationalV1Active: false };
+  }
+  const hasConsent = (expected: {
+    consent_type: string;
+    consent_version: string;
+  }) =>
     items.some(
       (item) =>
         isRecord(item) &&
-        (item.consent_type ?? item.consentType) === required.consent_type &&
+        (item.consent_type ?? item.consentType) === expected.consent_type &&
         (item.consent_version ?? item.consentVersion) ===
-          required.consent_version &&
-        (item.revoked_at ?? item.revokedAt) == null,
-    ),
-  );
+          expected.consent_version,
+    );
+  return {
+    requiredActive: REQUIRED_ONBOARDING_CONSENTS.every(hasConsent),
+    informationalV1Active: hasConsent(INFORMATIONAL_ONBOARDING_ACKNOWLEDGEMENT),
+  };
 }
 
 export async function reconcileAuthoritativeCheckpoint(
@@ -395,16 +627,20 @@ export async function reconcileAuthoritativeCheckpoint(
 
   const consents = await tryBffJson(
     context,
-    "/api/proxy/api/v1/patients/me/consents",
+    "/api/proxy/api/v1/patients/me/consents/active",
   );
-  if (consents == null || !activeRequiredConsents(consents)) {
+  const consentState =
+    consents == null
+      ? { requiredActive: false, informationalV1Active: false }
+      : activeConsentState(consents);
+  if (!consentState.requiredActive) {
     return { state: "verified_pending_consent" };
   }
+  if (!consentState.informationalV1Active) {
+    return { state: "informational_acknowledgement_pending" };
+  }
 
-  const intake = await tryBffJson(
-    context,
-    "/api/proxy/api/v1/patients/me/intake/steps",
-  );
+  const intake = await readLatestIntakeProgress(context);
   const completedSteps = intake?.completed_steps ?? intake?.completedSteps;
   if (
     !Array.isArray(completedSteps) ||
@@ -419,27 +655,35 @@ export async function reconcileAuthoritativeCheckpoint(
     context,
     "/api/proxy/api/v1/patients/me/assessments/?limit=20&offset=0",
   );
-  const rawAssessment = Array.isArray(assessments?.items)
-    ? assessments.items.find(
-        (item) => isRecord(item) && item.abandoned_at == null,
-      )
-    : undefined;
-  if (!isRecord(rawAssessment)) {
+  if (assessments == null) {
+    throw new Error("assessment reconciliation list must be present");
+  }
+  const selectedAssessments = selectAssessmentListState(
+    assessments,
+    "assessment reconciliation list",
+  );
+  const assessment =
+    selectedAssessments.active ?? selectedAssessments.latestCompleted;
+  if (assessment == null) {
     return {
       state: "records_ready",
       intakeComplete: (intake?.is_complete ?? intake?.isComplete) === true,
     };
   }
-  const assessment: AssessmentState = {
-    id: requireUuid(rawAssessment.id, "reconciled assessment id"),
-    revision: requireRevision(
-      rawAssessment.revision,
-      "reconciled assessment revision",
-    ),
-    status: requireString(rawAssessment.status, "reconciled assessment status"),
-  };
+  if (
+    assessment.status === "draft" ||
+    assessment.status === "screening_in_progress"
+  ) {
+    assertImportedIntakeStory(
+      assessment,
+      "reconciled pre-screening assessment",
+    );
+  }
   let hasReadyDocument = false;
-  if (assessment.status === "screening_in_progress") {
+  if (
+    assessment.status === "draft" ||
+    assessment.status === "screening_in_progress"
+  ) {
     const documents = await tryBffJson(
       context,
       `/api/proxy/api/v1/patients/me/assessments/${assessment.id}/documents`,
@@ -552,10 +796,10 @@ async function prepareAccount(context: JourneyContext): Promise<void> {
   ).toBe(false);
 }
 
-async function prepareConsents(context: JourneyContext): Promise<void> {
+export async function prepareConsents(context: JourneyContext): Promise<void> {
   const existing = await tryBffJson(
     context,
-    "/api/proxy/api/v1/patients/me/consents",
+    "/api/proxy/api/v1/patients/me/consents/active",
   );
   for (const consent of REQUIRED_ONBOARDING_CONSENTS) {
     if (
@@ -566,8 +810,7 @@ async function prepareConsents(context: JourneyContext): Promise<void> {
           isRecord(item) &&
           (item.consent_type ?? item.consentType) === consent.consent_type &&
           (item.consent_version ?? item.consentVersion) ===
-            consent.consent_version &&
-          (item.revoked_at ?? item.revokedAt) == null,
+            consent.consent_version,
       )
     ) {
       continue;
@@ -580,11 +823,31 @@ async function prepareConsents(context: JourneyContext): Promise<void> {
     );
   }
 
+  if (
+    existing == null ||
+    !Array.isArray(existing.items) ||
+    !existing.items.some(
+      (item) =>
+        isRecord(item) &&
+        (item.consent_type ?? item.consentType) ===
+          INFORMATIONAL_ONBOARDING_ACKNOWLEDGEMENT.consent_type &&
+        (item.consent_version ?? item.consentVersion) ===
+          INFORMATIONAL_ONBOARDING_ACKNOWLEDGEMENT.consent_version,
+    )
+  ) {
+    await bffJson(
+      context,
+      "POST",
+      "/api/proxy/api/v1/patients/me/consents",
+      INFORMATIONAL_ONBOARDING_ACKNOWLEDGEMENT,
+    );
+  }
+
   const response = requireRecord(
     await bffJson<unknown>(
       context,
       "GET",
-      "/api/proxy/api/v1/patients/me/consents",
+      "/api/proxy/api/v1/patients/me/consents/active",
     ),
     "consent list response",
   );
@@ -597,12 +860,22 @@ async function prepareConsents(context: JourneyContext): Promise<void> {
           isRecord(item) &&
           (item.consent_type ?? item.consentType) === consent.consent_type &&
           (item.consent_version ?? item.consentVersion) ===
-            consent.consent_version &&
-          (item.revoked_at ?? item.revokedAt) == null,
+            consent.consent_version,
       ),
       `active ${consent.consent_type} consent must be server-owned and current`,
     ).toBe(true);
   }
+  expect(
+    items.some(
+      (item) =>
+        isRecord(item) &&
+        (item.consent_type ?? item.consentType) ===
+          INFORMATIONAL_ONBOARDING_ACKNOWLEDGEMENT.consent_type &&
+        (item.consent_version ?? item.consentVersion) ===
+          INFORMATIONAL_ONBOARDING_ACKNOWLEDGEMENT.consent_version,
+    ),
+    "current informational acknowledgement must be server-owned before onboarding",
+  ).toBe(true);
 }
 
 function intakeStepPayloads(): Readonly<Record<string, JsonRecord>> {
@@ -610,7 +883,7 @@ function intakeStepPayloads(): Readonly<Record<string, JsonRecord>> {
   return {
     profile: {
       step_data: {
-        date_of_birth: "1988-04-22",
+        date_of_birth: fullAssessmentScenario.registration.dateOfBirth,
         sex_at_birth: onboarding.sexAtBirth,
         height_ft: onboarding.heightFeet,
         height_in: onboarding.heightInches,
@@ -631,13 +904,161 @@ function intakeStepPayloads(): Readonly<Record<string, JsonRecord>> {
   };
 }
 
-async function prepareOnboarding(context: JourneyContext): Promise<void> {
+function onboardingPatientProfilePayload(): JsonRecord {
+  const onboarding = fullAssessmentScenario.onboarding;
+  const heightInches =
+    Number(onboarding.heightFeet) * 12 + Number(onboarding.heightInches);
+  return {
+    date_of_birth: fullAssessmentScenario.registration.dateOfBirth,
+    sex_at_birth: onboarding.sexAtBirth,
+    height_cm: Math.round(heightInches * 2.54),
+    weight_kg: Math.round(Number(onboarding.weightPounds) * 0.453592),
+  };
+}
+
+type IntakeStoryState = Readonly<{
+  status: string | null;
+  revision: number;
+  narrative: string | null;
+  inputMethod: string | null;
+}>;
+
+function parseIntakeStoryState(value: unknown): IntakeStoryState {
+  const story = requireRecord(value, "intake story state");
+  const status = story.status;
+  const revision = story.revision;
+  const narrative = story.narrative;
+  const inputMethod =
+    story.input_method !== undefined ? story.input_method : story.inputMethod;
+  if (status !== null && typeof status !== "string") {
+    throw new Error("intake story status must be a string or null");
+  }
+  if (!Number.isSafeInteger(revision) || (revision as number) < 0) {
+    throw new Error("intake story revision must be a non-negative integer");
+  }
+  if (narrative !== null && typeof narrative !== "string") {
+    throw new Error("intake story narrative must be a string or null");
+  }
+  if (inputMethod !== null && typeof inputMethod !== "string") {
+    throw new Error("intake story input method must be a string or null");
+  }
+  return {
+    status: status as string | null,
+    revision: revision as number,
+    narrative: narrative as string | null,
+    inputMethod: inputMethod as string | null,
+  };
+}
+
+function assertExpectedIntakeStory(
+  story: IntakeStoryState,
+  narrative: string,
+  revisionGreaterThan?: number,
+): void {
+  if (
+    story.status !== "ready" ||
+    story.narrative?.trim() !== narrative ||
+    story.inputMethod !== "text"
+  ) {
+    throw new Error(
+      "authoritative intake story does not match the synthetic raw narrative",
+    );
+  }
+  if (story.revision < 1) {
+    throw new Error(
+      "ready authoritative intake story revision must be positive",
+    );
+  }
+  if (
+    revisionGreaterThan !== undefined &&
+    story.revision <= revisionGreaterThan
+  ) {
+    throw new Error(
+      "authoritative intake story revision did not advance after save",
+    );
+  }
+}
+
+async function prepareIntakeStory(
+  context: JourneyContext,
+  narrative: string,
+): Promise<void> {
+  const storyPath = "/api/proxy/api/v1/patients/me/intake/story";
+  const observed = parseIntakeStoryState(
+    await bffJson<unknown>(context, "GET", storyPath),
+  );
+  if (observed.status === "ready") {
+    assertExpectedIntakeStory(observed, narrative);
+    return;
+  }
+  const payload = {
+    narrative,
+    input_method: "text",
+    expected_revision: observed.revision,
+  };
+  try {
+    await bffJson(context, "PUT", storyPath, payload);
+    recordQuestionnaireMutation(context, "PUT", storyPath, payload);
+  } catch (error) {
+    if (!(error instanceof BffCheckpointApiError) || error.status !== 409) {
+      throw error;
+    }
+  }
+  const authoritative = parseIntakeStoryState(
+    await bffJson<unknown>(context, "GET", storyPath),
+  );
+  assertExpectedIntakeStory(authoritative, narrative, observed.revision);
+}
+
+export async function prepareOnboarding(
+  context: JourneyContext,
+): Promise<void> {
+  // Intake endpoints require a persisted adult DOB. Match the product flow by
+  // establishing its canonical profile fields before saving intake progress.
+  await bffJson(
+    context,
+    "PATCH",
+    "/api/proxy/api/v1/patients/me/",
+    onboardingPatientProfilePayload(),
+  );
+
+  const progress = requireRecord(
+    await bffJson<unknown>(
+      context,
+      "GET",
+      "/api/proxy/api/v1/patients/me/intake/steps",
+    ),
+    "intake progress",
+  );
+  const rawCompletedSteps = progress.completed_steps ?? progress.completedSteps;
+  if (!Array.isArray(rawCompletedSteps)) {
+    throw new Error("intake progress completed_steps must be an array");
+  }
+  const completedSteps = new Set(
+    rawCompletedSteps.filter(
+      (step): step is string => typeof step === "string",
+    ),
+  );
+
   for (const [step, payload] of Object.entries(intakeStepPayloads())) {
+    if (completedSteps.has(step)) continue;
     assertExactIntakeRequestContract(
+      "PUT",
       `/api/proxy/api/v1/patients/me/intake/steps/${step}`,
       payload,
       fullAssessmentScenario,
     );
+    if (step === "chief-complaint") {
+      const stepData = requireRecord(
+        payload.step_data,
+        "chief complaint step data",
+      );
+      const narrative = requireString(
+        stepData.narrative,
+        "chief complaint raw narrative",
+      );
+      await prepareIntakeStory(context, narrative);
+    }
     await bffJson(
       context,
       "PUT",
@@ -646,86 +1067,102 @@ async function prepareOnboarding(context: JourneyContext): Promise<void> {
     );
     recordQuestionnaireMutation(
       context,
+      "PUT",
       `/api/proxy/api/v1/patients/me/intake/steps/${step}`,
       payload,
     );
   }
 }
 
-async function completeIntake(context: JourneyContext): Promise<void> {
+export async function completeIntake(context: JourneyContext): Promise<void> {
   const payload = {};
-  await bffJson(
-    context,
-    "POST",
-    "/api/proxy/api/v1/patients/me/intake/progress/complete",
-    payload,
-  );
-  recordQuestionnaireMutation(
-    context,
-    "/api/proxy/api/v1/patients/me/intake/progress/complete",
-    payload,
-  );
+  const path = "/api/proxy/api/v1/patients/me/intake/progress/complete";
   const progress = requireRecord(
-    await bffJson<unknown>(
-      context,
-      "GET",
-      "/api/proxy/api/v1/patients/me/intake/steps",
-    ),
-    "completed intake response",
+    await bffJson<unknown>(context, "POST", path, payload),
+    "intake completion response",
   );
-  expect(progress.is_complete ?? progress.isComplete).toBe(true);
-  expect(progress.completed_steps ?? progress.completedSteps).toEqual(
-    expect.arrayContaining(["profile", "chief-complaint", "treatment-history"]),
-  );
+  recordQuestionnaireMutation(context, "POST", path, payload);
+  if ((progress.is_complete ?? progress.isComplete) !== true) {
+    throw new Error("intake completion response must report is_complete=true");
+  }
+  const completedSteps = progress.completed_steps ?? progress.completedSteps;
+  if (!Array.isArray(completedSteps)) {
+    throw new Error(
+      "intake completion response completed_steps must be an array",
+    );
+  }
+  const missingSteps = [
+    "profile",
+    "chief-complaint",
+    "treatment-history",
+  ].filter((step) => !completedSteps.includes(step));
+  if (missingSteps.length > 0) {
+    throw new Error(
+      `intake completion response is missing required completed_steps: ${missingSteps.join(", ")}`,
+    );
+  }
 }
 
-async function createAssessment(
+const IDEMPOTENCY_RECONCILIATION_CODES = new Set([
+  "idempotency_result_unavailable",
+  "idempotency_outcome_unknown",
+]);
+
+export async function createAssessment(
   context: JourneyContext,
 ): Promise<AssessmentState> {
-  const response = requireRecord(
-    await bffJson<unknown>(
-      context,
-      "POST",
-      "/api/proxy/api/v1/patients/me/assessments/",
-      {},
-    ),
-    "assessment creation response",
-  );
-  const assessment = {
-    id: requireUuid(response.id, "assessment id"),
-    revision: requireRevision(response.revision, "assessment revision"),
-    status: requireString(response.status, "assessment status"),
-  } as const;
+  const path = "/api/proxy/api/v1/patients/me/assessments/";
+  let response: JsonRecord;
+  try {
+    response = requireRecord(
+      await bffJson<unknown>(
+        context,
+        "POST",
+        path,
+        {},
+        {
+          "x-idempotency-key": `${context.identity.runId}:assessment-create-v1`,
+        },
+      ),
+      "assessment creation response",
+    );
+  } catch (error) {
+    if (
+      !(error instanceof BffCheckpointApiError) ||
+      error.status !== 409 ||
+      error.serverCode == null ||
+      !IDEMPOTENCY_RECONCILIATION_CODES.has(error.serverCode)
+    ) {
+      throw error;
+    }
+    const listed = requireRecord(
+      await bffJson<unknown>(
+        context,
+        "GET",
+        "/api/proxy/api/v1/patients/me/assessments/?limit=20&offset=0",
+      ),
+      "assessment creation reconciliation list",
+    );
+    const { active } = selectAssessmentListState(
+      listed,
+      "assessment creation reconciliation list",
+    );
+    if (active == null) throw error;
+    if (active.status !== "draft") {
+      throw new Error(
+        `assessment creation reconciliation requires a draft, received ${active.status}`,
+      );
+    }
+    assertImportedIntakeStory(
+      active,
+      "reconciled assessment creation response",
+    );
+    return active;
+  }
+  const assessment = parseAssessmentState(response, "assessment");
   expect(assessment.status).toBe("draft");
+  assertImportedIntakeStory(assessment, "assessment creation response");
   return assessment;
-}
-
-async function submitStory(
-  context: JourneyContext,
-  assessment: AssessmentState,
-): Promise<AssessmentState> {
-  const payload = {
-    expected_revision: assessment.revision,
-    narrative: fullAssessmentScenario.assessmentStory,
-    input_method: "text",
-  } as const;
-  const response = requireRecord(
-    await bffJson<unknown>(
-      context,
-      "POST",
-      `/api/proxy/api/v1/patients/me/assessments/${assessment.id}/story`,
-      payload,
-    ),
-    "assessment story response",
-  );
-  const next = {
-    id: assessment.id,
-    revision: requireRevision(response.revision, "story response revision"),
-    status: requireString(response.status, "story response status"),
-  } as const;
-  expect(next.revision).toBeGreaterThan(assessment.revision);
-  expect(next.status).toBe("screening_in_progress");
-  return next;
 }
 
 async function completeSyntheticDocumentScan(
@@ -873,6 +1310,27 @@ function screeningAnswer(questionId: string): unknown {
   );
 }
 
+function checkpointMutationKey(
+  assessmentId: string,
+  operation: string,
+  revision: number,
+  questionId?: string,
+): string {
+  return createHash("sha256")
+    .update(
+      [
+        "patient-web-checkpoint-v1",
+        assessmentId,
+        operation,
+        revision,
+        questionId,
+      ]
+        .filter((part) => part !== undefined)
+        .join(":"),
+    )
+    .digest("hex");
+}
+
 function questionId(value: unknown): string {
   const record = requireRecord(value, "server-issued question");
   return requireString(
@@ -914,6 +1372,28 @@ export function nextUnsavedScreeningQuestion(
   );
 }
 
+function screeningAnswerMutationError(
+  questionId: string,
+  error: unknown,
+): Error {
+  if (
+    !SCREENING_ANSWERS_BY_ID.has(questionId) &&
+    !SCREENING_TEXT_ANSWERS_BY_ID.has(questionId)
+  ) {
+    return new Error(
+      "Screening checkpoint answer mutation failed for an unsupported question id",
+    );
+  }
+  if (error instanceof BffCheckpointApiError) {
+    return new Error(
+      `Screening checkpoint answer mutation failed question_id=${questionId} status=${error.status}${error.serverCode == null ? "" : ` code=${error.serverCode}`}`,
+    );
+  }
+  return new Error(
+    `Screening checkpoint answer mutation failed question_id=${questionId}`,
+  );
+}
+
 export async function prepareScreening(
   context: JourneyContext,
   assessment: AssessmentState,
@@ -949,18 +1429,28 @@ export async function prepareScreening(
     );
     if (current == null) break;
     const id = current.id;
+    seen.add(id);
     const payload = {
       answers: { [id]: screeningAnswer(id) },
       expected_revision: revision,
     } as const;
     const path = `/api/proxy/api/v1/patients/me/assessments/${assessment.id}/screening/answers`;
-    const next = screeningState(
-      await bffJson<unknown>(context, "PATCH", path, payload),
-      `screening answer ${id} response`,
-    );
-    recordQuestionnaireMutation(context, path, payload);
+    let response: unknown;
+    try {
+      response = await bffJson<unknown>(context, "PATCH", path, payload, {
+        "x-idempotency-key": checkpointMutationKey(
+          assessment.id,
+          "screening-answer",
+          revision,
+          id,
+        ),
+      });
+    } catch (error) {
+      throw screeningAnswerMutationError(id, error);
+    }
+    const next = screeningState(response, `screening answer ${id} response`);
+    recordQuestionnaireMutation(context, "PATCH", path, payload);
     submitted.add(id);
-    seen.add(id);
     revision = requireRevision(
       next.revision,
       `screening answer ${id} revision`,
@@ -976,10 +1466,16 @@ export async function prepareScreening(
   const completePayload = { expected_revision: revision } as const;
   const completePath = `/api/proxy/api/v1/patients/me/assessments/${assessment.id}/screening/complete`;
   const completed = requireRecord(
-    await bffJson<unknown>(context, "POST", completePath, completePayload),
+    await bffJson<unknown>(context, "POST", completePath, completePayload, {
+      "x-idempotency-key": checkpointMutationKey(
+        assessment.id,
+        "screening-complete",
+        revision,
+      ),
+    }),
     "screening completion response",
   );
-  recordQuestionnaireMutation(context, completePath, completePayload);
+  recordQuestionnaireMutation(context, "POST", completePath, completePayload);
   const status = requireString(completed.status, "screening completion status");
   expect([
     "screening_complete",
@@ -1013,12 +1509,57 @@ function adaptiveQuestion(value: unknown): AdaptiveQuestion {
   };
 }
 
-function adaptiveAnswer(question: AdaptiveQuestion): unknown {
-  if (question.id === "INF_STIFF_SPINE") {
-    return ADAPTIVE_ANSWERS_BY_ID.get(question.id)?.value;
+const GENERATED_ADAPTIVE_TEXT_ANSWER =
+  "No additional details for this synthetic test.";
+
+function exactAdaptiveOptionIds(question: AdaptiveQuestion): readonly string[] {
+  const ids = question.options.map((option) =>
+    requireString(option.id, `adaptive option id for ${question.id}`),
+  );
+  if (ids.length === 0 || new Set(ids).size !== ids.length) {
+    throw new Error(
+      `Generated adaptive question ${question.id} requires nonempty unique server option IDs`,
+    );
+  }
+  return ids;
+}
+
+export function resolveSyntheticAdaptiveAnswer(
+  question: AdaptiveQuestion,
+): unknown {
+  const pinned = ADAPTIVE_ANSWERS_BY_ID.get(question.id);
+  if (pinned != null) return pinned.value;
+  if (!/^gen_\d+$/.test(question.id)) {
+    throw new Error(
+      `No exact synthetic adaptive answer exists for server-issued question ${question.id}; refusing to invent a clinical value`,
+    );
+  }
+  if (question.type === "single_select") {
+    return exactAdaptiveOptionIds(question)[0];
+  }
+  if (
+    question.type === "multi_select" ||
+    question.type === "multi_select_limit"
+  ) {
+    return [exactAdaptiveOptionIds(question)[0]];
+  }
+  if (question.type === "pain_scale") {
+    if (
+      !Number.isSafeInteger(question.min) ||
+      !Number.isSafeInteger(question.max) ||
+      (question.min as number) > (question.max as number)
+    ) {
+      throw new Error(
+        `Generated adaptive scale ${question.id} requires exact in-range integer server stops`,
+      );
+    }
+    return question.min;
+  }
+  if (question.type === "free_text") {
+    return GENERATED_ADAPTIVE_TEXT_ANSWER;
   }
   throw new Error(
-    `No exact synthetic adaptive answer exists for server-issued question ${question.id}; refusing to invent a clinical value`,
+    `Generated adaptive question ${question.id} has unsupported server type ${question.type}`,
   );
 }
 
@@ -1028,9 +1569,21 @@ export async function prepareAdaptive(
 ): Promise<AssessmentState> {
   const preparePath = `/api/proxy/api/v1/patients/me/assessments/${assessment.id}/adaptive/prepare`;
   const prepared = requireRecord(
-    await bffJson<unknown>(context, "POST", preparePath, {
-      expected_revision: assessment.revision,
-    }),
+    await bffJson<unknown>(
+      context,
+      "POST",
+      preparePath,
+      {
+        expected_revision: assessment.revision,
+      },
+      {
+        "x-idempotency-key": checkpointMutationKey(
+          assessment.id,
+          "adaptive-prepare",
+          assessment.revision,
+        ),
+      },
+    ),
     "adaptive preparation response",
   );
   const questions = prepared.questions;
@@ -1056,20 +1609,36 @@ export async function prepareAdaptive(
     }
     if (Object.hasOwn(savedAnswers, question.id)) {
       answers[question.id] = savedAnswers[question.id];
+      if (/^gen_\d+$/.test(question.id)) {
+        context.generatedAdaptiveAnswers.set(
+          question.id,
+          savedAnswers[question.id],
+        );
+      }
       continue;
     }
-    const value = adaptiveAnswer(question);
+    const value = resolveSyntheticAdaptiveAnswer(question);
     answers[question.id] = value;
+    if (/^gen_\d+$/.test(question.id)) {
+      context.generatedAdaptiveAnswers.set(question.id, value);
+    }
     const payload = {
       answers: { [question.id]: value },
       expected_revision: revision,
     };
     const answerPath = `/api/proxy/api/v1/patients/me/assessments/${assessment.id}/adaptive/answers`;
     const saved = requireRecord(
-      await bffJson<unknown>(context, "PATCH", answerPath, payload),
+      await bffJson<unknown>(context, "PATCH", answerPath, payload, {
+        "x-idempotency-key": checkpointMutationKey(
+          assessment.id,
+          "adaptive-answer",
+          revision,
+          question.id,
+        ),
+      }),
       `adaptive answer ${question.id} response`,
     );
-    recordQuestionnaireMutation(context, answerPath, payload);
+    recordQuestionnaireMutation(context, "PATCH", answerPath, payload);
     revision = requireRevision(
       saved.revision,
       `adaptive answer ${question.id} revision`,
@@ -1078,10 +1647,16 @@ export async function prepareAdaptive(
   const completePayload = { answers, expected_revision: revision } as const;
   const completePath = `/api/proxy/api/v1/patients/me/assessments/${assessment.id}/adaptive/complete-with-answers`;
   const completed = requireRecord(
-    await bffJson<unknown>(context, "POST", completePath, completePayload),
+    await bffJson<unknown>(context, "POST", completePath, completePayload, {
+      "x-idempotency-key": checkpointMutationKey(
+        assessment.id,
+        "adaptive-complete",
+        revision,
+      ),
+    }),
     "adaptive completion response",
   );
-  recordQuestionnaireMutation(context, completePath, completePayload);
+  recordQuestionnaireMutation(context, "POST", completePath, completePayload);
   const status = requireString(completed.status, "adaptive completion status");
   expect(["adaptive_complete", "analysis_pending"]).toContain(status);
   return {
@@ -1120,6 +1695,44 @@ async function navigateToCheckpoint(
   await expectPatientWebCheckpointReady(context, state);
 }
 
+/** Establish a same-origin document before any browser cookie or CSRF probe. */
+export async function ensureCheckpointBrowserOrigin(
+  context: JourneyContext,
+  state: PatientWebCheckpoint,
+): Promise<void> {
+  if (state === "fresh") return;
+  const expectedOrigin = new URL(
+    process.env.PATIENT_WEB_BASE_URL ?? "http://127.0.0.1:43101",
+  ).origin;
+  let currentOrigin: string | null = null;
+  try {
+    currentOrigin = new URL(context.page.url()).origin;
+  } catch {
+    currentOrigin = null;
+  }
+  if (currentOrigin === expectedOrigin) return;
+
+  const response = await context.page.goto("/api/health", {
+    waitUntil: "domcontentloaded",
+    timeout: 30_000,
+  });
+  if (response == null || !response.ok()) {
+    throw checkpointFailure(
+      state,
+      `same-origin BFF bootstrap returned status=${response?.status() ?? "none"}`,
+    );
+  }
+  let resolvedOrigin: string | null = null;
+  try {
+    resolvedOrigin = new URL(context.page.url()).origin;
+  } catch {
+    resolvedOrigin = null;
+  }
+  if (resolvedOrigin !== expectedOrigin) {
+    throw checkpointFailure(state, "same-origin BFF bootstrap origin mismatch");
+  }
+}
+
 /** Assert the server-backed UI state at a scope's declared boundary. */
 export async function expectPatientWebCheckpointReady(
   context: JourneyContext,
@@ -1142,15 +1755,9 @@ export async function expectPatientWebCheckpointReady(
       timeout: 60_000,
     });
   } else if (state === "screening_ready") {
-    await expect(context.page.getByTestId("screening-screen")).toBeVisible({
-      timeout: 120_000,
-    });
+    await waitForScreeningReadyUi(context.page);
   } else if (state === "adaptive_ready") {
-    await expect(
-      context.page
-        .getByTestId("adaptive-loading-state")
-        .or(context.page.getByTestId("adaptive-screen")),
-    ).toBeVisible({ timeout: 120_000 });
+    await waitForAdaptiveReadyUi(context.page);
   } else if (state === "review_ready") {
     await expect(context.page.getByTestId("review-screen")).toBeVisible({
       timeout: 120_000,
@@ -1160,6 +1767,17 @@ export async function expectPatientWebCheckpointReady(
       timeout: 480_000,
     });
   }
+}
+
+export async function waitForAdaptiveReadyUi(
+  page: JourneyContext["page"],
+  timeout = 120_000,
+): Promise<void> {
+  await waitForAnyVisibleTestId(
+    page,
+    ["adaptive-loading-state", "adaptive-screen"],
+    timeout,
+  );
 }
 
 async function prepareCheckpointTransition(
@@ -1186,7 +1804,10 @@ async function prepareCheckpointTransition(
         assessment = await createAssessment(context);
       }
       if (assessment.status === "draft") {
-        assessment = await submitStory(context, assessment);
+        assertImportedIntakeStory(
+          assessment,
+          "screening-ready draft assessment",
+        );
       }
       await prepareDocument(context, assessment.id);
       buildState.assessment = assessment;
@@ -1219,7 +1840,32 @@ async function prepareCheckpointTransition(
     case "fresh":
       return;
   }
-  await navigateToCheckpoint(context, target);
+}
+
+export async function executeCheckpointTransitionPlan(
+  plannedTransitions: readonly Readonly<{
+    from: PatientWebCheckpoint;
+    to: PatientWebCheckpoint;
+  }>[],
+  applyTransition: (
+    transition: Readonly<{
+      from: PatientWebCheckpoint;
+      to: PatientWebCheckpoint;
+    }>,
+  ) => Promise<void>,
+  finalize: () => Promise<void>,
+): Promise<readonly CheckpointTransitionTiming[]> {
+  const timings: CheckpointTransitionTiming[] = [];
+  for (const transition of plannedTransitions) {
+    const startedAt = performance.now();
+    await applyTransition(transition);
+    timings.push({
+      ...transition,
+      durationMs: Math.max(0, performance.now() - startedAt),
+    });
+  }
+  await finalize();
+  return timings;
 }
 
 /** Prepare a named state through ordered, idempotent BFF/product transitions. */
@@ -1227,24 +1873,39 @@ export async function buildPatientWebCheckpoint(
   context: JourneyContext,
   state: PatientWebCheckpoint,
 ): Promise<BuiltPatientWebCheckpoint> {
+  await ensureCheckpointBrowserOrigin(context, state);
   const current = await reconcileAuthoritativeCheckpoint(context);
-  const plannedTransitions = planCheckpointTransitions(current.state, state);
-
   const transitions: CheckpointTransitionTiming[] = [];
   try {
-    for (const { from, to } of plannedTransitions) {
+    if (current.state === "informational_acknowledgement_pending") {
+      if (
+        PATIENT_WEB_CHECKPOINTS.indexOf(state) <
+        PATIENT_WEB_CHECKPOINTS.indexOf("onboarding_ready")
+      ) {
+        throw new Error(
+          `builder cannot move backward from informational acknowledgement pending to ${state}`,
+        );
+      }
       const startedAt = performance.now();
-      await prepareCheckpointTransition(context, current, to);
+      await prepareConsents(context);
       transitions.push({
-        from,
-        to,
+        from: "verified_pending_consent",
+        to: "onboarding_ready",
         durationMs: Math.max(0, performance.now() - startedAt),
       });
-      current.state = to;
+      current.state = "onboarding_ready";
     }
-    if (plannedTransitions.length === 0) {
-      await navigateToCheckpoint(context, state);
-    }
+    const plannedTransitions = planCheckpointTransitions(current.state, state);
+    transitions.push(
+      ...(await executeCheckpointTransitionPlan(
+        plannedTransitions,
+        async ({ to }) => {
+          await prepareCheckpointTransition(context, current, to);
+          current.state = to;
+        },
+        async () => navigateToCheckpoint(context, state),
+      )),
+    );
   } catch (error) {
     if (error instanceof Error && error.message.includes("failed closed:")) {
       throw error;
