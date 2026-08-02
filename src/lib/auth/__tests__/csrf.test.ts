@@ -87,6 +87,25 @@ describe("csrf helpers", () => {
     ).toEqual({ ok: true });
 
     expect(
+      validateUnsafeRequest(
+        new Request(`${sameOrigin}/api/v1/patients/me/documents/id`, {
+          method: "DELETE",
+          headers: {
+            Origin: sameOrigin,
+            "X-CSRF-Token": token,
+          },
+        }),
+        token,
+        {
+          csrfSecret: secret,
+          allowedOrigins: [sameOrigin],
+          allowBodylessDelete: true,
+          requestBodyEmpty: true,
+        },
+      ),
+    ).toEqual({ ok: true });
+
+    expect(
       validateUnsafeRequest(request, token, {
         csrfSecret: secret,
         allowedOrigins: [sameOrigin],

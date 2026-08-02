@@ -44,6 +44,7 @@ const STORY_AUDIO_CSRF_CONTENT_TYPES = new Set([
   "audio/m4a",
   "audio/wav",
 ]);
+const DOCUMENT_DELETE_BODY_PROBE_TIMEOUT_MS = 250;
 
 async function handler(request: NextRequest, context: ProxyContext) {
   let config;
@@ -88,6 +89,14 @@ async function handler(request: NextRequest, context: ProxyContext) {
     return jsonNoStore({ error: "unsupported_media_type" }, { status: 415 });
   }
 
+  const isDocumentDelete = isPatientDocumentDeleteTarget(
+    request.method,
+    target.targetPath,
+  );
+  const requestBodyEmpty = isDocumentDelete
+    ? await hasEmptyRequestBody(request)
+    : undefined;
+
   const csrf = validateUnsafeRequest(
     request,
     request.cookies.get(COOKIE_NAMES.csrf)?.value,
@@ -99,10 +108,8 @@ async function handler(request: NextRequest, context: ProxyContext) {
       )
         ? STORY_AUDIO_CSRF_CONTENT_TYPES
         : DEFAULT_CSRF_CONTENT_TYPES,
-      allowBodylessDelete: isPatientDocumentDeleteTarget(
-        request.method,
-        target.targetPath,
-      ),
+      allowBodylessDelete: isDocumentDelete,
+      ...(requestBodyEmpty !== undefined ? { requestBodyEmpty } : {}),
     },
   );
   if (!csrf.ok) {
@@ -199,6 +206,29 @@ function auditDenial(
 
 function shouldForwardBody(method: string): boolean {
   return !["GET", "HEAD"].includes(method.toUpperCase());
+}
+
+async function hasEmptyRequestBody(request: Request): Promise<boolean> {
+  if (request.body === null) return true;
+  const reader = request.clone().body?.getReader();
+  if (reader == null) return true;
+
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      reader.read().then(({ done }) => done),
+      new Promise<boolean>((resolve) => {
+        timeoutId = setTimeout(
+          () => resolve(false),
+          DOCUMENT_DELETE_BODY_PROBE_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+    void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
 }
 
 function isBinaryDocumentPayload(

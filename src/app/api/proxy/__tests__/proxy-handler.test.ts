@@ -611,6 +611,70 @@ describe("proxy route handler", () => {
     expect(new Headers(requestInit?.headers).has("content-type")).toBe(false);
   });
 
+  it("forwards empty-stream document DELETEs without consuming the request", async () => {
+    mockedBackendFetch.mockResolvedValue(new Response(null, { status: 204 }));
+    const csrf = createCsrfToken(CSRF_SECRET, "empty-stream-delete");
+    const documentId = "10000000-0000-4000-8000-000000000001";
+    const request = makeProxyRequest(
+      `/api/proxy/api/v1/patients/me/documents/${documentId}`,
+      "DELETE",
+      {
+        spine_patient_sess: "access-token",
+        spine_patient_csrf: csrf,
+      },
+      {
+        [CSRF_HEADER]: csrf,
+        Origin: ORIGIN,
+      },
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.close();
+        },
+      }),
+    );
+
+    const response = await DELETE(
+      request,
+      makeContext(["api", "v1", "patients", "me", "documents", documentId]),
+    );
+
+    expect(response.status).toBe(204);
+    expect(mockedBackendFetch).toHaveBeenCalledWith(
+      `/api/v1/patients/me/documents/${documentId}`,
+      expect.objectContaining({ method: "DELETE" }),
+      {},
+    );
+    expect(mockedBackendFetch.mock.calls[0]?.[1]).not.toHaveProperty("body");
+  });
+
+  it("preserves a bodyful document DELETE after the emptiness probe", async () => {
+    mockedBackendFetch.mockResolvedValue(new Response(null, { status: 204 }));
+    const csrf = createCsrfToken(CSRF_SECRET, "bodyful-delete-forward");
+    const documentId = "10000000-0000-4000-8000-000000000001";
+    const request = makeProxyRequest(
+      `/api/proxy/api/v1/patients/me/documents/${documentId}`,
+      "DELETE",
+      {
+        spine_patient_sess: "access-token",
+        spine_patient_csrf: csrf,
+      },
+      {
+        [CSRF_HEADER]: csrf,
+        Origin: ORIGIN,
+        "Content-Type": "application/json",
+      },
+      JSON.stringify({ reason: "user_requested" }),
+    );
+
+    const response = await DELETE(
+      request,
+      makeContext(["api", "v1", "patients", "me", "documents", documentId]),
+    );
+
+    expect(response.status).toBe(204);
+    expect(mockedBackendFetch.mock.calls[0]?.[1]).toHaveProperty("body");
+  });
+
   it("requires Content-Type for bodyless non-document DELETEs", async () => {
     const assessmentId = "10000000-0000-4000-8000-000000000001";
     const csrf = createCsrfToken(CSRF_SECRET, "assessment-delete");

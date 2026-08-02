@@ -36,6 +36,7 @@ export function validateUnsafeRequest(
     allowedOrigins: string[];
     allowedContentTypes?: ReadonlySet<string>;
     allowBodylessDelete?: boolean;
+    requestBodyEmpty?: boolean;
   },
 ): CsrfValidationResult {
   if (isSafeMethod(request.method)) return { ok: true };
@@ -46,7 +47,7 @@ export function validateUnsafeRequest(
   const allowBodylessDelete =
     options.allowBodylessDelete === true &&
     request.method.toUpperCase() === "DELETE" &&
-    request.body === null &&
+    (request.body === null || options.requestBodyEmpty === true) &&
     request.headers.get("content-type") === null;
   const contentTypeResult = allowBodylessDelete
     ? { ok: true as const }
