@@ -35,6 +35,11 @@ type NormalizedAssessmentDocument = ReturnType<
   typeof normalizeAssessmentDocument
 >;
 
+// Azure's event-triggered OCR job can spend up to one 60-second KEDA polling
+// interval at scale zero before provider execution begins. Keep a bounded
+// end-to-end readiness SLO that also accommodates normal provider latency.
+export const DOCUMENT_OCR_READINESS_TIMEOUT_MS = 5 * 60 * 1000;
+
 export type DocumentConfirmationReadiness =
   | Readonly<{
       source: "response";
@@ -310,7 +315,7 @@ export async function waitForAssessmentDocumentComplete(
   request: APIRequestContext,
   assessmentId: string,
   documentId: string,
-  timeout = 120_000,
+  timeout = DOCUMENT_OCR_READINESS_TIMEOUT_MS,
   pollInterval = 2000,
 ): Promise<NormalizedAssessmentDocument> {
   const deadline = Date.now() + timeout;
