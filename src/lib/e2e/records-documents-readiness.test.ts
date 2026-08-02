@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { assessmentDocumentConfirmationFromResponse } from "../../../e2e/journey/context";
 import { recordsStepLocator } from "../../../e2e/stages/recordsDocuments";
 import {
+  DOCUMENT_OCR_READINESS_TIMEOUT_MS,
   waitForAssessmentDocumentComplete,
   waitForDocumentConfirmationOrPersistence,
 } from "../../../e2e/stages/recordsUpload";
@@ -110,5 +111,69 @@ describe("records documents readiness", () => {
       }),
     );
     expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it("allows an event-triggered OCR execution to finish after scale-from-zero latency", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const get = vi.fn(async () => {
+      const state = Date.now() >= 130_000 ? "complete" : "processing";
+      return {
+        status: () => 200,
+        ok: () => true,
+        json: async () => ({
+          items: [
+            {
+              id: "123e4567-e89b-42d3-a456-426614174000",
+              state,
+              label: "Uploaded document",
+              file_size_bytes: 1865,
+            },
+          ],
+        }),
+      };
+    });
+
+    try {
+      const readiness = waitForAssessmentDocumentComplete(
+        { get } as unknown as APIRequestContext,
+        "223e4567-e89b-42d3-a456-426614174000",
+        "123e4567-e89b-42d3-a456-426614174000",
+      );
+      await vi.advanceTimersByTimeAsync(130_000);
+
+      await expect(readiness).resolves.toEqual(
+        expect.objectContaining({ state: "complete" }),
+      );
+      expect(DOCUMENT_OCR_READINESS_TIMEOUT_MS).toBe(300_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails immediately when the authoritative OCR projection is terminal", async () => {
+    const get = vi.fn(async () => ({
+      status: () => 200,
+      ok: () => true,
+      json: async () => ({
+        items: [
+          {
+            id: "123e4567-e89b-42d3-a456-426614174000",
+            state: "failed",
+            label: "Uploaded document",
+            file_size_bytes: 1865,
+          },
+        ],
+      }),
+    }));
+
+    await expect(
+      waitForAssessmentDocumentComplete(
+        { get } as unknown as APIRequestContext,
+        "223e4567-e89b-42d3-a456-426614174000",
+        "123e4567-e89b-42d3-a456-426614174000",
+      ),
+    ).rejects.toThrow("entered failed state before OCR readiness");
+    expect(get).toHaveBeenCalledTimes(1);
   });
 });
