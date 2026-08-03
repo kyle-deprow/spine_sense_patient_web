@@ -57,6 +57,7 @@ export async function POST(request: NextRequest) {
       !sameUuid(body?.document_id, documentId) ||
       analysis?.assessment_complete !== true ||
       analysis.status !== "complete" ||
+      analysis.document_input_provenance !== true ||
       document?.scan_status !== "clean" ||
       document.ocr_status !== "complete" ||
       document.ocr_text_sha256_matches !== true ||
@@ -75,7 +76,11 @@ export async function POST(request: NextRequest) {
     return jsonNoStore({
       assessment_id: assessmentId,
       document_id: documentId,
-      analysis: { assessment_complete: true, status: "complete" },
+      analysis: {
+        assessment_complete: true,
+        status: "complete",
+        document_input_provenance: true,
+      },
       document: {
         scan_status: "clean",
         ocr_status: "complete",
