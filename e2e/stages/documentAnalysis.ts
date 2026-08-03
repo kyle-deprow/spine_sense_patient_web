@@ -14,6 +14,42 @@ import { SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT } from "../../src/lib/e2e/document-u
 
 type SummaryReadyDocument = Readonly<{ id: string }>;
 
+const SAFE_PERSISTENCE_MISMATCHES = new Set([
+  "analysis",
+  "analysis_document_input",
+  "assessment",
+  "assessment_document_link",
+  "document",
+  "friendly_category",
+  "friendly_doc_type",
+  "ocr_page_count",
+  "ocr_provider",
+  "ocr_status",
+  "ocr_text_length",
+  "ocr_text_lineage",
+  "ocr_text_markers",
+  "patient_findings",
+  "patient_summary",
+  "scan",
+  "summary_assessment",
+  "summary_completed_at",
+  "summary_status",
+]);
+
+export function safePersistenceMismatchAxes(payload: unknown): string[] | null {
+  if (!isRecord(payload) || !Array.isArray(payload.mismatches)) return null;
+  if (
+    payload.mismatches.length === 0 ||
+    payload.mismatches.some(
+      (item) =>
+        typeof item !== "string" || !SAFE_PERSISTENCE_MISMATCHES.has(item),
+    )
+  ) {
+    return null;
+  }
+  return [...new Set(payload.mismatches as string[])].sort();
+}
+
 export function requireSummaryReadyDocument(
   payload: unknown,
   documentId: string,
@@ -129,9 +165,10 @@ export async function verifyDocumentAnalysisPersistence(
   );
   const payload: unknown = await response.json();
   const metadata = safeResponseMetadata(payload);
+  const mismatches = safePersistenceMismatchAxes(payload);
   expect(
     response.status(),
-    `document analysis persistence verification failed status=${response.status()} code=${metadata.code ?? "unknown"}`,
+    `document analysis persistence verification failed status=${response.status()} code=${metadata.code ?? "unknown"} mismatches=${mismatches?.join(",") ?? "unknown"}`,
   ).toBe(200);
   expect(payload).toEqual({
     assessment_id: uploaded.assessmentId,

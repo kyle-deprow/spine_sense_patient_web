@@ -13,6 +13,28 @@ import {
   testSupportUnavailableResponse,
 } from "@/lib/server/test-support";
 
+const SAFE_PERSISTENCE_MISMATCHES = new Set([
+  "analysis",
+  "analysis_document_input",
+  "assessment",
+  "assessment_document_link",
+  "document",
+  "friendly_category",
+  "friendly_doc_type",
+  "ocr_page_count",
+  "ocr_provider",
+  "ocr_status",
+  "ocr_text_length",
+  "ocr_text_lineage",
+  "ocr_text_markers",
+  "patient_findings",
+  "patient_summary",
+  "scan",
+  "summary_assessment",
+  "summary_completed_at",
+  "summary_status",
+]);
+
 export async function POST(request: NextRequest) {
   if (!hasPatientWebTestSupportAccess(request)) {
     return jsonNoStore({ detail: "Not found" }, { status: 404 });
@@ -71,6 +93,16 @@ export async function POST(request: NextRequest) {
     );
     if (backendResponse === null) return testSupportUnavailableResponse();
     if (!backendResponse.ok) {
+      if (backendResponse.status === 409) {
+        const conflict = safePersistenceConflict(
+          await readJsonBody<unknown>(backendResponse),
+        );
+        if (conflict == null) return testSupportUnavailableResponse();
+        return jsonNoStore(
+          { error: "support_conflict", mismatches: conflict },
+          { status: 409 },
+        );
+      }
       return testSupportBackendFailure(backendResponse.status);
     }
 
@@ -160,4 +192,20 @@ function exactStringArray(
     value.length === expected.length &&
     value.every((item, index) => item === expected[index])
   );
+}
+
+function safePersistenceConflict(value: unknown): string[] | null {
+  const record = asRecord(value);
+  const mismatches = record?.mismatches;
+  if (
+    !Array.isArray(mismatches) ||
+    mismatches.length === 0 ||
+    mismatches.some(
+      (item) =>
+        typeof item !== "string" || !SAFE_PERSISTENCE_MISMATCHES.has(item),
+    )
+  ) {
+    return null;
+  }
+  return [...new Set(mismatches)].sort();
 }

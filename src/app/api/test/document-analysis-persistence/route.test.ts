@@ -192,23 +192,48 @@ describe("patient web document-analysis-persistence support route", () => {
     },
   );
 
-  it("maps backend mismatch details to a metadata-only conflict", async () => {
+  it("maps allowlisted backend mismatch axes to a metadata-only conflict", async () => {
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn()
-        .mockResolvedValue(
-          Response.json(
-            { mismatches: ["summary_present"], detail: "must-not-leak" },
-            { status: 409 },
-          ),
+      vi.fn().mockResolvedValue(
+        Response.json(
+          {
+            mismatches: ["patient_summary", "patient_findings"],
+            detail: "must-not-leak",
+          },
+          { status: 409 },
         ),
+      ),
     );
     const { POST } = await import("./route");
 
     const response = await POST(makeRequest(BODY));
 
     expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({ error: "support_conflict" });
+    expect(await response.json()).toEqual({
+      error: "support_conflict",
+      mismatches: ["patient_findings", "patient_summary"],
+    });
+  });
+
+  it("fails closed instead of forwarding an unknown mismatch value", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json(
+          {
+            mismatches: ["patient_summary", "must-not-leak"],
+            detail: "must-not-leak",
+          },
+          { status: 409 },
+        ),
+      ),
+    );
+    const { POST } = await import("./route");
+
+    const response = await POST(makeRequest(BODY));
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "service_unavailable" });
   });
 });

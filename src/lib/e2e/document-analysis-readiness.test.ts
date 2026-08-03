@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { requireSummaryReadyDocument } from "../../../e2e/stages/documentAnalysis";
+import {
+  requireSummaryReadyDocument,
+  safePersistenceMismatchAxes,
+} from "../../../e2e/stages/documentAnalysis";
 
 const DOCUMENT_ID = "123e4567-e89b-42d3-a456-426614174000";
 const readyDocument = {
@@ -47,6 +50,20 @@ describe("post-analysis document readiness", () => {
         { documents: [{ ...readyDocument, id: "other" }] },
         DOCUMENT_ID,
       ),
+    ).toBeNull();
+  });
+
+  it("reports only allowlisted persistence mismatch axes", () => {
+    expect(
+      safePersistenceMismatchAxes({
+        error: "support_conflict",
+        mismatches: ["patient_summary", "patient_findings"],
+      }),
+    ).toEqual(["patient_findings", "patient_summary"]);
+    expect(
+      safePersistenceMismatchAxes({
+        mismatches: ["patient_summary", "raw_patient_detail"],
+      }),
     ).toBeNull();
   });
 });
