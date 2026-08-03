@@ -63,13 +63,14 @@ function assertManifest(manifest) {
   if (
     manifest == null ||
     JSON.stringify(topLevelFields) !==
-      JSON.stringify(["default_scope", "scopes", "version"]) ||
-    manifest.version !== 1 ||
-    typeof manifest.default_scope !== "string" ||
+      JSON.stringify(["default_scopes", "scopes", "version"]) ||
+    manifest.version !== 2 ||
+    !Array.isArray(manifest.default_scopes) ||
     manifest.scopes == null ||
     Array.isArray(manifest.scopes) ||
     typeof manifest.scopes !== "object" ||
-    manifest.default_scope !== "full" ||
+    JSON.stringify(manifest.default_scopes) !==
+      JSON.stringify(APPROVED_SCOPES.filter((scope) => scope !== "full")) ||
     JSON.stringify(Object.keys(manifest.scopes)) !==
       JSON.stringify(APPROVED_SCOPES)
   ) {
@@ -122,9 +123,10 @@ function assertManifest(manifest) {
 
 function resolveScopeSpecs(rawScopes, manifest = scopeManifest) {
   assertManifest(manifest);
-  const requestedScopes = (rawScopes ?? manifest.default_scope)
-    .split(",")
-    .map((scope) => scope.trim());
+  const requestedScopes =
+    rawScopes == null
+      ? manifest.default_scopes
+      : rawScopes.split(",").map((scope) => scope.trim());
   if (requestedScopes.some((scope) => scope.length === 0)) {
     throw new Error("E2E_SCOPES must contain only approved scope names");
   }

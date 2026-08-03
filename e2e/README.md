@@ -1,9 +1,9 @@
-# Patient Web Playwright Journey
+# Patient Web Playwright Scopes
 
-The package contains one Playwright journey for the exported patient app served
-through the patient-web BFF: `e2e/full-assessment.spec.ts`. Run it through the
-root Make lifecycle so the API, BFF, and synthetic support state are configured
-consistently:
+The package defaults to seven independently checkpointed Playwright scopes for
+the exported patient app served through the patient-web BFF. Run them through
+the root Make lifecycle so the API, BFF, and synthetic support state are
+configured consistently:
 
 - `make patient-web-e2e`
 - `make patient-web-e2e-plan E2E_BASE=<base> E2E_HEAD=<head>`
@@ -26,7 +26,10 @@ non-exact gate before browser execution.
 
 The package runner resolves approved manifest scopes to exact spec arguments;
 the Playwright configuration does not use title filtering as a scope API.
-Without an explicit scope, the runner selects only the canonical full spec.
+Without an explicit scope, the runner selects exactly `auth`,
+`consent-onboarding`, `documents`, `screening`, `adaptive`, `analysis`, and
+`results-report` in manifest order. The specs own their checkpoint setup and
+are independent; browser execution order is not part of the contract.
 Canonical Make runs allocate a unique runtime directory, Compose project,
 claimed host-port set, PID/log/env files, staged standalone build, and
 Playwright output. A locked ownership registry prevents supported concurrent
@@ -38,9 +41,8 @@ browser traffic, and in-memory browser sessions. It does not use Playwright
 `storageState`, durable browser storage, backend bearer tokens in JavaScript, or
 arbitrary route mocks.
 
-The default `E2E_SCOPES=full` invocation remains the sole canonical journey.
-For focused validation, the manifest also exposes opt-in checkpoint specs in
-`e2e/scopes/`; those specs prepare their start checkpoint through the shared
+The checkpoint specs in `e2e/scopes/` are the canonical default. They prepare
+their start checkpoint through the shared
 `e2e/scopedAssessment.ts` runner, use the same BFF/product APIs, and reuse the
 canonical stage actions. A
 `results_ready` is prepared only through the strict `results-report-v1` named
@@ -49,6 +51,9 @@ The analysis scope validates the completed server schema and correlates the
 returned assessment ID to its same-origin BFF route. The results-report scope
 then exercises report generation and the shared return-Home stage; it does not
 claim to validate clinical analysis.
+The legacy `full` scope remains available only as an explicit diagnostic
+selection and is not included by default or by conservative changed-file
+selection.
 
 Scope timing logs contain only the approved scope name, phase, and duration.
 They measure checkpoint setup, stage action, and browser finalization. Isolated

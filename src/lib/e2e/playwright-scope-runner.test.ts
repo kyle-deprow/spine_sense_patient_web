@@ -23,7 +23,15 @@ function exactFileFilter(spec: string): string {
 
 describe("patient-web Playwright scope runner", () => {
   it("resolves the default and requested scopes to exact manifest specs", () => {
-    expect(runner.resolveScopeSpecs()).toEqual(["e2e/full-assessment.spec.ts"]);
+    expect(runner.resolveScopeSpecs()).toEqual([
+      "e2e/scopes/auth.spec.ts",
+      "e2e/scopes/consent-onboarding.spec.ts",
+      "e2e/scopes/documents.spec.ts",
+      "e2e/scopes/screening.spec.ts",
+      "e2e/scopes/adaptive.spec.ts",
+      "e2e/scopes/analysis.spec.ts",
+      "e2e/scopes/results-report.spec.ts",
+    ]);
     expect(runner.resolveScopeSpecs(" screening,auth ")).toEqual([
       "e2e/scopes/screening.spec.ts",
       "e2e/scopes/auth.spec.ts",
@@ -31,6 +39,31 @@ describe("patient-web Playwright scope runner", () => {
     expect(runner.resolveScopeSpecs("auth,full,analysis")).toEqual([
       "e2e/full-assessment.spec.ts",
     ]);
+  });
+
+  it("collects seven default tests and excludes the diagnostic full journey", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/run-playwright-e2e.cjs", "test", "--list"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: { ...process.env, E2E_SCOPES: undefined },
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toMatch(/Total: 7 tests(?:\s|$)/);
+    expect(result.stdout).not.toContain("@full-assessment");
+    const discoveredTests = result.stdout
+      .split("\n")
+      .filter((line) => line.includes("@scope-"));
+    expect(discoveredTests).toHaveLength(7);
+    for (const scope of scopeManifest.default_scopes) {
+      expect(
+        discoveredTests.filter((line) => line.includes(`@scope-${scope}`)),
+      ).toHaveLength(1);
+    }
   });
 
   it("inserts exact spec arguments before supported Playwright options", () => {

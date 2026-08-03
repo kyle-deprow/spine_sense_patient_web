@@ -1260,7 +1260,22 @@ async function prepareDocument(
     documentId,
     email: context.email,
   });
-  context.uploadedAssessmentDocument = { assessmentId, documentId };
+  carryUploadedAssessmentDocument(context, { assessmentId, documentId });
+}
+
+export function carryUploadedAssessmentDocument(
+  context: JourneyContext,
+  uploaded: Readonly<{ assessmentId: string; documentId: string }>,
+): void {
+  if (uploaded.assessmentId.length === 0 || uploaded.documentId.length === 0) {
+    throw new Error(
+      "Analysis checkpoint requires exact uploaded assessment document IDs",
+    );
+  }
+  context.uploadedAssessmentDocument = {
+    assessmentId: uploaded.assessmentId,
+    documentId: uploaded.documentId,
+  };
 }
 
 function screeningAnswer(questionId: string): unknown {

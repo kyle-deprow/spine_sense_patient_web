@@ -4,6 +4,7 @@ import {
   CHECKPOINT_CONTRACTS,
   CHECKPOINT_PREPARATION_MODE,
   PATIENT_WEB_CHECKPOINTS,
+  carryUploadedAssessmentDocument,
   checkpointForAssessmentStatus,
   completeIntake,
   createAssessment,
@@ -47,6 +48,19 @@ const importedIntakeStory = {
 };
 
 describe("patient-web checkpoint contract", () => {
+  it("carries the exact uploaded PDF document IDs into the analysis checkpoint context", () => {
+    const context = {} as Parameters<typeof carryUploadedAssessmentDocument>[0];
+    const uploaded = {
+      assessmentId: "assessment-from-pdf-upload",
+      documentId: "document-from-pdf-upload",
+    };
+
+    carryUploadedAssessmentDocument(context, uploaded);
+
+    expect(context.uploadedAssessmentDocument).toEqual(uploaded);
+    expect(context.uploadedAssessmentDocument).not.toBe(uploaded);
+  });
+
   it("declares a preparation mode for every named checkpoint", () => {
     expect(Object.keys(CHECKPOINT_PREPARATION_MODE).sort()).toEqual(
       [...PATIENT_WEB_CHECKPOINTS].sort(),

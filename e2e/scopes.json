@@ -1,6 +1,14 @@
 {
-  "version": 1,
-  "default_scope": "full",
+  "version": 2,
+  "default_scopes": [
+    "auth",
+    "consent-onboarding",
+    "documents",
+    "screening",
+    "adaptive",
+    "analysis",
+    "results-report"
+  ],
   "scopes": {
     "full": {
       "tag": "@full-assessment",
