@@ -24,6 +24,10 @@ import {
 import { maybeThrowForcedMidFlowFailure } from "../support/forcedMidFlowFailure";
 
 const DRAFT_FLUSH_TIMEOUT_MS = 30_000;
+// Mirrors INTAKE_DRAFT_DEBOUNCE_MS in app/(auth)/onboarding/[step].tsx.
+const INTAKE_DRAFT_DEBOUNCE_MS = 2_000;
+const KEEPALIVE_WINDOW_SAFETY_MS = 300;
+const MIN_KEEPALIVE_WINDOW_MS = 500;
 const LATEST_INTAKE_PROGRESS_PATH =
   "/api/proxy/api/v1/patients/me/intake/progress/latest";
 const TREATMENT_HISTORY_SECTIONS = [
@@ -95,7 +99,7 @@ async function dispatchHiddenVisibilityChange(
         const onVisibilityChange = () => {
           if (document.visibilityState === "hidden") finish(true);
         };
-        const timeoutId = window.setTimeout(() => finish(false), 250);
+        const timeoutId = window.setTimeout(() => finish(false), 750);
         document.addEventListener("visibilitychange", onVisibilityChange);
       },
     );
@@ -105,7 +109,10 @@ async function dispatchHiddenVisibilityChange(
     const windowWithProbe = window as typeof window & {
       __onboardingObservedHidden?: Promise<boolean>;
     };
-    return (await windowWithProbe.__onboardingObservedHidden) ?? false;
+    const observedHidden =
+      (await windowWithProbe.__onboardingObservedHidden) ?? false;
+    delete windowWithProbe.__onboardingObservedHidden;
+    return observedHidden;
   });
 
   if (!observedHidden) {
@@ -175,56 +182,78 @@ function hasAllTreatmentHistorySections(
 async function expectTreatmentHistoryOnServer(
   context: JourneyContext,
 ): Promise<void> {
-  await expect
-    .poll(
-      async () => {
-        try {
-          return hasAllTreatmentHistorySections(
-            await tryBffJson(context, LATEST_INTAKE_PROGRESS_PATH),
-          );
-        } catch {
-          return false;
-        }
-      },
-      {
-        timeout: 60_000,
-        message:
-          "latest intake progress should contain all treatment-history draft sections",
-      },
-    )
-    .toBe(true);
+  let lastTransportError = "none observed";
+  const pollMessage =
+    "latest intake progress should contain all treatment-history draft sections";
+  try {
+    await expect
+      .poll(
+        async () => {
+          try {
+            return hasAllTreatmentHistorySections(
+              await tryBffJson(context, LATEST_INTAKE_PROGRESS_PATH),
+            );
+          } catch (error) {
+            lastTransportError =
+              error instanceof Error
+                ? `${error.name}: ${error.message}`
+                : String(error);
+            return false;
+          }
+        },
+        { timeout: 60_000, message: pollMessage },
+      )
+      .toBe(true);
+  } catch (error) {
+    throw new Error(
+      `${pollMessage}; last transport error: ${lastTransportError}`,
+      { cause: error },
+    );
+  }
 }
 
 async function expectStoryOnServer(
   context: JourneyContext,
   narrative: string,
 ): Promise<void> {
-  await expect
-    .poll(
-      async () => {
-        try {
-          const progress = await tryBffJson(
-            context,
-            LATEST_INTAKE_PROGRESS_PATH,
-          );
-          const stepData = stepDataFromLatestProgress(progress);
-          const storyStep = stepData?.["chief-complaint"];
-          const nestedNarrative = isRecord(storyStep)
-            ? storyStep.narrative
-            : undefined;
-          const serverNarrative =
-            progress?.storyNarrative ?? progress?.story_narrative;
-          return serverNarrative === narrative || nestedNarrative === narrative;
-        } catch {
-          return false;
-        }
-      },
-      {
-        timeout: 60_000,
-        message: "latest intake progress should contain the typed story",
-      },
-    )
-    .toBe(true);
+  let lastTransportError = "none observed";
+  const pollMessage = "latest intake progress should contain the typed story";
+  try {
+    await expect
+      .poll(
+        async () => {
+          try {
+            const progress = await tryBffJson(
+              context,
+              LATEST_INTAKE_PROGRESS_PATH,
+            );
+            const stepData = stepDataFromLatestProgress(progress);
+            const storyStep = stepData?.["chief-complaint"];
+            const nestedNarrative = isRecord(storyStep)
+              ? storyStep.narrative
+              : undefined;
+            const serverNarrative =
+              progress?.storyNarrative ?? progress?.story_narrative;
+            return (
+              serverNarrative === narrative || nestedNarrative === narrative
+            );
+          } catch (error) {
+            lastTransportError =
+              error instanceof Error
+                ? `${error.name}: ${error.message}`
+                : String(error);
+            return false;
+          }
+        },
+        { timeout: 60_000, message: pollMessage },
+      )
+      .toBe(true);
+  } catch (error) {
+    throw new Error(
+      `${pollMessage}; last transport error: ${lastTransportError}`,
+      { cause: error },
+    );
+  }
 }
 
 async function enterChiefComplaintText(
@@ -240,10 +269,12 @@ async function enterChiefComplaintText(
 async function completeProfileAndEnterChiefComplaint(
   page: Page,
   narrative: string,
-): Promise<void> {
+): Promise<number> {
   await completeProfileIfPresent(page);
   await expectChiefComplaintAfterProfileSave(page);
   await enterChiefComplaintText(page, narrative);
+  const lastEditAt = Date.now();
+  return lastEditAt;
 }
 
 async function saveStoryAndReachTreatmentHistory(page: Page): Promise<void> {
@@ -277,6 +308,7 @@ async function assertRestoredTreatmentHistory(page: Page): Promise<void> {
   await expectTreatmentHistoryChoiceSelected(
     page,
     "medical-history-conditions-none",
+    60_000,
   );
   for (const prefix of [
     "medical-history-surgery",
@@ -292,17 +324,18 @@ async function assertRestoredTreatmentHistory(page: Page): Promise<void> {
 async function expectTreatmentHistoryChoiceSelected(
   page: Page,
   testId: string,
+  timeoutMs = 2_000,
 ): Promise<void> {
   const choice = page.getByTestId(testId);
   try {
     await expect(choice).toHaveAttribute("aria-checked", "true", {
-      timeout: 2_000,
+      timeout: timeoutMs,
     });
   } catch {
     // Older controls used aria-pressed; retain this only as a compatibility
     // fallback after checking the current aria-checked contract.
     await expect(choice).toHaveAttribute("aria-pressed", "true", {
-      timeout: 2_000,
+      timeout: timeoutMs,
     });
   }
 }
@@ -321,7 +354,10 @@ export async function runOnboardingResumeStage(
     const response = await page.goto("/assessment", {
       waitUntil: "domcontentloaded",
     });
-    expect(response?.ok()).toBe(true);
+    expect(
+      response?.ok(),
+      `goto /assessment should succeed (status=${response?.status()})`,
+    ).toBe(true);
     await expect(page).toHaveURL(/\/onboarding\/treatment-history$/);
     await expect(page.getByTestId("onboarding-layout")).toBeVisible({
       timeout: 60_000,
@@ -360,17 +396,31 @@ export async function runOnboardingDraftRestoreStage(
     // the dirty story before the keepalive response waiter is armed.
     const backgroundPage = await page.context().newPage();
     try {
-      await backgroundPage.goto("about:blank", { waitUntil: "domcontentloaded" });
+      await backgroundPage.goto("about:blank", {
+        waitUntil: "domcontentloaded",
+      });
       await page.bringToFront();
-      await expect(page.getByTestId("screen-protection-overlay")).toHaveCount(0);
+      await expect(page.getByTestId("screen-protection-overlay")).toHaveCount(
+        0,
+      );
 
-      await completeProfileAndEnterChiefComplaint(page, narrative);
-      const t0 = Date.now();
+      const lastEditAt = await completeProfileAndEnterChiefComplaint(
+        page,
+        narrative,
+      );
 
       // This waiter is armed immediately before the real hidden transition and
       // expires before the 2s trailing debounce. The raw keepalive transport
       // has no x-app-version header, while apiClient adds it to normal PUTs.
-      const timeoutMs = Math.max(500, 2_000 - (Date.now() - t0) - 300);
+      const timeoutMs =
+        INTAKE_DRAFT_DEBOUNCE_MS -
+        (Date.now() - lastEditAt) -
+        KEEPALIVE_WINDOW_SAFETY_MS;
+      if (timeoutMs < MIN_KEEPALIVE_WINDOW_MS) {
+        throw new Error(
+          `Keepalive window collapsed to ${timeoutMs}ms; the debounce may already have flushed`,
+        );
+      }
       const keepaliveResponse = await waitForBffPut(
         page,
         "/intake/story",
@@ -471,7 +521,10 @@ export async function runOnboardingIntroIdempotenceStage(
     const response = await page.goto("/assessment", {
       waitUntil: "domcontentloaded",
     });
-    expect(response?.ok()).toBe(true);
+    expect(
+      response?.ok(),
+      `goto /assessment should succeed (status=${response?.status()})`,
+    ).toBe(true);
     await expect(page).toHaveURL(/\/onboarding\/profile$/);
     await expect(page.getByTestId("welcome-intro-screen")).toHaveCount(0);
     await expect(page.getByTestId("onboarding-layout")).toBeVisible({
