@@ -492,14 +492,16 @@ export async function fillTreatmentHistoryWithNoAnswers(page: Page) {
     "medical-history-meds",
   ]) {
     await clickByTestId(page, prefix + "-no");
-    await expect(page.getByTestId(prefix + "-no"))
-      .toHaveAttribute("aria-pressed", "true")
-      .catch(async () => {
-        await expect(page.getByTestId(prefix + "-no")).toHaveAttribute(
-          "aria-checked",
-          "true",
-        );
+    const choice = page.getByTestId(prefix + "-no");
+    try {
+      await expect(choice).toHaveAttribute("aria-checked", "true", {
+        timeout: 2_000,
       });
+    } catch {
+      await expect(choice).toHaveAttribute("aria-pressed", "true", {
+        timeout: 2_000,
+      });
+    }
   }
   await clickByTestId(page, "medical-history-nicotine-no");
 }
