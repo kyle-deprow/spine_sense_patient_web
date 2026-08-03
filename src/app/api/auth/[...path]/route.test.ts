@@ -43,6 +43,7 @@ function makeAuthRequest(
     auditActorId?: string;
     registrationVerificationToken?: string;
     origin?: string;
+    userAgent?: string;
   } = {},
 ): NextRequest {
   const method = options.method ?? "POST";
@@ -71,6 +72,7 @@ function makeAuthRequest(
       Cookie: cookies.join("; "),
       [CSRF_HEADER]: csrf,
       Origin: origin,
+      ...(options.userAgent ? { "user-agent": options.userAgent } : {}),
     },
   };
   return new NextRequest(
@@ -696,5 +698,51 @@ describe("auth catch-all route handler", () => {
         verification_token: "private-registration-challenge-token",
       }),
     );
+  });
+});
+
+describe("browser user-agent forwarding", () => {
+  beforeEach(() => {
+    vi.stubEnv("PATIENT_WEB_CSRF_SECRET", CSRF_SECRET);
+    vi.stubEnv("PATIENT_WEB_ALLOWED_ORIGINS", ORIGIN);
+    mockedBackendFetch.mockReset();
+    mockedAuditLog.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("forwards the browser's User-Agent to the backend", async () => {
+    mockedBackendFetch.mockResolvedValue(
+      Response.json({ success: true }, { status: 202 }),
+    );
+    const browserUa =
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) Safari/604.1";
+
+    const request = makeAuthRequest(
+      "/api/auth/verify/registration/send",
+      { email: "patient@example.test" },
+      { userAgent: browserUa },
+    );
+    await POST(request, makeContext(["verify", "registration", "send"]));
+
+    expect(mockedBackendFetch).toHaveBeenCalledTimes(1);
+    const [, init] = mockedBackendFetch.mock.calls[0] ?? [];
+    expect(new Headers(init?.headers).get("user-agent")).toBe(browserUa);
+  });
+
+  it("sends no User-Agent header when the browser omitted one", async () => {
+    mockedBackendFetch.mockResolvedValue(
+      Response.json({ success: true }, { status: 202 }),
+    );
+
+    const request = makeAuthRequest("/api/auth/verify/registration/send", {
+      email: "patient@example.test",
+    });
+    await POST(request, makeContext(["verify", "registration", "send"]));
+
+    const [, init] = mockedBackendFetch.mock.calls[0] ?? [];
+    expect(new Headers(init?.headers).get("user-agent")).toBeNull();
   });
 });

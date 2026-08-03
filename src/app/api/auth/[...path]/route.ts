@@ -280,6 +280,9 @@ function buildAuthHeaders(request: NextRequest, requestId: string): Headers {
   const contentType = request.headers.get("content-type");
   if (contentType) headers.set("Content-Type", contentType);
 
+  const userAgent = request.headers.get("user-agent");
+  if (userAgent) headers.set("User-Agent", userAgent);
+
   const accessToken = request.cookies.get(COOKIE_NAMES.access)?.value;
   if (accessToken) {
     headers.set("Authorization", `Bearer ${accessToken}`);

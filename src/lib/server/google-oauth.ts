@@ -193,11 +193,13 @@ export async function completeGoogleOAuth(
       mode === "register"
         ? "/api/v1/auth/register/google"
         : "/api/v1/auth/login/google";
+    const browserUserAgent = request.headers.get("user-agent");
     const backendResponse = await backendFetch(backendPath, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
+        ...(browserUserAgent ? { "User-Agent": browserUserAgent } : {}),
       },
       body: JSON.stringify({ id_token: token.id_token }),
     });

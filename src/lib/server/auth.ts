@@ -97,10 +97,21 @@ export function issueCsrfCookie(response: NextResponse): void {
   setCsrfCookie(response, createCsrfToken(csrfSecret));
 }
 
-export function authBackendRequest(body: unknown): RequestInit {
+export function authBackendRequest(
+  body: unknown,
+  request?: NextRequest,
+): RequestInit {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  };
+  // Session rows record the User-Agent of the minting request; without this
+  // the backend sees the BFF's own fetch client for every web patient.
+  const userAgent = request?.headers.get("user-agent");
+  if (userAgent) headers["User-Agent"] = userAgent;
   return {
     method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    headers,
     body: JSON.stringify(body ?? {}),
   };
 }
@@ -108,7 +119,7 @@ export function authBackendRequest(body: unknown): RequestInit {
 export async function forwardCredentialAuth(
   backendPath: string,
   requestBody: unknown,
-  _request?: NextRequest,
+  request?: NextRequest,
   options: {
     errorMode?: CredentialAuthErrorMode;
     auditContext?: AuditContext;
@@ -119,7 +130,7 @@ export async function forwardCredentialAuth(
 ): Promise<NextResponse> {
   const backendResponse = await backendFetch(
     backendPath,
-    authBackendRequest(requestBody),
+    authBackendRequest(requestBody, request),
   );
   const data = await readJsonBody<BackendLoginResponse>(backendResponse);
 
@@ -287,7 +298,7 @@ export async function refreshWithCookie(
 
   const backendResponse = await backendFetch(
     "/api/v1/auth/refresh",
-    authBackendRequest({ refresh_token: refreshToken }),
+    authBackendRequest({ refresh_token: refreshToken }, request),
   );
   const data = await readJsonBody<JsonRecord>(backendResponse);
 

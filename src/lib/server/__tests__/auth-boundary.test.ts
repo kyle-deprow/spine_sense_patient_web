@@ -614,3 +614,41 @@ describe('BFF auth boundary', () => {
     })
   })
 })
+
+describe('browser user-agent forwarding on credential auth', () => {
+  beforeEach(() => {
+    vi.stubEnv('PATIENT_WEB_CSRF_SECRET', 'test-patient-web-csrf-secret-at-least-32-bytes')
+    mockedBackendFetch.mockReset()
+  })
+
+  it('forwards the browser User-Agent to the backend login call', async () => {
+    mockedBackendFetch.mockResolvedValue(Response.json({}, { status: 401 }))
+    const browserUa = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0 Safari/537.36'
+    const request = new NextRequest('http://localhost/api/auth/login', {
+      method: 'POST',
+      headers: { 'user-agent': browserUa },
+    })
+
+    await forwardCredentialAuth(
+      '/api/v1/auth/login',
+      { email: 'patient@example.test', password: 'redacted' },
+      request,
+    )
+
+    expect(mockedBackendFetch).toHaveBeenCalledTimes(1)
+    const [, init] = mockedBackendFetch.mock.calls[0] ?? []
+    expect(new Headers(init?.headers).get('user-agent')).toBe(browserUa)
+  })
+
+  it('sends no User-Agent header when no browser request is available', async () => {
+    mockedBackendFetch.mockResolvedValue(Response.json({}, { status: 401 }))
+
+    await forwardCredentialAuth('/api/v1/auth/login', {
+      email: 'patient@example.test',
+      password: 'redacted',
+    })
+
+    const [, init] = mockedBackendFetch.mock.calls[0] ?? []
+    expect(new Headers(init?.headers).get('user-agent')).toBeNull()
+  })
+})
