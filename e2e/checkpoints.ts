@@ -823,6 +823,13 @@ export async function prepareConsents(context: JourneyContext): Promise<void> {
       "POST",
       "/api/proxy/api/v1/patients/me/consents",
       consent,
+      {
+        "x-idempotency-key": consentMutationKey(
+          context.identity.runId,
+          consent.consent_type,
+          consent.consent_version,
+        ),
+      },
     );
   }
 
@@ -843,6 +850,13 @@ export async function prepareConsents(context: JourneyContext): Promise<void> {
       "POST",
       "/api/proxy/api/v1/patients/me/consents",
       INFORMATIONAL_ONBOARDING_ACKNOWLEDGEMENT,
+      {
+        "x-idempotency-key": consentMutationKey(
+          context.identity.runId,
+          INFORMATIONAL_ONBOARDING_ACKNOWLEDGEMENT.consent_type,
+          INFORMATIONAL_ONBOARDING_ACKNOWLEDGEMENT.consent_version,
+        ),
+      },
     );
   }
 
@@ -879,6 +893,23 @@ export async function prepareConsents(context: JourneyContext): Promise<void> {
     ),
     "current informational acknowledgement must be server-owned before onboarding",
   ).toBe(true);
+}
+
+function consentMutationKey(
+  runId: string,
+  consentType: string,
+  consentVersion: string,
+): string {
+  return createHash("sha256")
+    .update(
+      [
+        "patient-web-checkpoint-consent-v1",
+        runId,
+        consentType,
+        consentVersion,
+      ].join(":"),
+    )
+    .digest("hex");
 }
 
 function intakeStepPayloads(): Readonly<Record<string, JsonRecord>> {

@@ -424,6 +424,8 @@ describe("patient-web checkpoint contract", () => {
       consent_version: string;
     }> = [];
     const postedTypes: string[] = [];
+    const postedKeys: string[] = [];
+    const runId = "123e4567-e89b-42d3-a456-426614174000";
 
     const makeContext = (failInformational: boolean) => {
       const request = {
@@ -441,12 +443,21 @@ describe("patient-web checkpoint contract", () => {
         },
         fetch: async (
           path: string,
-          options: { method: string; data?: unknown },
+          options: {
+            method: string;
+            data?: unknown;
+            headers: Record<string, string>;
+          },
         ) => {
           if (options.method === "GET" && path.endsWith("/consents/active")) {
             return apiResponse(200, { items: [...activeConsents] });
           }
           if (options.method === "POST" && path.endsWith("/consents")) {
+            const idempotencyKey = options.headers["x-idempotency-key"];
+            if (idempotencyKey == null) {
+              return apiResponse(400, {});
+            }
+            postedKeys.push(idempotencyKey);
             const consent = options.data as {
               consent_type: string;
               consent_version: string;
@@ -465,6 +476,7 @@ describe("patient-web checkpoint contract", () => {
         },
       };
       return {
+        identity: { runId },
         page: {
           request,
           context: () => ({
@@ -491,8 +503,17 @@ describe("patient-web checkpoint contract", () => {
       "ai_analysis",
       "informational_only",
     ]);
+    expect(postedKeys).toEqual([
+      expect.stringMatching(/^[0-9a-f]{64}$/),
+      expect.stringMatching(/^[0-9a-f]{64}$/),
+      expect.stringMatching(/^[0-9a-f]{64}$/),
+      expect.stringMatching(/^[0-9a-f]{64}$/),
+    ]);
+    expect(new Set(postedKeys).size).toBe(4);
+    const failedInformationalKey = postedKeys.at(-1);
 
     postedTypes.length = 0;
+    postedKeys.length = 0;
     const retryContext = makeContext(false);
     const partial = await reconcileAuthoritativeCheckpoint(retryContext);
     expect(partial.state).toBe("informational_acknowledgement_pending");
@@ -500,6 +521,8 @@ describe("patient-web checkpoint contract", () => {
     await prepareConsents(retryContext);
 
     expect(postedTypes).toEqual(["informational_only"]);
+    expect(postedKeys).toEqual([expect.stringMatching(/^[0-9a-f]{64}$/)]);
+    expect(postedKeys[0]).toBe(failedInformationalKey);
     await expect(
       reconcileAuthoritativeCheckpoint(retryContext),
     ).resolves.toMatchObject({ state: "onboarding_ready" });
