@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "default_scopes": [
     "auth",
     "consent-onboarding",
@@ -10,12 +10,12 @@
     "results-report"
   ],
   "scopes": {
-    "full": {
-      "tag": "@full-assessment",
-      "spec": "e2e/full-assessment.spec.ts",
+    "legacy-journey": {
+      "tag": "@legacy-journey",
+      "spec": "e2e/legacy-journey.spec.ts",
       "start_checkpoint": "fresh",
       "end_checkpoint": "home_complete",
-      "timeout_class": "full",
+      "timeout_class": "legacy-journey",
       "real_analysis": true
     },
     "auth": {

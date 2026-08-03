@@ -17,7 +17,7 @@ const PLAYWRIGHT_PASSTHROUGH_OPTIONS = new Map([
 ]);
 
 const APPROVED_SCOPES = [
-  "full",
+  "legacy-journey",
   "auth",
   "consent-onboarding",
   "documents",
@@ -64,13 +64,15 @@ function assertManifest(manifest) {
     manifest == null ||
     JSON.stringify(topLevelFields) !==
       JSON.stringify(["default_scopes", "scopes", "version"]) ||
-    manifest.version !== 2 ||
+    manifest.version !== 3 ||
     !Array.isArray(manifest.default_scopes) ||
     manifest.scopes == null ||
     Array.isArray(manifest.scopes) ||
     typeof manifest.scopes !== "object" ||
     JSON.stringify(manifest.default_scopes) !==
-      JSON.stringify(APPROVED_SCOPES.filter((scope) => scope !== "full")) ||
+      JSON.stringify(
+        APPROVED_SCOPES.filter((scope) => scope !== "legacy-journey"),
+      ) ||
     JSON.stringify(Object.keys(manifest.scopes)) !==
       JSON.stringify(APPROVED_SCOPES)
   ) {
@@ -97,7 +99,7 @@ function assertManifest(manifest) {
     if (
       JSON.stringify(fields) !== JSON.stringify(expectedFields) ||
       definition.tag !==
-        (scope === "full" ? "@full-assessment" : `@scope-${scope}`) ||
+        (scope === "legacy-journey" ? "@legacy-journey" : `@scope-${scope}`) ||
       seenTags.has(definition.tag) ||
       !START_CHECKPOINTS.has(definition.start_checkpoint) ||
       !END_CHECKPOINTS.has(definition.end_checkpoint) ||
@@ -141,8 +143,8 @@ function resolveScopeSpecs(rawScopes, manifest = scopeManifest) {
     throw new Error("E2E_SCOPES must not contain duplicate scope names");
   }
 
-  const approvedScopes = requestedScopes.includes("full")
-    ? ["full"]
+  const approvedScopes = requestedScopes.includes("legacy-journey")
+    ? ["legacy-journey"]
     : requestedScopes;
   return approvedScopes.map((scope) => manifest.scopes[scope].spec);
 }

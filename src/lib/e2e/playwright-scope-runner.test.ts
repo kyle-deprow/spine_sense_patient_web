@@ -36,12 +36,12 @@ describe("patient-web Playwright scope runner", () => {
       "e2e/scopes/screening.spec.ts",
       "e2e/scopes/auth.spec.ts",
     ]);
-    expect(runner.resolveScopeSpecs("auth,full,analysis")).toEqual([
-      "e2e/full-assessment.spec.ts",
+    expect(runner.resolveScopeSpecs("auth,legacy-journey,analysis")).toEqual([
+      "e2e/legacy-journey.spec.ts",
     ]);
   });
 
-  it("collects seven default tests and excludes the diagnostic full journey", () => {
+  it("collects the seven-test checkpoint suite and excludes the legacy journey", () => {
     const result = spawnSync(
       process.execPath,
       ["scripts/run-playwright-e2e.cjs", "test", "--list"],
@@ -54,7 +54,7 @@ describe("patient-web Playwright scope runner", () => {
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toMatch(/Total: 7 tests(?:\s|$)/);
-    expect(result.stdout).not.toContain("@full-assessment");
+    expect(result.stdout).not.toContain("@legacy-journey");
     const discoveredTests = result.stdout
       .split("\n")
       .filter((line) => line.includes("@scope-"));
@@ -92,6 +92,7 @@ describe("patient-web Playwright scope runner", () => {
     "auth;analysis",
     "auth,,analysis",
     "auth,auth",
+    "full",
     " , ",
   ])("rejects invalid scope input %j", (scope) => {
     expect(() => runner.resolveScopeSpecs(scope)).toThrow();
@@ -103,7 +104,7 @@ describe("patient-web Playwright scope runner", () => {
     ["-g", "auth"],
     ["--config", "alternate.config.ts"],
     ["--config=alternate.config.ts"],
-    ["e2e/full-assessment.spec.ts"],
+    ["e2e/legacy-journey.spec.ts"],
   ])("rejects a Playwright selection override %j", (...selectionArgs) => {
     expect(() =>
       runner.buildPlaywrightArgv(
@@ -164,7 +165,7 @@ describe("patient-web Playwright scope runner", () => {
         ...scopeManifest.scopes,
         auth: {
           ...scopeManifest.scopes.auth,
-          spec: scopeManifest.scopes.full.spec,
+          spec: scopeManifest.scopes["legacy-journey"].spec,
         },
       },
     };
@@ -307,7 +308,7 @@ describe("patient-web Playwright scope runner", () => {
     const specs = Object.values(scopeManifest.scopes).map(({ spec }) => spec);
     expect(new Set(specs).size).toBe(specs.length);
     expect(specs).toEqual([
-      "e2e/full-assessment.spec.ts",
+      "e2e/legacy-journey.spec.ts",
       "e2e/scopes/auth.spec.ts",
       "e2e/scopes/consent-onboarding.spec.ts",
       "e2e/scopes/documents.spec.ts",
@@ -318,7 +319,7 @@ describe("patient-web Playwright scope runner", () => {
     ]);
 
     for (const [scope, { spec }] of Object.entries(scopeManifest.scopes)) {
-      if (scope === "full") {
+      if (scope === "legacy-journey") {
         continue;
       }
       expect(readFileSync(resolve(process.cwd(), spec), "utf8")).toContain(

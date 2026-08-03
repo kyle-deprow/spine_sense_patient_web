@@ -1,7 +1,7 @@
 import type { PatientWebCheckpoint } from "./checkpoints";
 
 export type ScopeName =
-  | "full"
+  | "legacy-journey"
   | "auth"
   | "consent-onboarding"
   | "documents"
@@ -23,7 +23,7 @@ export type ScopeBoundaryContract = Readonly<{
 export const SCOPE_BOUNDARY_CONTRACTS: Readonly<
   Record<ScopeName, ScopeBoundaryContract>
 > = {
-  full: {
+  "legacy-journey": {
     startCheckpoint: "fresh",
     endState: "home_complete",
     analysisBehavior: "real",

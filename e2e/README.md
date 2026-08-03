@@ -1,6 +1,6 @@
 # Patient Web Playwright Scopes
 
-The package defaults to seven independently checkpointed Playwright scopes for
+The package defaults to the seven-scope checkpoint suite for
 the exported patient app served through the patient-web BFF. Run them through
 the root Make lifecycle so the API, BFF, and synthetic support state are
 configured consistently:
@@ -51,7 +51,7 @@ The analysis scope validates the completed server schema and correlates the
 returned assessment ID to its same-origin BFF route. The results-report scope
 then exercises report generation and the shared return-Home stage; it does not
 claim to validate clinical analysis.
-The legacy `full` scope remains available only as an explicit diagnostic
+The `legacy-journey` scope remains available only as an explicit diagnostic
 selection and is not included by default or by conservative changed-file
 selection.
 
@@ -107,11 +107,11 @@ Transient recovery is bounded and classified. Network-change and 502/503/504
 transport failures may recover within their stage budget; application,
 authorization, schema, clinical, and assertion failures fail fast.
 
-The canonical full-flow timeout is derived from the bounded OCR, analysis,
+The legacy journey timeout is derived from the bounded OCR, analysis,
 document-summary, and report deadlines plus an explicit interactive/lifecycle
 allowance. `PATIENT_WEB_E2E_FULL_FLOW_TIMEOUT_MS` may raise that cap, but a
 value below the computed critical path is rejected before browser execution.
-Focused checkpoint scopes retain their shorter independent timeout.
+Checkpoint scopes retain their shorter independent timeout.
 
 FHIR route behavior, browser security headers, session handling, and other
 functional contracts remain covered by the package's Vitest tests and the

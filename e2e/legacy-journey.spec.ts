@@ -7,8 +7,8 @@ import {
 import { withAuthorizedE2eLifecycle } from "./support/lifecycle";
 import { createE2ERunIdentity } from "./support/runIdentity";
 
-test.describe("patient web full assessment flow", () => {
-  test("registers a new patient and completes assessment to home @full-assessment", async ({
+test.describe("patient web legacy assessment journey", () => {
+  test("registers a new patient and completes assessment to home @legacy-journey", async ({
     page,
     request,
   }, testInfo) => {

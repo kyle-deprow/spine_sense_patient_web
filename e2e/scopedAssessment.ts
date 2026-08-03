@@ -29,7 +29,7 @@ import { createE2ERunIdentity } from "./support/runIdentity";
 import type { JourneyContext } from "./journey/context";
 
 type ScopedJourney = Readonly<{
-  name: Exclude<ScopeName, "full">;
+  name: Exclude<ScopeName, "legacy-journey">;
   spec: string;
   startCheckpoint: PatientWebCheckpoint;
   endState: ScopeEndState;
@@ -98,7 +98,7 @@ const SCOPED_JOURNEYS = {
     },
   },
 } as const satisfies Readonly<
-  Record<Exclude<ScopeName, "full">, ScopedJourney>
+  Record<Exclude<ScopeName, "legacy-journey">, ScopedJourney>
 >;
 
 function assertScopeManifestAlignment(): void {
@@ -158,7 +158,7 @@ async function expectScopeEndState(
 }
 
 function logScopeTiming(
-  scope: Exclude<ScopeName, "full">,
+  scope: Exclude<ScopeName, "legacy-journey">,
   phase: "setup" | "action" | "browser_finalize",
   startedAt: number,
 ): void {
@@ -169,7 +169,7 @@ function logScopeTiming(
 }
 
 export function defineScopedAssessment(
-  scope: Exclude<ScopeName, "full">,
+  scope: Exclude<ScopeName, "legacy-journey">,
 ): void {
   const journey = SCOPED_JOURNEYS[scope];
   test(`${journey.name} checkpoint ${journey.tag}`, async ({

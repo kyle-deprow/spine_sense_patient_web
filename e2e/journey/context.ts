@@ -681,7 +681,7 @@ export async function getRegistrationVerificationCode(
 ): Promise<string> {
   if (!BACKEND_REGISTRATION_CODE_URL) {
     throw new Error(
-      "PATIENT_WEB_BACKEND_REGISTRATION_CODE_URL is required for full assessment E2E",
+      "PATIENT_WEB_BACKEND_REGISTRATION_CODE_URL is required for patient-web E2E",
     );
   }
   if (!TEST_SUPPORT_TOKEN) {

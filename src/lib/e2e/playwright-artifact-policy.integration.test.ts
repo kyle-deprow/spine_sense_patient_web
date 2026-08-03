@@ -57,7 +57,7 @@ describe("Playwright artifact policy integration", () => {
     );
     temporaryRoots.push(root);
     const configPath = join(root, "playwright.config.ts");
-    const specPath = join(root, "e2e", "full-assessment.spec.ts");
+    const specPath = join(root, "e2e", "legacy-journey.spec.ts");
     const safeOutputDir = join(root, "safe-output");
     const rawOutputDir = join(root, "raw-output");
     const unsafeOutputDir = join(root, "unsafe-output");
@@ -75,7 +75,7 @@ describe("Playwright artifact policy integration", () => {
 
           export default defineConfig(packageConfig, {
             testDir: ${JSON.stringify(root)},
-            testMatch: "e2e/full-assessment.spec.ts",
+            testMatch: "e2e/legacy-journey.spec.ts",
             grep: /.*/,
             outputDir: process.env.ARTIFACT_PROBE_OUTPUT_DIR,
             globalSetup: ${JSON.stringify(globalSetup)},
@@ -107,7 +107,7 @@ describe("Playwright artifact policy integration", () => {
         ...process.env,
         ARTIFACT_PROBE_OUTPUT_DIR: outputDir,
         ARTIFACT_PROBE_SENTINEL: sentinel,
-        E2E_SCOPES: "full",
+        E2E_SCOPES: "legacy-journey",
       };
       if (noCopyPrompt) {
         env.PLAYWRIGHT_NO_COPY_PROMPT = "1";

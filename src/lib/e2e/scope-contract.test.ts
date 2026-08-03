@@ -27,8 +27,10 @@ describe("patient web narrow scope contracts", () => {
     });
   });
 
-  it("represents full and results-report completion after returning Home", () => {
-    expect(SCOPE_BOUNDARY_CONTRACTS.full.endState).toBe("home_complete");
+  it("represents legacy-journey and results-report completion after returning Home", () => {
+    expect(SCOPE_BOUNDARY_CONTRACTS["legacy-journey"].endState).toBe(
+      "home_complete",
+    );
     expect(SCOPE_BOUNDARY_CONTRACTS["results-report"].endState).toBe(
       "home_complete",
     );

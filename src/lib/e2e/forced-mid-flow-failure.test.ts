@@ -299,7 +299,7 @@ describe("forced mid-flow E2E failure hook", () => {
     },
   );
 
-  it("keeps forced failure injection out of the scoped and full runners", () => {
+  it("keeps forced failure injection out of the checkpoint and legacy runners", () => {
     for (const fileName of [
       "e2e/scopedAssessment.ts",
       "e2e/fullAssessmentJourney.ts",
