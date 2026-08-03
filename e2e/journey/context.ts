@@ -19,6 +19,14 @@ import {
 import type { StageStep } from "../stages/stage";
 import type { E2ERunIdentity } from "../support/runIdentity";
 import type { RecoveryDecision } from "../support/recoveryPolicy";
+import {
+  ASSESSMENT_ANALYSIS_READINESS_TIMEOUT_MS,
+  FULL_FLOW_TIMEOUT_MS,
+  REPORT_GENERATION_TIMEOUT_MS,
+  readPositiveIntegerEnv,
+} from "./timeouts";
+
+export { FULL_FLOW_TIMEOUT_MS } from "./timeouts";
 
 export const PATIENT_WEB_BASE_URL =
   process.env.PATIENT_WEB_BASE_URL ?? "http://127.0.0.1:43101";
@@ -52,10 +60,6 @@ export const EXPECT_SECURE_COOKIES =
   process.env.PATIENT_WEB_EXPECT_SECURE_COOKIES === "true";
 export const ENABLE_FULL_ASSESSMENT_STRESS =
   process.env.PATIENT_WEB_FULL_ASSESSMENT_STRESS !== "false";
-export const FULL_FLOW_TIMEOUT_MS = readPositiveIntegerEnv(
-  "PATIENT_WEB_E2E_FULL_FLOW_TIMEOUT_MS",
-  15 * 60 * 1000,
-);
 export const PERFORMANCE_MODE = readPerformanceMode();
 export const ENABLE_TRANSITION_PROFILING =
   isPerformanceProfilingEnabled(PERFORMANCE_MODE);
@@ -275,22 +279,6 @@ export const SCREENING_GOAL_QUESTION_IDS: ReadonlySet<string> = new Set([
   ...fullAssessmentScenario.optionalScreeningGoalQuestionIds,
 ]);
 
-export function readPositiveIntegerEnv(
-  name: string,
-  defaultValue: number,
-): number {
-  const raw = process.env[name];
-  if (raw == null || raw.trim().length === 0) return defaultValue;
-
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new Error(
-      `${name} must be a positive integer number of milliseconds`,
-    );
-  }
-  return value;
-}
-
 export const TRANSITION_BUDGETS_MS: Record<TransitionProfileKind, number> = {
   page: readPositiveIntegerEnv("PATIENT_WEB_E2E_PAGE_BUDGET_MS", 90_000),
   // Normal question advances are ~350ms in prod, with section/conditional
@@ -308,11 +296,8 @@ export const TRANSITION_BUDGETS_MS: Record<TransitionProfileKind, number> = {
     30_000,
   ),
   stage: readPositiveIntegerEnv("PATIENT_WEB_E2E_STAGE_BUDGET_MS", 180_000),
-  analysis: readPositiveIntegerEnv(
-    "PATIENT_WEB_E2E_ANALYSIS_BUDGET_MS",
-    480_000,
-  ),
-  report: readPositiveIntegerEnv("PATIENT_WEB_E2E_REPORT_BUDGET_MS", 120_000),
+  analysis: ASSESSMENT_ANALYSIS_READINESS_TIMEOUT_MS,
+  report: REPORT_GENERATION_TIMEOUT_MS,
 };
 
 export class TransitionProfiler {

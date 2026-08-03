@@ -94,6 +94,12 @@ Transient recovery is bounded and classified. Network-change and 502/503/504
 transport failures may recover within their stage budget; application,
 authorization, schema, clinical, and assertion failures fail fast.
 
+The canonical full-flow timeout is derived from the bounded OCR, analysis,
+document-summary, and report deadlines plus an explicit interactive/lifecycle
+allowance. `PATIENT_WEB_E2E_FULL_FLOW_TIMEOUT_MS` may raise that cap, but a
+value below the computed critical path is rejected before browser execution.
+Focused checkpoint scopes retain their shorter independent timeout.
+
 FHIR route behavior, browser security headers, session handling, and other
 functional contracts remain covered by the package's Vitest tests and the
 backend's pytest suite. Production journey execution is blocked because

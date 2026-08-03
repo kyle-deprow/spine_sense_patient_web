@@ -7,10 +7,8 @@ import {
   expectPatientWebCheckpointReady,
   type PatientWebCheckpoint,
 } from "./checkpoints";
-import {
-  createJourneyContext,
-  FULL_FLOW_TIMEOUT_MS,
-} from "./fullAssessmentJourney";
+import { createJourneyContext } from "./fullAssessmentJourney";
+import { SCOPED_ASSESSMENT_TIMEOUT_MS } from "./journey/timeouts";
 import scopeManifest from "./scopes.json";
 import {
   assertScopeBoundaryManifest,
@@ -178,7 +176,7 @@ export function defineScopedAssessment(
     page,
     request,
   }, testInfo) => {
-    test.setTimeout(FULL_FLOW_TIMEOUT_MS);
+    test.setTimeout(SCOPED_ASSESSMENT_TIMEOUT_MS);
     const identity = createE2ERunIdentity();
 
     await withAuthorizedE2eLifecycle({

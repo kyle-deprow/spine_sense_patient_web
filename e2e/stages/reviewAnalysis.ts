@@ -6,9 +6,10 @@ import {
   waitForAnyVisibleTestId,
 } from "../journey/selectors";
 import { expectAnalysisRequestContracts } from "../journey/contracts";
-import { isRecord } from "../journey/context";
+import { isRecord, TRANSITION_BUDGETS_MS } from "../journey/context";
 import { maybeThrowForcedMidFlowFailure } from "../support/forcedMidFlowFailure";
 import { verifyAnalyzedDocument } from "./documentAnalysis";
+import { ASSESSMENT_ANALYSIS_READINESS_TIMEOUT_MS } from "../journey/timeouts";
 
 export function expectCompletedAnalysisResponse(
   responseUrl: string,
@@ -58,7 +59,7 @@ export async function waitForAnalysisReadyAndConfirm(
       const stage = await waitForAnyVisibleTestId(
         context.page,
         ["results-ready-confirm", "assessment-processing-failed"],
-        480_000,
+        ASSESSMENT_ANALYSIS_READINESS_TIMEOUT_MS,
       );
       if (stage === "assessment-processing-failed") {
         throw new Error("Assessment analysis failed during full E2E");
@@ -107,7 +108,7 @@ export async function runAnalysisStage(context: JourneyContext): Promise<void> {
           return false;
         }
       },
-      { timeout: 480_000 },
+      { timeout: ASSESSMENT_ANALYSIS_READINESS_TIMEOUT_MS },
     );
     void completedAnalysis.catch(() => undefined);
     const analysisRequest = page.waitForRequest((request) => {
@@ -132,7 +133,7 @@ export async function runAnalysisStage(context: JourneyContext): Promise<void> {
       await completed.json(),
     );
     await expect(page.getByTestId("results-screen")).toBeVisible({
-      timeout: 480_000,
+      timeout: TRANSITION_BUDGETS_MS.page,
     });
     await expect(page.getByText("Assessment Results")).toBeVisible();
     await expect(page.getByTestId("results-disclaimer")).toBeVisible();

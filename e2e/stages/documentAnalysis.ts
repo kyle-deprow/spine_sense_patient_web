@@ -8,6 +8,7 @@ import {
   type UploadedAssessmentDocument,
 } from "../journey/context";
 import { waitForEnabledAndClick } from "../journey/selectors";
+import { DOCUMENT_SUMMARY_READINESS_TIMEOUT_MS } from "../journey/timeouts";
 import { safeResponseMetadata } from "./recordsUpload";
 
 type SummaryReadyDocument = Readonly<{ id: string }>;
@@ -42,7 +43,7 @@ export function requireSummaryReadyDocument(
 export async function waitForSummaryReadyDocument(
   page: Page,
   documentId: string,
-  timeout = 180_000,
+  timeout = DOCUMENT_SUMMARY_READINESS_TIMEOUT_MS,
   pollInterval = 5000,
 ): Promise<SummaryReadyDocument> {
   const deadline = Date.now() + timeout;
