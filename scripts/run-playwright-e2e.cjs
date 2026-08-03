@@ -29,6 +29,11 @@ const APPROVED_SCOPES = [
   "analysis",
   "results-report",
 ];
+const OPT_IN_SCOPES = [
+  "onboarding-resume",
+  "onboarding-draft-restore",
+  "onboarding-intro-idempotence",
+];
 const START_CHECKPOINTS = new Set([
   "fresh",
   "verified_pending_consent",
@@ -74,7 +79,10 @@ function assertManifest(manifest) {
     typeof manifest.scopes !== "object" ||
     JSON.stringify(manifest.default_scopes) !==
       JSON.stringify(
-        APPROVED_SCOPES.filter((scope) => scope !== "legacy-journey"),
+        APPROVED_SCOPES.filter(
+          (scope) =>
+            scope !== "legacy-journey" && !OPT_IN_SCOPES.includes(scope),
+        ),
       ) ||
     JSON.stringify(Object.keys(manifest.scopes)) !==
       JSON.stringify(APPROVED_SCOPES)
