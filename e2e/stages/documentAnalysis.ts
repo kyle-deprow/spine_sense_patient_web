@@ -124,7 +124,11 @@ export async function verifyDocumentAnalysisPersistence(
   expect(payload).toEqual({
     assessment_id: uploaded.assessmentId,
     document_id: uploaded.documentId,
-    analysis: { assessment_complete: true, status: "complete" },
+    analysis: {
+      assessment_complete: true,
+      status: "complete",
+      document_input_provenance: true,
+    },
     document: {
       scan_status: "clean",
       ocr_status: "complete",

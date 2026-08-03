@@ -14,7 +14,11 @@ const BODY = {
 const FACTS = {
   assessment_id: ASSESSMENT_ID,
   document_id: DOCUMENT_ID,
-  analysis: { assessment_complete: true, status: "complete" },
+  analysis: {
+    assessment_complete: true,
+    status: "complete",
+    document_input_provenance: true,
+  },
   document: {
     scan_status: "clean",
     ocr_status: "complete",
@@ -121,6 +125,34 @@ describe("patient web document-analysis-persistence support route", () => {
     expect(response.status).toBe(503);
     expect(await response.json()).toEqual({ error: "service_unavailable" });
   });
+
+  it.each([
+    ["missing", { assessment_complete: true, status: "complete" }],
+    ["false", { ...FACTS.analysis, document_input_provenance: false }],
+    ["null", { ...FACTS.analysis, document_input_provenance: null }],
+    ["string", { ...FACTS.analysis, document_input_provenance: "true" }],
+    ["number", { ...FACTS.analysis, document_input_provenance: 1 }],
+    ["object", { ...FACTS.analysis, document_input_provenance: {} }],
+  ])(
+    "fails closed when the main analysis input provenance is %s",
+    async (_case, analysis) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          Response.json({
+            ...FACTS,
+            analysis,
+          }),
+        ),
+      );
+      const { POST } = await import("./route");
+
+      const response = await POST(makeRequest(BODY));
+
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ error: "service_unavailable" });
+    },
+  );
 
   it("maps backend mismatch details to a metadata-only conflict", async () => {
     vi.stubGlobal(
