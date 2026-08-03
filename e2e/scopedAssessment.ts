@@ -25,7 +25,7 @@ import { runAnalysisStage } from "./stages/reviewAnalysis";
 import { runReturnHomeStage } from "./stages/returnHome";
 import { runScreeningStage } from "./stages/screening";
 import { withAuthorizedE2eLifecycle } from "./support/lifecycle";
-import { createE2ERunIdentity } from "./support/runIdentity";
+import { createScopedE2ERunIdentity } from "./support/runIdentity";
 import type { JourneyContext } from "./journey/context";
 
 type ScopedJourney = Readonly<{
@@ -177,7 +177,7 @@ export function defineScopedAssessment(
     request,
   }, testInfo) => {
     test.setTimeout(SCOPED_ASSESSMENT_TIMEOUT_MS);
-    const identity = createE2ERunIdentity();
+    const identity = createScopedE2ERunIdentity(journey.name);
 
     await withAuthorizedE2eLifecycle({
       identity,

@@ -63,14 +63,23 @@ lifecycle. Forced failures selected with
 milestones inside the shared canonical stage actions, before their end-state
 transitions; stack cleanup remains owned by the outer lifecycle.
 
-Each invocation creates a UUID-backed synthetic email and sends the exact
-`{run_id, email}` identity to the guarded backend support endpoints. The
-canonical Make lifecycle owns disposal by running the journey in an isolated
-stack and removing its database/object-storage volumes on success or failure.
-The cleanup endpoint validates the identity but returns conflict until a
-reviewed exact-run database, cache, and object-store deletion capability exists;
-it never reports stack disposal as application-data deletion. Browser tests do
-not call it. Before any journey mutation,
+The root lifecycle allocates `PATIENT_WEB_E2E_RUN_ID` as the isolated stack and
+runtime owner. Each checkpoint scope deterministically derives a distinct UUIDv5
+child identity from that root UUID and its scope name, then sends the exact
+child `{run_id, email}` pair to guarded backend support endpoints. Reusing a
+checkpoint inside one scope therefore reuses its identity, while independent
+scopes cannot register the same patient. The unscoped legacy journey continues
+to use the root identity directly.
+
+The canonical Make lifecycle disposes the entire isolated stack by removing its
+database/object-storage volumes on success or failure. A future exact-run
+database, cache, and object-store cleanup implementation must derive or
+enumerate every deterministic scope child from the root run before claiming
+complete deletion. The current deployed dev and production modes deliberately
+retain those child-tagged synthetic records. The cleanup endpoint validates one
+exact child identity but returns conflict until that reviewed multi-child
+capability exists; it never reports stack disposal as application-data
+deletion. Browser tests do not call it. Before any journey mutation,
 the browser lifecycle requires `PATIENT_WEB_E2E_STACK_DISPOSABLE=true`; the root
 Make lifecycle supplies that marker only for its isolated Compose stack. Direct
 `pnpm test:e2e` invocations therefore fail closed unless an operator explicitly

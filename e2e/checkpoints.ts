@@ -72,7 +72,7 @@ type CheckpointContract = Readonly<{
 }>;
 
 const RUN_CLEANUP =
-  "run_id names the disposable local stack; production exact-run cleanup is unavailable";
+  "PATIENT_WEB_E2E_RUN_ID owns the disposable local stack; checkpoint scopes use deterministic child run_id identities, and deployed exact-run cleanup must enumerate those children before retained data can be deleted";
 
 /** Versioned, PHI-safe boundary descriptions; clinical values remain server-owned. */
 export const CHECKPOINT_CONTRACTS: Readonly<
