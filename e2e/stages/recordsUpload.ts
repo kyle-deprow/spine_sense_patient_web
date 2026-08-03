@@ -26,6 +26,9 @@ import {
   assertRecoveryAttempt,
 } from "../support/recoveryPolicy";
 import { actionableLocatorForTestId } from "../journey/selectors";
+import { DOCUMENT_OCR_READINESS_TIMEOUT_MS } from "../journey/timeouts";
+
+export { DOCUMENT_OCR_READINESS_TIMEOUT_MS } from "../journey/timeouts";
 
 type SafeResponseMetadata = Readonly<{
   code?: string;
@@ -34,11 +37,6 @@ type SafeResponseMetadata = Readonly<{
 type NormalizedAssessmentDocument = ReturnType<
   typeof normalizeAssessmentDocument
 >;
-
-// Azure's event-triggered OCR job can spend up to one 60-second KEDA polling
-// interval at scale zero before provider execution begins. Keep a bounded
-// end-to-end readiness SLO that also accommodates normal provider latency.
-export const DOCUMENT_OCR_READINESS_TIMEOUT_MS = 5 * 60 * 1000;
 
 export type DocumentConfirmationReadiness =
   | Readonly<{
