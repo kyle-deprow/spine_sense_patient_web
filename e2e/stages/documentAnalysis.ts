@@ -36,6 +36,16 @@ const SAFE_PERSISTENCE_MISMATCHES = new Set([
   "summary_status",
 ]);
 
+const TRANSIENT_SUMMARY_PERSISTENCE_MISMATCHES = new Set([
+  "summary_completed_at",
+  "summary_status",
+]);
+
+type PersistenceProbeResult = Readonly<{
+  status: number;
+  payload: unknown;
+}>;
+
 export function safePersistenceMismatchAxes(payload: unknown): string[] | null {
   if (!isRecord(payload) || !Array.isArray(payload.mismatches)) return null;
   if (
@@ -48,6 +58,45 @@ export function safePersistenceMismatchAxes(payload: unknown): string[] | null {
     return null;
   }
   return [...new Set(payload.mismatches as string[])].sort();
+}
+
+export async function waitForDocumentAnalysisPersistence(
+  probe: () => Promise<PersistenceProbeResult>,
+  timeout = DOCUMENT_SUMMARY_READINESS_TIMEOUT_MS,
+  pollInterval = 5000,
+): Promise<unknown> {
+  const deadline = Date.now() + timeout;
+
+  while (true) {
+    const { status, payload } = await probe();
+    if (status === 200) return payload;
+
+    const metadata = safeResponseMetadata(payload);
+    const mismatches = safePersistenceMismatchAxes(payload);
+    const onlySummaryReadinessIsPending =
+      status === 409 &&
+      isRecord(payload) &&
+      payload.error === "support_conflict" &&
+      mismatches != null &&
+      mismatches.every((axis) =>
+        TRANSIENT_SUMMARY_PERSISTENCE_MISMATCHES.has(axis),
+      );
+    if (!onlySummaryReadinessIsPending) {
+      throw new Error(
+        `document analysis persistence verification failed status=${status} code=${metadata.code ?? "unknown"} mismatches=${mismatches?.join(",") ?? "unknown"}`,
+      );
+    }
+
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      throw new Error(
+        `document analysis persistence verification timed out mismatches=${mismatches.join(",")}`,
+      );
+    }
+    await new Promise<void>((resolve) =>
+      setTimeout(resolve, Math.min(pollInterval, remaining)),
+    );
+  }
 }
 
 export function requireSummaryReadyDocument(
@@ -138,9 +187,9 @@ export async function verifyDocumentAnalysisPersistence(
       "PATIENT_WEB_TEST_SUPPORT_TOKEN is required for post-analysis document verification",
     );
   }
-  const response = await request.post(
-    BACKEND_DOCUMENT_ANALYSIS_PERSISTENCE_URL,
-    {
+  const persistenceUrl = BACKEND_DOCUMENT_ANALYSIS_PERSISTENCE_URL;
+  const payload = await waitForDocumentAnalysisPersistence(async () => {
+    const response = await request.post(persistenceUrl, {
       headers: {
         authorization: `Bearer ${TEST_SUPPORT_TOKEN}`,
         "content-type": "application/json",
@@ -161,15 +210,9 @@ export async function verifyDocumentAnalysisPersistence(
           SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.minimumSummaryLength,
       },
       timeout: 30_000,
-    },
-  );
-  const payload: unknown = await response.json();
-  const metadata = safeResponseMetadata(payload);
-  const mismatches = safePersistenceMismatchAxes(payload);
-  expect(
-    response.status(),
-    `document analysis persistence verification failed status=${response.status()} code=${metadata.code ?? "unknown"} mismatches=${mismatches?.join(",") ?? "unknown"}`,
-  ).toBe(200);
+    });
+    return { status: response.status(), payload: await response.json() };
+  });
   expect(payload).toEqual({
     assessment_id: uploaded.assessmentId,
     document_id: uploaded.documentId,
