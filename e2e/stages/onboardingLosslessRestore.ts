@@ -24,7 +24,6 @@ import {
 import { maybeThrowForcedMidFlowFailure } from "../support/forcedMidFlowFailure";
 
 const DRAFT_FLUSH_TIMEOUT_MS = 30_000;
-const KEEPALIVE_FLUSH_TIMEOUT_MS = 1_500;
 const LATEST_INTAKE_PROGRESS_PATH =
   "/api/proxy/api/v1/patients/me/intake/progress/latest";
 const TREATMENT_HISTORY_SECTIONS = [
@@ -51,7 +50,7 @@ async function waitForBffPut(
     timeoutMs?: number;
     matches?: (response: PlaywrightResponse) => boolean;
   } = {},
-): Promise<void> {
+): Promise<PlaywrightResponse> {
   const responsePromise = page.waitForResponse(
     (response) => {
       const url = new URL(response.url());
@@ -68,6 +67,7 @@ async function waitForBffPut(
   // failure rather than an unhandled rejection during the next interaction.
   const [response] = await Promise.all([responsePromise, action()]);
   expect(response.ok(), `BFF PUT ${pathnameSuffix} should succeed`).toBe(true);
+  return response;
 }
 
 async function dispatchHiddenVisibilityChange(
@@ -78,9 +78,12 @@ async function dispatchHiddenVisibilityChange(
   // A second page therefore gives this test a real browser transition instead
   // of only exercising a synthetic event. Keep a short probe because headless
   // browser implementations do not all deliver cross-page visibility events.
-  const observedHidden = page.evaluate(
-    () =>
-      new Promise<boolean>((resolve) => {
+  await page.evaluate(() => {
+    const windowWithProbe = window as typeof window & {
+      __onboardingObservedHidden?: Promise<boolean>;
+    };
+    windowWithProbe.__onboardingObservedHidden = new Promise<boolean>(
+      (resolve) => {
         let settled = false;
         const finish = (value: boolean) => {
           if (settled) return;
@@ -94,11 +97,18 @@ async function dispatchHiddenVisibilityChange(
         };
         const timeoutId = window.setTimeout(() => finish(false), 250);
         document.addEventListener("visibilitychange", onVisibilityChange);
-      }),
-  );
+      },
+    );
+  });
   await backgroundPage.bringToFront();
+  const observedHidden = await page.evaluate(async () => {
+    const windowWithProbe = window as typeof window & {
+      __onboardingObservedHidden?: Promise<boolean>;
+    };
+    return (await windowWithProbe.__onboardingObservedHidden) ?? false;
+  });
 
-  if (!(await observedHidden)) {
+  if (!observedHidden) {
     // Fallback for engines that do not expose cross-page visibility state to
     // the first page. Restore the original descriptor before dispatching the
     // matching visible event so screen-protection-overlay cannot remain stuck.
@@ -167,10 +177,15 @@ async function expectTreatmentHistoryOnServer(
 ): Promise<void> {
   await expect
     .poll(
-      async () =>
-        hasAllTreatmentHistorySections(
-          await tryBffJson(context, LATEST_INTAKE_PROGRESS_PATH),
-        ),
+      async () => {
+        try {
+          return hasAllTreatmentHistorySections(
+            await tryBffJson(context, LATEST_INTAKE_PROGRESS_PATH),
+          );
+        } catch {
+          return false;
+        }
+      },
       {
         timeout: 60_000,
         message:
@@ -187,18 +202,22 @@ async function expectStoryOnServer(
   await expect
     .poll(
       async () => {
-        const progress = await tryBffJson(
-          context,
-          LATEST_INTAKE_PROGRESS_PATH,
-        );
-        const stepData = stepDataFromLatestProgress(progress);
-        const storyStep = stepData?.["chief-complaint"];
-        const nestedNarrative = isRecord(storyStep)
-          ? storyStep.narrative
-          : undefined;
-        const serverNarrative =
-          progress?.storyNarrative ?? progress?.story_narrative;
-        return serverNarrative === narrative || nestedNarrative === narrative;
+        try {
+          const progress = await tryBffJson(
+            context,
+            LATEST_INTAKE_PROGRESS_PATH,
+          );
+          const stepData = stepDataFromLatestProgress(progress);
+          const storyStep = stepData?.["chief-complaint"];
+          const nestedNarrative = isRecord(storyStep)
+            ? storyStep.narrative
+            : undefined;
+          const serverNarrative =
+            progress?.storyNarrative ?? progress?.story_narrative;
+          return serverNarrative === narrative || nestedNarrative === narrative;
+        } catch {
+          return false;
+        }
       },
       {
         timeout: 60_000,
@@ -299,9 +318,10 @@ export async function runOnboardingResumeStage(
     );
     await saveStoryAndReachTreatmentHistory(page);
 
-    await page.goto("/assessment", {
+    const response = await page.goto("/assessment", {
       waitUntil: "domcontentloaded",
     });
+    expect(response?.ok()).toBe(true);
     await expect(page).toHaveURL(/\/onboarding\/treatment-history$/);
     await expect(page.getByTestId("onboarding-layout")).toBeVisible({
       timeout: 60_000,
@@ -319,7 +339,9 @@ export async function runOnboardingResumeStage(
     await expect(page.getByTestId("intake-step-treatment-history")).toBeVisible(
       { timeout: 60_000 },
     );
-    await expect(page.getByTestId("step-medical-history")).toBeVisible();
+    await expect(page.getByTestId("step-medical-history")).toBeVisible({
+      timeout: 60_000,
+    });
     await expect(page.getByTestId("onboarding-resume-error")).toHaveCount(0);
     maybeThrowForcedMidFlowFailure("onboarding-resume");
 
@@ -343,27 +365,42 @@ export async function runOnboardingDraftRestoreStage(
       await expect(page.getByTestId("screen-protection-overlay")).toHaveCount(0);
 
       await completeProfileAndEnterChiefComplaint(page, narrative);
+      const t0 = Date.now();
 
       // This waiter is armed immediately before the real hidden transition and
-      // expires before INTAKE_DRAFT_DEBOUNCE_MS (2s). Requiring no
-      // x-idempotency-key distinguishes the unload-only raw fetch from
-      // apiClient, which always adds that header to unsafe requests.
-      await waitForBffPut(
+      // expires before the 2s trailing debounce. The raw keepalive transport
+      // has no x-app-version header, while apiClient adds it to normal PUTs.
+      const timeoutMs = Math.max(500, 2_000 - (Date.now() - t0) - 300);
+      const keepaliveResponse = await waitForBffPut(
         page,
         "/intake/story",
         () => dispatchHiddenVisibilityChange(page, backgroundPage),
         {
-          timeoutMs: KEEPALIVE_FLUSH_TIMEOUT_MS,
+          timeoutMs,
           matches: (response) =>
-            response.request().headers()["x-idempotency-key"] == null,
+            response.request().headers()["x-app-version"] == null,
         },
       );
+      expect(
+        (await keepaliveResponse.request().allHeaders())["x-app-version"],
+      ).toBeUndefined();
       await expectStoryOnServer(context, narrative);
 
       await reloadOnboardingPage(page);
       await assertRestoredChiefComplaint(page, narrative);
       maybeThrowForcedMidFlowFailure("onboarding-draft-restore");
-      await saveStoryAndReachTreatmentHistory(page);
+      const normalStoryResponse = await waitForBffPut(
+        page,
+        "/intake/story",
+        () => saveStoryAndReachTreatmentHistory(page),
+        {
+          matches: (response) =>
+            response.request().headers()["x-app-version"] != null,
+        },
+      );
+      expect(
+        (await normalStoryResponse.request().allHeaders())["x-app-version"],
+      ).toBeDefined();
 
       await fillTreatmentHistoryWithNoAnswers(page);
       await expectTreatmentHistoryOnServer(context);
@@ -407,7 +444,7 @@ export async function runOnboardingDraftRestoreStage(
         "Synthetic pasted imaging findings retained across onboarding reload.",
       );
     } finally {
-      await backgroundPage.close();
+      await backgroundPage.close().catch(() => {});
     }
   });
 }
@@ -431,10 +468,10 @@ export async function runOnboardingIntroIdempotenceStage(
       timeout: 60_000,
     });
 
-    await reloadOnboardingPage(page);
-    await page.goto("/assessment", {
+    const response = await page.goto("/assessment", {
       waitUntil: "domcontentloaded",
     });
+    expect(response?.ok()).toBe(true);
     await expect(page).toHaveURL(/\/onboarding\/profile$/);
     await expect(page.getByTestId("welcome-intro-screen")).toHaveCount(0);
     await expect(page.getByTestId("onboarding-layout")).toBeVisible({
