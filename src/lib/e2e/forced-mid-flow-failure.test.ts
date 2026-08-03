@@ -47,6 +47,9 @@ describe("forced mid-flow E2E failure hook", () => {
   it.each([
     "auth",
     "consent-onboarding",
+    "onboarding-resume",
+    "onboarding-draft-restore",
+    "onboarding-intro-idempotence",
     "documents",
     "screening",
     "adaptive",

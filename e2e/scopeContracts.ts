@@ -4,6 +4,9 @@ export type ScopeName =
   | "legacy-journey"
   | "auth"
   | "consent-onboarding"
+  | "onboarding-resume"
+  | "onboarding-draft-restore"
+  | "onboarding-intro-idempotence"
   | "documents"
   | "screening"
   | "adaptive"
@@ -36,6 +39,21 @@ export const SCOPE_BOUNDARY_CONTRACTS: Readonly<
   "consent-onboarding": {
     startCheckpoint: "verified_pending_consent",
     endState: "records_ready",
+    analysisBehavior: "none",
+  },
+  "onboarding-resume": {
+    startCheckpoint: "onboarding_ready",
+    endState: "records_ready",
+    analysisBehavior: "none",
+  },
+  "onboarding-draft-restore": {
+    startCheckpoint: "onboarding_ready",
+    endState: "records_ready",
+    analysisBehavior: "none",
+  },
+  "onboarding-intro-idempotence": {
+    startCheckpoint: "verified_pending_consent",
+    endState: "onboarding_ready",
     analysisBehavior: "none",
   },
   documents: {

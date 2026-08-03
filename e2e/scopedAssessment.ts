@@ -19,6 +19,11 @@ import {
 import { runAccountVerificationStage } from "./stages/accountVerification";
 import { runAdaptiveStage } from "./stages/adaptive";
 import { runConsentOnboardingStage } from "./stages/consentOnboarding";
+import {
+  runOnboardingDraftRestoreStage,
+  runOnboardingIntroIdempotenceStage,
+  runOnboardingResumeStage,
+} from "./stages/onboardingLosslessRestore";
 import { runRecordsDocumentsStage } from "./stages/recordsDocuments";
 import { runResultsReportStage } from "./stages/resultsReport";
 import { runAnalysisStage } from "./stages/reviewAnalysis";
@@ -53,6 +58,30 @@ const SCOPED_JOURNEYS = {
     endState: "records_ready",
     tag: "@scope-consent-onboarding",
     runStage: runConsentOnboardingStage,
+  },
+  "onboarding-resume": {
+    name: "onboarding-resume",
+    spec: "e2e/scopes/onboarding-resume.spec.ts",
+    startCheckpoint: "onboarding_ready",
+    endState: "records_ready",
+    tag: "@scope-onboarding-resume",
+    runStage: runOnboardingResumeStage,
+  },
+  "onboarding-draft-restore": {
+    name: "onboarding-draft-restore",
+    spec: "e2e/scopes/onboarding-draft-restore.spec.ts",
+    startCheckpoint: "onboarding_ready",
+    endState: "records_ready",
+    tag: "@scope-onboarding-draft-restore",
+    runStage: runOnboardingDraftRestoreStage,
+  },
+  "onboarding-intro-idempotence": {
+    name: "onboarding-intro-idempotence",
+    spec: "e2e/scopes/onboarding-intro-idempotence.spec.ts",
+    startCheckpoint: "verified_pending_consent",
+    endState: "onboarding_ready",
+    tag: "@scope-onboarding-intro-idempotence",
+    runStage: runOnboardingIntroIdempotenceStage,
   },
   documents: {
     name: "documents",

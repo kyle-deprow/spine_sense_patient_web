@@ -34,6 +34,30 @@
       "timeout_class": "short",
       "real_analysis": false
     },
+    "onboarding-resume": {
+      "tag": "@scope-onboarding-resume",
+      "spec": "e2e/scopes/onboarding-resume.spec.ts",
+      "start_checkpoint": "onboarding_ready",
+      "end_checkpoint": "records_ready",
+      "timeout_class": "short",
+      "real_analysis": false
+    },
+    "onboarding-draft-restore": {
+      "tag": "@scope-onboarding-draft-restore",
+      "spec": "e2e/scopes/onboarding-draft-restore.spec.ts",
+      "start_checkpoint": "onboarding_ready",
+      "end_checkpoint": "records_ready",
+      "timeout_class": "short",
+      "real_analysis": false
+    },
+    "onboarding-intro-idempotence": {
+      "tag": "@scope-onboarding-intro-idempotence",
+      "spec": "e2e/scopes/onboarding-intro-idempotence.spec.ts",
+      "start_checkpoint": "verified_pending_consent",
+      "end_checkpoint": "onboarding_ready",
+      "timeout_class": "short",
+      "real_analysis": false
+    },
     "documents": {
       "tag": "@scope-documents",
       "spec": "e2e/scopes/documents.spec.ts",

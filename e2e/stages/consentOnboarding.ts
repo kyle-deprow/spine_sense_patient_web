@@ -483,6 +483,27 @@ export async function clickChiefComplaintSave(page: Page) {
   await save.click({ timeout: 10_000 });
 }
 
+export async function fillTreatmentHistoryWithNoAnswers(page: Page) {
+  await clickByTestId(page, "medical-history-conditions-none");
+  for (const prefix of [
+    "medical-history-surgery",
+    "medical-history-bone",
+    "medical-history-trauma",
+    "medical-history-meds",
+  ]) {
+    await clickByTestId(page, prefix + "-no");
+    await expect(page.getByTestId(prefix + "-no"))
+      .toHaveAttribute("aria-pressed", "true")
+      .catch(async () => {
+        await expect(page.getByTestId(prefix + "-no")).toHaveAttribute(
+          "aria-checked",
+          "true",
+        );
+      });
+  }
+  await clickByTestId(page, "medical-history-nicotine-no");
+}
+
 export async function runConsentOnboardingStage(
   context: JourneyContext,
 ): Promise<void> {
@@ -519,24 +540,7 @@ export async function runConsentOnboardingStage(
         await expectTreatmentHistoryAfterStorySave(page);
       },
     );
-    await clickByTestId(page, "medical-history-conditions-none");
-    for (const prefix of [
-      "medical-history-surgery",
-      "medical-history-bone",
-      "medical-history-trauma",
-      "medical-history-meds",
-    ]) {
-      await clickByTestId(page, prefix + "-no");
-      await expect(page.getByTestId(prefix + "-no"))
-        .toHaveAttribute("aria-pressed", "true")
-        .catch(async () => {
-          await expect(page.getByTestId(prefix + "-no")).toHaveAttribute(
-            "aria-checked",
-            "true",
-          );
-        });
-    }
-    await clickByTestId(page, "medical-history-nicotine-no");
+    await fillTreatmentHistoryWithNoAnswers(page);
     maybeThrowForcedMidFlowFailure("consent-onboarding");
     await profiler.measure(
       "onboarding.history_to_records",
