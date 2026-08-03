@@ -471,6 +471,14 @@ export async function verifySyntheticDocumentUploadPersistence(
       expected_content_sha256: SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.contentSha256,
       expected_processing_status: "complete",
       expected_scan_status: "clean",
+      expected_ocr_page_count:
+        SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.expectedOcrPageCount,
+      expected_ocr_min_chars:
+        SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.minimumOcrTextLength,
+      expected_ocr_markers:
+        SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.expectedOcrMarkers,
+      expected_ocr_provider:
+        SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.expectedOcrProvider,
     },
     timeout: 30_000,
   });
@@ -486,10 +494,12 @@ export async function verifySyntheticDocumentUploadPersistence(
       content_sha256_matches?: boolean;
       final_receipt?: boolean;
       ocr_status?: string;
+      ocr_provider_matches?: boolean;
       ocr_source_sha256_matches?: boolean;
-      extracted_text_present?: boolean;
+      extracted_text_substantive?: boolean;
+      expected_ocr_markers_present?: boolean;
       ocr_text_sha256_matches?: boolean;
-      ocr_page_count_positive?: boolean;
+      ocr_page_count_matches?: boolean;
     };
     object?: {
       promoted?: boolean;
@@ -514,10 +524,12 @@ export async function verifySyntheticDocumentUploadPersistence(
       content_sha256_matches: true,
       final_receipt: true,
       ocr_status: "complete",
+      ocr_provider_matches: true,
       ocr_source_sha256_matches: true,
-      extracted_text_present: true,
+      extracted_text_substantive: true,
+      expected_ocr_markers_present: true,
       ocr_text_sha256_matches: true,
-      ocr_page_count_positive: true,
+      ocr_page_count_matches: true,
     }),
   );
   expect(payload.object).toEqual({

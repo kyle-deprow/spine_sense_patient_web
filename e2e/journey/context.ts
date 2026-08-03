@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import {
   expect,
   type APIRequestContext,
@@ -76,7 +79,9 @@ export const STRESS_BACKTRACK_AFTER_SCREENING_QUESTION_ID =
 export const SYNTHETIC_ASSESSMENT_UPLOAD = {
   name: SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.name,
   mimeType: SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.mimeType,
-  buffer: Buffer.from(SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.base64, "base64"),
+  buffer: readFileSync(
+    resolve(__dirname, "../fixtures/synthetic-assessment-report.pdf"),
+  ),
 } as const;
 
 /**

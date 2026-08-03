@@ -10,6 +10,7 @@ import {
 import { waitForEnabledAndClick } from "../journey/selectors";
 import { DOCUMENT_SUMMARY_READINESS_TIMEOUT_MS } from "../journey/timeouts";
 import { safeResponseMetadata } from "./recordsUpload";
+import { SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT } from "../../src/lib/e2e/document-upload-fixture";
 
 type SummaryReadyDocument = Readonly<{ id: string }>;
 
@@ -112,6 +113,16 @@ export async function verifyDocumentAnalysisPersistence(
         assessment_id: uploaded.assessmentId,
         document_id: uploaded.documentId,
         email,
+        expected_ocr_page_count:
+          SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.expectedOcrPageCount,
+        expected_ocr_min_chars:
+          SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.minimumOcrTextLength,
+        expected_ocr_markers:
+          SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.expectedOcrMarkers,
+        expected_ocr_provider:
+          SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.expectedOcrProvider,
+        expected_summary_min_chars:
+          SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.minimumSummaryLength,
       },
       timeout: 30_000,
     },
@@ -133,7 +144,11 @@ export async function verifyDocumentAnalysisPersistence(
     document: {
       scan_status: "clean",
       ocr_status: "complete",
+      ocr_provider_matches: true,
+      extracted_text_substantive: true,
+      expected_ocr_markers_present: true,
       ocr_text_sha256_matches: true,
+      ocr_page_count_matches: true,
     },
     summary: {
       status: "complete",
@@ -142,6 +157,7 @@ export async function verifyDocumentAnalysisPersistence(
       category_present: true,
       document_type_present: true,
       summary_present: true,
+      patient_summary_substantive: true,
       findings_present: true,
       source_sha256_matches_ocr_text: true,
     },

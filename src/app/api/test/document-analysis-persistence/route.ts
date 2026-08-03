@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 
 import { readJsonBody } from "@/lib/server/backend";
+import { SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT } from "@/lib/e2e/document-upload-fixture";
 import { jsonNoStore } from "@/lib/server/responses";
 import {
   forwardPatientWebTestSupport,
@@ -20,6 +21,11 @@ export async function POST(request: NextRequest) {
     "assessment_id",
     "document_id",
     "email",
+    "expected_ocr_page_count",
+    "expected_ocr_min_chars",
+    "expected_ocr_markers",
+    "expected_ocr_provider",
+    "expected_summary_min_chars",
   ]);
   const assessmentId = record?.assessment_id;
   const documentId = record?.document_id;
@@ -27,7 +33,19 @@ export async function POST(request: NextRequest) {
   if (
     !isUuid(assessmentId) ||
     !isUuid(documentId) ||
-    !isExactSyntheticEmail(email)
+    !isExactSyntheticEmail(email) ||
+    record?.expected_ocr_page_count !==
+      SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.expectedOcrPageCount ||
+    record?.expected_ocr_min_chars !==
+      SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.minimumOcrTextLength ||
+    !exactStringArray(
+      record?.expected_ocr_markers,
+      SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.expectedOcrMarkers,
+    ) ||
+    record?.expected_ocr_provider !==
+      SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.expectedOcrProvider ||
+    record?.expected_summary_min_chars !==
+      SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.minimumSummaryLength
   ) {
     return jsonNoStore({ detail: "Not found" }, { status: 404 });
   }
@@ -35,6 +53,15 @@ export async function POST(request: NextRequest) {
     assessment_id: assessmentId,
     document_id: documentId,
     email,
+    expected_ocr_page_count:
+      SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.expectedOcrPageCount,
+    expected_ocr_min_chars:
+      SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.minimumOcrTextLength,
+    expected_ocr_markers: SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.expectedOcrMarkers,
+    expected_ocr_provider:
+      SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.expectedOcrProvider,
+    expected_summary_min_chars:
+      SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.minimumSummaryLength,
   };
 
   try {
@@ -60,13 +87,18 @@ export async function POST(request: NextRequest) {
       analysis.document_input_provenance !== true ||
       document?.scan_status !== "clean" ||
       document.ocr_status !== "complete" ||
+      document.ocr_provider_matches !== true ||
+      document.extracted_text_substantive !== true ||
+      document.expected_ocr_markers_present !== true ||
       document.ocr_text_sha256_matches !== true ||
+      document.ocr_page_count_matches !== true ||
       summary?.status !== "complete" ||
       summary.materialized_for_assessment !== true ||
       summary.completed_at_present !== true ||
       summary.category_present !== true ||
       summary.document_type_present !== true ||
       summary.summary_present !== true ||
+      summary.patient_summary_substantive !== true ||
       summary.findings_present !== true ||
       summary.source_sha256_matches_ocr_text !== true
     ) {
@@ -84,7 +116,11 @@ export async function POST(request: NextRequest) {
       document: {
         scan_status: "clean",
         ocr_status: "complete",
+        ocr_provider_matches: true,
+        extracted_text_substantive: true,
+        expected_ocr_markers_present: true,
         ocr_text_sha256_matches: true,
+        ocr_page_count_matches: true,
       },
       summary: {
         status: "complete",
@@ -93,6 +129,7 @@ export async function POST(request: NextRequest) {
         category_present: true,
         document_type_present: true,
         summary_present: true,
+        patient_summary_substantive: true,
         findings_present: true,
         source_sha256_matches_ocr_text: true,
       },
@@ -111,5 +148,16 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 function sameUuid(value: unknown, expected: string): boolean {
   return (
     typeof value === "string" && value.toLowerCase() === expected.toLowerCase()
+  );
+}
+
+function exactStringArray(
+  value: unknown,
+  expected: readonly string[],
+): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length === expected.length &&
+    value.every((item, index) => item === expected[index])
   );
 }

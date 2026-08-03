@@ -34,6 +34,10 @@ export async function POST(request: NextRequest) {
     "expected_file_size_bytes",
     "expected_processing_status",
     "expected_scan_status",
+    "expected_ocr_page_count",
+    "expected_ocr_min_chars",
+    "expected_ocr_markers",
+    "expected_ocr_provider",
   ]);
   const assessmentId = record?.assessment_id;
   const documentId = record?.document_id;
@@ -47,7 +51,17 @@ export async function POST(request: NextRequest) {
     record?.expected_content_type !== EXPECTED_CONTENT_TYPE ||
     record?.expected_file_size_bytes !== EXPECTED_FILE_SIZE_BYTES ||
     record?.expected_processing_status !== EXPECTED_PROCESSING_STATUS ||
-    record?.expected_scan_status !== EXPECTED_SCAN_STATUS
+    record?.expected_scan_status !== EXPECTED_SCAN_STATUS ||
+    record?.expected_ocr_page_count !==
+      SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.expectedOcrPageCount ||
+    record?.expected_ocr_min_chars !==
+      SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.minimumOcrTextLength ||
+    !exactStringArray(
+      record?.expected_ocr_markers,
+      SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.expectedOcrMarkers,
+    ) ||
+    record?.expected_ocr_provider !==
+      SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.expectedOcrProvider
   ) {
     return jsonNoStore({ detail: "Not found" }, { status: 404 });
   }
@@ -61,6 +75,13 @@ export async function POST(request: NextRequest) {
     expected_file_size_bytes: EXPECTED_FILE_SIZE_BYTES,
     expected_processing_status: EXPECTED_PROCESSING_STATUS,
     expected_scan_status: EXPECTED_SCAN_STATUS,
+    expected_ocr_page_count:
+      SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.expectedOcrPageCount,
+    expected_ocr_min_chars:
+      SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.minimumOcrTextLength,
+    expected_ocr_markers: SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.expectedOcrMarkers,
+    expected_ocr_provider:
+      SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.expectedOcrProvider,
   };
 
   try {
@@ -105,10 +126,12 @@ export async function POST(request: NextRequest) {
       database.content_sha256_matches !== true ||
       database.final_receipt !== true ||
       database.ocr_status !== "complete" ||
+      database.ocr_provider_matches !== true ||
       database.ocr_source_sha256_matches !== true ||
-      database.extracted_text_present !== true ||
+      database.extracted_text_substantive !== true ||
+      database.expected_ocr_markers_present !== true ||
       database.ocr_text_sha256_matches !== true ||
-      database.ocr_page_count_positive !== true ||
+      database.ocr_page_count_matches !== true ||
       object?.promoted !== true ||
       object.receipt_matches !== true ||
       object.content_sha256_matches !== true ||
@@ -130,10 +153,12 @@ export async function POST(request: NextRequest) {
         content_sha256_matches: true,
         final_receipt: true,
         ocr_status: "complete",
+        ocr_provider_matches: true,
         ocr_source_sha256_matches: true,
-        extracted_text_present: true,
+        extracted_text_substantive: true,
+        expected_ocr_markers_present: true,
         ocr_text_sha256_matches: true,
-        ocr_page_count_positive: true,
+        ocr_page_count_matches: true,
       },
       object: {
         promoted: true,
@@ -150,5 +175,16 @@ export async function POST(request: NextRequest) {
 function sameUuid(value: unknown, expected: string): boolean {
   return (
     typeof value === "string" && value.toLowerCase() === expected.toLowerCase()
+  );
+}
+
+function exactStringArray(
+  value: unknown,
+  expected: readonly string[],
+): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length === expected.length &&
+    value.every((item, index) => item === expected[index])
   );
 }

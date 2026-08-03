@@ -1,6 +1,8 @@
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT } from "@/lib/e2e/document-upload-fixture";
+
 const TEST_TOKEN = "test-support-token-with-at-least-32-chars";
 const DOCUMENT_ID = "123e4567-e89b-42d3-a456-426614174000";
 const ASSESSMENT_ID = "223e4567-e89b-42d3-a456-426614174000";
@@ -10,6 +12,14 @@ const BODY = {
   assessment_id: ASSESSMENT_ID,
   document_id: DOCUMENT_ID,
   email: EMAIL,
+  expected_ocr_page_count:
+    SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.expectedOcrPageCount,
+  expected_ocr_min_chars:
+    SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.minimumOcrTextLength,
+  expected_ocr_markers: SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.expectedOcrMarkers,
+  expected_ocr_provider: SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.expectedOcrProvider,
+  expected_summary_min_chars:
+    SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.minimumSummaryLength,
 };
 const FACTS = {
   assessment_id: ASSESSMENT_ID,
@@ -22,7 +32,11 @@ const FACTS = {
   document: {
     scan_status: "clean",
     ocr_status: "complete",
+    ocr_provider_matches: true,
+    extracted_text_substantive: true,
+    expected_ocr_markers_present: true,
     ocr_text_sha256_matches: true,
+    ocr_page_count_matches: true,
   },
   summary: {
     status: "complete",
@@ -31,6 +45,7 @@ const FACTS = {
     category_present: true,
     document_type_present: true,
     summary_present: true,
+    patient_summary_substantive: true,
     findings_present: true,
     source_sha256_matches_ocr_text: true,
   },
@@ -99,6 +114,11 @@ describe("patient web document-analysis-persistence support route", () => {
     { ...BODY, assessment_id: "not-a-uuid" },
     { ...BODY, document_id: "not-a-uuid" },
     { ...BODY, email: "patient@example.com" },
+    { ...BODY, expected_ocr_page_count: 1 },
+    { ...BODY, expected_ocr_min_chars: 1 },
+    { ...BODY, expected_ocr_markers: ["SpineSense"] },
+    { ...BODY, expected_ocr_provider: "azure_document_intelligence_read" },
+    { ...BODY, expected_summary_min_chars: 1 },
   ])("rejects non-exact post-analysis metadata requests: %j", async (body) => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -115,6 +135,24 @@ describe("patient web document-analysis-persistence support route", () => {
         Response.json({
           ...FACTS,
           summary: { ...FACTS.summary, materialized_for_assessment: false },
+        }),
+      ),
+    );
+    const { POST } = await import("./route");
+
+    const response = await POST(makeRequest(BODY));
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "service_unavailable" });
+  });
+
+  it("fails closed when the persisted OCR provider is unproven", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json({
+          ...FACTS,
+          document: { ...FACTS.document, ocr_provider_matches: false },
         }),
       ),
     );

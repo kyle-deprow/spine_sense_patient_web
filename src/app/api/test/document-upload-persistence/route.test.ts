@@ -18,6 +18,12 @@ const BODY = {
   expected_processing_status:
     SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.processingStatus,
   expected_scan_status: SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.scanStatus,
+  expected_ocr_page_count:
+    SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.expectedOcrPageCount,
+  expected_ocr_min_chars:
+    SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.minimumOcrTextLength,
+  expected_ocr_markers: SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.expectedOcrMarkers,
+  expected_ocr_provider: SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT.expectedOcrProvider,
 };
 const DATABASE = {
   patient_document: true,
@@ -29,10 +35,12 @@ const DATABASE = {
   content_sha256_matches: true,
   final_receipt: true,
   ocr_status: "complete",
+  ocr_provider_matches: true,
   ocr_source_sha256_matches: true,
-  extracted_text_present: true,
+  extracted_text_substantive: true,
+  expected_ocr_markers_present: true,
   ocr_text_sha256_matches: true,
-  ocr_page_count_positive: true,
+  ocr_page_count_matches: true,
 };
 const OBJECT = {
   promoted: true,
@@ -113,6 +121,10 @@ describe("patient web document-upload-persistence support route", () => {
     { ...BODY, expected_content_sha256: "0".repeat(64) },
     { ...BODY, expected_file_size_bytes: 68 },
     { ...BODY, expected_processing_status: "processing" },
+    { ...BODY, expected_ocr_page_count: 1 },
+    { ...BODY, expected_ocr_min_chars: 1 },
+    { ...BODY, expected_ocr_markers: ["SpineSense"] },
+    { ...BODY, expected_ocr_provider: "azure_document_intelligence_read" },
   ])("rejects non-exact persistence metadata: %j", async (body) => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -170,6 +182,26 @@ describe("patient web document-upload-persistence support route", () => {
           document_id: DOCUMENT_ID,
           assessment_id: ASSESSMENT_ID,
           database: { ...DATABASE, ocr_source_sha256_matches: false },
+          object: OBJECT,
+        }),
+      ),
+    );
+    const { POST } = await import("./route");
+
+    const response = await POST(makeRequest(BODY));
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "service_unavailable" });
+  });
+
+  it("fails closed when the backend cannot attest the OCR provider", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json({
+          document_id: DOCUMENT_ID,
+          assessment_id: ASSESSMENT_ID,
+          database: { ...DATABASE, ocr_provider_matches: false },
           object: OBJECT,
         }),
       ),
