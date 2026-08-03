@@ -8,9 +8,13 @@ function assertMutationLifecycle(identity: E2ERunIdentity): void {
   const disposableStack =
     process.env.PATIENT_WEB_E2E_STACK_DISPOSABLE === "true";
   const deployedDev = process.env.PATIENT_WEB_E2E_DEPLOYED_DEV === "true";
-  if (disposableStack && deployedDev) {
+  const deployedProd = process.env.PATIENT_WEB_E2E_DEPLOYED_PROD === "true";
+  const enabledModes = [disposableStack, deployedDev, deployedProd].filter(
+    Boolean,
+  ).length;
+  if (enabledModes > 1) {
     throw new Error(
-      "Patient web E2E lifecycle must be either disposable local or retained Azure dev, not both",
+      "Patient web E2E lifecycle must be exactly one of disposable local, retained Azure dev, or retained production",
     );
   }
   if (disposableStack) return;
@@ -52,15 +56,47 @@ function assertMutationLifecycle(identity: E2ERunIdentity): void {
     return;
   }
 
+  if (
+    deployedProd &&
+    process.env.PATIENT_WEB_E2E_RETAIN_SYNTHETIC_RUN === "true"
+  ) {
+    const baseUrl = process.env.PATIENT_WEB_BASE_URL ?? "";
+    let target: URL;
+    try {
+      target = new URL(baseUrl);
+    } catch {
+      throw new Error(
+        "Retained production E2E requires an absolute PATIENT_WEB_BASE_URL",
+      );
+    }
+    if (
+      baseUrl !== "https://app.spinesense.ai/" ||
+      target.protocol !== "https:" ||
+      target.hostname !== "app.spinesense.ai" ||
+      target.port.length > 0 ||
+      target.pathname !== "/" ||
+      target.search.length > 0 ||
+      target.hash.length > 0 ||
+      target.username.length > 0 ||
+      target.password.length > 0
+    ) {
+      throw new Error(
+        "Retained production E2E requires the exact https://app.spinesense.ai/ origin",
+      );
+    }
+    return;
+  }
+
   throw new Error(
-    "Patient web E2E requires a disposable local stack or an explicitly retained Azure dev run",
+    "Patient web E2E requires a disposable local stack or an explicitly retained deployed synthetic run",
   );
 }
 
 /**
  * Guard browser mutation behind either an isolated local stack owned by the
- * root lifecycle or the protected Azure dev workflow's retained-synthetic-data
- * contract. Production and arbitrary remote targets remain fail closed.
+ * root lifecycle or an explicitly authorized deployed environment's
+ * retained-synthetic-data contract. Arbitrary remote targets remain fail
+ * closed.
  */
 export async function withAuthorizedE2eLifecycle<T>(options: {
   identity: E2ERunIdentity;

@@ -378,7 +378,7 @@ describe("canonical full journey support", () => {
     await expect(
       withAuthorizedE2eLifecycle({ identity, action }),
     ).rejects.toThrow(
-      "requires a disposable local stack or an explicitly retained Azure dev run",
+      "requires a disposable local stack or an explicitly retained deployed synthetic run",
     );
     expect(action).not.toHaveBeenCalled();
 
@@ -386,7 +386,7 @@ describe("canonical full journey support", () => {
     await expect(
       withAuthorizedE2eLifecycle({ identity, action }),
     ).rejects.toThrow(
-      "requires a disposable local stack or an explicitly retained Azure dev run",
+      "requires a disposable local stack or an explicitly retained deployed synthetic run",
     );
     expect(action).not.toHaveBeenCalled();
   });
@@ -470,7 +470,7 @@ describe("canonical full journey support", () => {
     await expect(
       withAuthorizedE2eLifecycle({ identity, action }),
     ).rejects.toThrow(
-      "either disposable local or retained Azure dev, not both",
+      "exactly one of disposable local, retained Azure dev, or retained production",
     );
     expect(action).not.toHaveBeenCalled();
   });
@@ -486,9 +486,83 @@ describe("canonical full journey support", () => {
 
     await expect(
       withAuthorizedE2eLifecycle({ identity, action }),
-    ).rejects.toThrow("explicitly retained Azure dev run");
+    ).rejects.toThrow("explicitly retained deployed synthetic run");
     expect(action).not.toHaveBeenCalled();
   });
+
+  it("runs against production only with explicit synthetic-data retention", async () => {
+    const identity = createE2ERunIdentity();
+    const action = vi.fn(async () => "complete");
+    vi.stubEnv("PATIENT_WEB_E2E_DEPLOYED_PROD", "true");
+    vi.stubEnv("PATIENT_WEB_E2E_RETAIN_SYNTHETIC_RUN", "true");
+    vi.stubEnv("PATIENT_WEB_BASE_URL", "https://app.spinesense.ai/");
+
+    await expect(
+      withAuthorizedE2eLifecycle({ identity, action }),
+    ).resolves.toBe("complete");
+    expect(action).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    "http://app.spinesense.ai/",
+    "https://app.spinesense.ai",
+    "https://app.spinesense.ai:443/",
+    "https://app.spinesense.ai:8443/",
+    "https://app.spinesense.ai/path",
+    "https://app.spinesense.ai/?run=true",
+    "https://app.spinesense.ai/#run",
+    "https://operator@app.spinesense.ai/",
+    "https://api.spinesense.ai/",
+    "https://fde-patient-ssai-spine-prod-eastus-a1b2c3.z01.azurefd.net/",
+  ])("rejects retained production target %s", async (baseUrl) => {
+    const identity = createE2ERunIdentity();
+    const action = vi.fn(async () => undefined);
+    vi.stubEnv("PATIENT_WEB_E2E_DEPLOYED_PROD", "true");
+    vi.stubEnv("PATIENT_WEB_E2E_RETAIN_SYNTHETIC_RUN", "true");
+    vi.stubEnv("PATIENT_WEB_BASE_URL", baseUrl);
+
+    await expect(
+      withAuthorizedE2eLifecycle({ identity, action }),
+    ).rejects.toThrow("exact https://app.spinesense.ai/ origin");
+    expect(action).not.toHaveBeenCalled();
+  });
+
+  it("rejects production without the retention acknowledgement", async () => {
+    const identity = createE2ERunIdentity();
+    const action = vi.fn(async () => undefined);
+    vi.stubEnv("PATIENT_WEB_E2E_DEPLOYED_PROD", "true");
+    vi.stubEnv("PATIENT_WEB_BASE_URL", "https://app.spinesense.ai/");
+
+    await expect(
+      withAuthorizedE2eLifecycle({ identity, action }),
+    ).rejects.toThrow("explicitly retained deployed synthetic run");
+    expect(action).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["true", "true", undefined],
+    ["true", undefined, "true"],
+    [undefined, "true", "true"],
+    ["true", "true", "true"],
+  ])(
+    "rejects ambiguous lifecycle modes disposable=%s dev=%s prod=%s",
+    async (disposable, dev, prod) => {
+      const identity = createE2ERunIdentity();
+      const action = vi.fn(async () => undefined);
+      vi.stubEnv("PATIENT_WEB_E2E_STACK_DISPOSABLE", disposable);
+      vi.stubEnv("PATIENT_WEB_E2E_DEPLOYED_DEV", dev);
+      vi.stubEnv("PATIENT_WEB_E2E_DEPLOYED_PROD", prod);
+      vi.stubEnv("PATIENT_WEB_E2E_RETAIN_SYNTHETIC_RUN", "true");
+      vi.stubEnv("PATIENT_WEB_BASE_URL", "https://app.spinesense.ai/");
+
+      await expect(
+        withAuthorizedE2eLifecycle({ identity, action }),
+      ).rejects.toThrow(
+        "exactly one of disposable local, retained Azure dev, or retained production",
+      );
+      expect(action).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects a non-exact identity before mutation", async () => {
     vi.stubEnv("PATIENT_WEB_E2E_STACK_DISPOSABLE", "true");

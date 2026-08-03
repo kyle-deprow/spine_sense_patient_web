@@ -81,6 +81,14 @@ may instead authorize a retained synthetic run with
 HTTPS `fde-patient-...-dev-....azurefd.net` endpoint emitted by the dev
 deployment, retains its UUID-tagged synthetic records under the dev
 environment's policies, and rejects production-shaped Front Door endpoints.
+An administrator may explicitly authorize the same retained-synthetic lifecycle
+against production with `PATIENT_WEB_E2E_DEPLOYED_PROD=true` and
+`PATIENT_WEB_E2E_RETAIN_SYNTHETIC_RUN=true`. Production authorization accepts
+only the exact root `https://app.spinesense.ai/` URL: alternate hosts, direct
+Front Door endpoints, ports, paths, queries, fragments, and URL credentials are
+rejected. Disposable, dev, and production lifecycle markers are mutually
+exclusive, and every mode still requires the exact UUID-backed synthetic run
+identity.
 
 Performance behavior is explicit through `PATIENT_WEB_E2E_PERFORMANCE_MODE`:
 `observe` is the intentional default, `enforce` fails on configured budgets,
@@ -107,7 +115,7 @@ Focused checkpoint scopes retain their shorter independent timeout.
 
 FHIR route behavior, browser security headers, session handling, and other
 functional contracts remain covered by the package's Vitest tests and the
-backend's pytest suite. Production journey execution is blocked because
-retention-safe exact-run cleanup is unavailable. Emergency support disablement
-and verify-disabled checks remain owned by the orchestration production
-runner.
+backend's pytest suite. Production journey execution is an explicit
+administrator-authorized retained-synthetic run because retention-safe
+exact-run cleanup is unavailable. Emergency support disablement and
+verify-disabled checks remain owned by the orchestration production runner.
