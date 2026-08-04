@@ -218,6 +218,75 @@ describe('patient app export route', () => {
     expect(await response.text()).toBe('<main>Patient app</main>')
   })
 
+  it('gives the app shell a share card and keeps it out of the search index', async () => {
+    await makeExportFile(
+      'index.html',
+      '<!doctype html><html><head><title>SpineSense</title></head><body></body></html>',
+    )
+
+    const response = await GET(
+      new NextRequest('http://localhost/', {
+        headers: { 'x-nonce': 'test-nonce' },
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    const html = await response.text()
+
+    // Without a preview card every shared link, including the paid ad URLs this
+    // domain is the landing page for, renders as a bare URL.
+    expect(html).toContain('<meta property="og:title" content="SpineSense: Understand Your Back')
+    expect(html).toContain('<meta property="og:image" content="https://spinesense.ai/opengraph-image"')
+    expect(html).toContain('<meta property="og:image:width" content="1200"')
+    expect(html).toContain('<meta name="twitter:card" content="summary_large_image"')
+    expect(html).toMatch(/<meta name="description" content="Describe your back or neck pain/)
+
+    // The stock Expo title is replaced, not appended to.
+    expect(html.match(/<title>/g)).toHaveLength(1)
+    expect(html).toContain('<title>SpineSense: Understand Your Back or Neck Pain Before Your Appointment</title>')
+
+    // The catch-all answers /dashboard and /results with these same bytes, so
+    // the shell must never be indexable. noindex is not paired with a canonical:
+    // they are conflicting signals and only noindex removes a URL.
+    expect(html).toContain('<meta data-patient-web-seo name="robots" content="noindex, follow"')
+    expect(html).not.toContain('rel="canonical"')
+    expect(response.headers.get('X-Robots-Tag')).toBe('noindex, follow')
+  })
+
+  it('serves the same noindex shell for authenticated-looking paths', async () => {
+    await makeExportFile(
+      'index.html',
+      '<!doctype html><html><head><title>SpineSense</title></head><body></body></html>',
+    )
+
+    const response = await GET(new NextRequest('http://localhost/results'))
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('X-Robots-Tag')).toBe('noindex, follow')
+    expect(await response.text()).toContain('content="noindex, follow"')
+  })
+
+  it('does not attach robots directives to static assets', async () => {
+    await makeExportFile('Satoshi-Bold.otf', new Uint8Array([0, 1, 2, 3]))
+
+    const response = await GET(new NextRequest('http://localhost/Satoshi-Bold.otf'))
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('X-Robots-Tag')).toBeNull()
+  })
+
+  it('does not duplicate the SEO block if it is already present', async () => {
+    await makeExportFile(
+      'index.html',
+      '<!doctype html><html><head><meta data-patient-web-seo name="robots" content="noindex, follow" /></head><body></body></html>',
+    )
+
+    const response = await GET(new NextRequest('http://localhost/'))
+
+    expect(response.status).toBe(200)
+    expect((await response.text()).match(/data-patient-web-seo/g)).toHaveLength(1)
+  })
+
   it('does not duplicate an existing web compatibility CSS block', async () => {
     await makeExportFile(
       'index.html',

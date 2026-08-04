@@ -116,6 +116,9 @@ async function servePatientApp(request: NextRequest, method: 'GET' | 'HEAD') {
     headers: noStoreHeaders(match.contentType),
   })
   if (match.contentType.startsWith('text/html')) {
+    // Belt and braces with the <meta name="robots"> tag above: a crawler that
+    // reads only headers still learns the shell is not for indexing.
+    response.headers.set('X-Robots-Tag', 'noindex, follow')
     issueCsrfCookie(response)
   }
   return response
@@ -154,6 +157,69 @@ function rewriteViewportMeta(html: string): string {
     return html.replace(existing, VIEWPORT_META)
   }
   return html.replace('</head>', `${VIEWPORT_META}</head>`)
+}
+
+const MARKETING_SITE_URL = 'https://spinesense.ai'
+const APP_ORIGIN = 'https://app.spinesense.ai'
+
+const SEO_TITLE = 'SpineSense: Understand Your Back or Neck Pain Before Your Appointment'
+const SEO_DESCRIPTION =
+  'Describe your back or neck pain, add your imaging reports, and get a plain-language summary to take to your appointment. Built by spine surgeons.'
+/**
+ * Served by the marketing site so one brand image covers both surfaces. Verified
+ * to resolve without the build hash Next appends to its own references.
+ */
+const SEO_IMAGE = `${MARKETING_SITE_URL}/opengraph-image`
+
+const SEO_META = [
+  '<meta data-patient-web-seo name="robots" content="noindex, follow" />',
+  `<meta name="description" content="${SEO_DESCRIPTION}" />`,
+  `<meta property="og:title" content="${SEO_TITLE}" />`,
+  `<meta property="og:description" content="${SEO_DESCRIPTION}" />`,
+  `<meta property="og:url" content="${APP_ORIGIN}/" />`,
+  '<meta property="og:type" content="website" />',
+  '<meta property="og:site_name" content="SpineSense" />',
+  '<meta property="og:locale" content="en_US" />',
+  `<meta property="og:image" content="${SEO_IMAGE}" />`,
+  '<meta property="og:image:width" content="1200" />',
+  '<meta property="og:image:height" content="630" />',
+  '<meta property="og:image:alt" content="SpineSense, a free spine assessment built by spine surgeons" />',
+  '<meta name="twitter:card" content="summary_large_image" />',
+  `<meta name="twitter:title" content="${SEO_TITLE}" />`,
+  `<meta name="twitter:description" content="${SEO_DESCRIPTION}" />`,
+  `<meta name="twitter:image" content="${SEO_IMAGE}" />`,
+].join('')
+
+/**
+ * Search and social metadata for the app shell. The two halves do unrelated
+ * jobs and neither is an SEO play: this domain renders client-side, so every
+ * crawler receives an empty shell, and the indexable content lives on the
+ * marketing site.
+ *
+ * `noindex` keeps that shell out of search results. `findFile` falls back to
+ * `index.html` for any extensionless path, so the same bytes answer /dashboard,
+ * /results and /settings with a 200; without this directive Google is invited to
+ * index a set of identical blank pages at those URLs. It is deliberately not
+ * paired with a canonical, because noindex and canonical are conflicting
+ * signals and only noindex actually removes a URL.
+ *
+ * The OpenGraph and Twitter tags are unaffected by `noindex`, since social
+ * scrapers are not search indexers. Without them every shared link renders as a
+ * bare URL with no preview card, and this domain is the landing page paid ads
+ * point at.
+ */
+function injectSeoMeta(html: string): string {
+  if (!html.includes('</head>') || html.includes('data-patient-web-seo')) {
+    return html
+  }
+
+  const titleTag = `<title>${SEO_TITLE}</title>`
+  const existingTitle = /<title>[\s\S]*?<\/title>/i
+  const withTitle = existingTitle.test(html)
+    ? html.replace(existingTitle, titleTag)
+    : html.replace('</head>', `${titleTag}</head>`)
+
+  return withTitle.replace('</head>', `${SEO_META}</head>`)
 }
 
 const WEB_COMPATIBILITY_STYLES = `<style data-patient-web-compat>
@@ -379,7 +445,7 @@ async function readResponseBody(
     return body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer
   }
 
-  const html = injectWebCompatibilityStyles(rewriteViewportMeta(body.toString('utf8')))
+  const html = injectSeoMeta(injectWebCompatibilityStyles(rewriteViewportMeta(body.toString('utf8'))))
   const nonce = request.headers.get('x-nonce')
   if (!nonce) return html
 
