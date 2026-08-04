@@ -38,6 +38,7 @@ describe("unsafe browser route origin-policy inventory", () => {
     expect(unsafeRoutes).toEqual(
       [
         ...PROTECTED_UNSAFE_ROUTES,
+        "src/app/api/landing/events/route.ts",
         "src/app/api/proxy/[...path]/route.ts",
         "src/app/api/test/document-scan-result/route.ts",
         "src/app/api/test/document-analysis-persistence/route.ts",
@@ -48,6 +49,20 @@ describe("unsafe browser route origin-policy inventory", () => {
         "src/app/api/test/results-fixture/route.ts",
       ].sort(),
     );
+  });
+
+  // The landing beacon is the one unsafe route that deliberately does not use
+  // the CSRF-bearing guard: sendBeacon can set neither the CSRF header nor an
+  // Origin header. It is anonymous, pre-auth and stores only counters, so a
+  // same-origin check is the proportionate control — but it must still be a
+  // check, which is what this asserts.
+  it("gates the anonymous landing beacon on same-origin rather than CSRF", () => {
+    const source = readFileSync(
+      resolve(process.cwd(), "src/app/api/landing/events/route.ts"),
+      "utf8",
+    );
+    expect(source).toContain("validateLandingBeaconOrigin(request)");
+    expect(source).not.toContain("validateAuthMutation");
   });
 
   it.each([

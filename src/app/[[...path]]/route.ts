@@ -266,6 +266,109 @@ function injectStyleNonceBootstrap(html: string, nonce: string): string {
   return html.replace('</head>', `${script}</head>`)
 }
 
+/**
+ * Anonymous landing-funnel tracker.
+ *
+ * Injected here rather than built into the app bundle for two reasons. The
+ * campaign tag arrives as `?c=` on the very first request and the app's root
+ * route redirects to `/welcome` before any screen mounts, which drops the query
+ * string — a script in `<head>` reads it while it still exists. And measuring
+ * a marketing surface should not require a patient-app release.
+ *
+ * It observes the DOM through the app's existing `data-testid` attributes and
+ * mutates nothing. Everything is wrapped so that a selector this file gets
+ * wrong degrades to "no data", never to a broken landing page — the page
+ * earning the ad spend must not be able to fail because of its own
+ * instrumentation.
+ *
+ * See `@/lib/server/landing-analytics` for the privacy properties: no cookie,
+ * no durable storage, no identifier that outlives the tab, no third party.
+ */
+function injectLandingTracker(html: string, nonce: string): string {
+  if (!html.includes('</head>') || html.includes('data-patient-web-landing')) {
+    return html
+  }
+
+  const tracker = `<script data-patient-web-landing nonce="${nonce}">(function(){
+try{
+var ENDPOINT='/api/landing/events';
+var params=new URLSearchParams(location.search||'');
+var campaign=params.get('c')||params.get('utm_content')||params.get('utm_campaign')||'';
+var visit=(crypto&&crypto.randomUUID)?crypto.randomUUID():String(Date.now())+'-'+Math.random().toString(36).slice(2);
+var w=window.innerWidth||0;
+var device=w>0&&w<768?'phone':(w<1024?'tablet':'desktop');
+var queue=[],sent={},timer=null;
+
+function flush(){
+  if(!queue.length)return;
+  var body=JSON.stringify({v:visit,c:campaign,d:device,e:queue});
+  queue=[];
+  try{
+    var blob=new Blob([body],{type:'application/json'});
+    if(!(navigator.sendBeacon&&navigator.sendBeacon(ENDPOINT,blob))){
+      fetch(ENDPOINT,{method:'POST',body:body,keepalive:true,headers:{'Content-Type':'application/json'}}).catch(function(){});
+    }
+  }catch(e){}
+}
+// Once per visit per event: these are funnel milestones, not interaction counts.
+function mark(name){
+  if(sent[name])return;
+  sent[name]=1;queue.push(name);
+  if(timer)clearTimeout(timer);
+  timer=setTimeout(flush,600);
+}
+
+mark('landing_view');
+
+document.addEventListener('click',function(ev){
+  try{
+    var el=ev.target&&ev.target.closest?ev.target.closest('[data-testid]'):null;
+    while(el){
+      var id=el.getAttribute('data-testid');
+      if(id==='cookie-consent-accept-all'){mark('consent_accept');break;}
+      if(id==='cookie-consent-decline'){mark('consent_decline');break;}
+      if(id==='cookie-consent-declined-back'){mark('consent_deadend_back');break;}
+      if(id==='welcome-get-started'){mark('cta_start');flush();break;}
+      if(id==='welcome-login'){mark('cta_signin');flush();break;}
+      el=el.parentElement&&el.parentElement.closest?el.parentElement.closest('[data-testid]'):null;
+    }
+  }catch(e){}
+},true);
+
+var scroller=null;
+function onScroll(){
+  try{
+    if(!scroller)return;
+    var span=scroller.scrollHeight-scroller.clientHeight;
+    if(span<=0)return;
+    var pct=scroller.scrollTop/span;
+    for(var i=1;i<=5;i++){if(pct>=i*0.2-0.02)mark('scroll_'+i);}
+  }catch(e){}
+}
+
+// The app mounts asynchronously and swaps screens client-side, so both the
+// consent sheet and the scroller appear well after this script runs.
+var seenRegister=false;
+var observer=new MutationObserver(function(){
+  try{
+    if(document.querySelector('[data-testid="cookie-consent-modal"]'))mark('consent_shown');
+    if(document.querySelector('[data-testid="cookie-consent-declined"]'))mark('consent_deadend');
+    var s=document.querySelector('[data-testid="welcome-scroll"]');
+    if(s&&s!==scroller){scroller=s;s.addEventListener('scroll',onScroll,{passive:true});}
+    if(!seenRegister&&location.pathname.indexOf('register')>=0){seenRegister=true;mark('register_view');flush();}
+  }catch(e){}
+});
+if(document.body){observer.observe(document.body,{childList:true,subtree:true});}
+else{document.addEventListener('DOMContentLoaded',function(){observer.observe(document.body,{childList:true,subtree:true});});}
+
+addEventListener('pagehide',flush);
+addEventListener('visibilitychange',function(){if(document.visibilityState==='hidden')flush();});
+}catch(e){}
+})();</script>`
+
+  return html.replace('</head>', `${tracker}</head>`)
+}
+
 async function readResponseBody(
   filePath: string,
   contentType: string,
@@ -280,7 +383,7 @@ async function readResponseBody(
   const nonce = request.headers.get('x-nonce')
   if (!nonce) return html
 
-  return injectStyleNonceBootstrap(html, nonce)
+  return injectLandingTracker(injectStyleNonceBootstrap(html, nonce), nonce)
     .replaceAll(/<script(?![^>]*\bnonce=)/g, `<script nonce="${nonce}"`)
     .replaceAll(/<style(?![^>]*\bnonce=)/g, `<style nonce="${nonce}"`)
 }
