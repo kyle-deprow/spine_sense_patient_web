@@ -3,8 +3,6 @@ import { rejectPlaywrightUiMode } from "./e2e/support/artifactPolicy";
 
 rejectPlaywrightUiMode(process.argv);
 
-import { acceptedConsentStorageState } from "./e2e/fixtures/cookieConsent";
-
 const baseURL = process.env.PATIENT_WEB_BASE_URL ?? "http://127.0.0.1:43101";
 const outputDir =
   process.env.PATIENT_WEB_E2E_OUTPUT_DIR ??
@@ -29,10 +27,9 @@ export default defineConfig({
     trace: "off",
     video: "off",
     screenshot: "off",
-    // Arrive as a patient who has already answered the cookie modal, so specs
-    // about everything else are not each re-testing the gate.
-    // `cookie-consent.spec.ts` opts out and walks it for real.
-    storageState: acceptedConsentStorageState(baseURL),
+    // No seeded consent state: the cookie gate was removed, so every spec now
+    // arrives the way a first-time patient does. `no-cookie-gate.spec.ts`
+    // asserts that arrival is unobstructed.
   },
   projects: [
     {
