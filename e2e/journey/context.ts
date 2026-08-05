@@ -13,7 +13,12 @@ import { performance } from "node:perf_hooks";
 
 import { SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT } from "../../src/lib/e2e/document-upload-fixture";
 import { fullAssessmentScenario } from "../fixtures/fullAssessmentScenario";
-import { safeRequestId, sanitizeDiagnostic } from "../support/diagnostics";
+import {
+  classifyRequestFailure,
+  safeErrorName,
+  safeRequestId,
+  sanitizeDiagnostic,
+} from "../support/diagnostics";
 import {
   isPerformanceProfilingEnabled,
   readPerformanceMode,
@@ -468,8 +473,10 @@ export function installPhiSafeDiagnostics(page: Page) {
     if (!["error", "warning"].includes(message.type())) return;
     console.log("[browser-console] error_code=browser_console_error");
   });
-  page.on("pageerror", () =>
-    console.log("[browser-page] error_code=browser_page_error"),
+  page.on("pageerror", (error) =>
+    console.log(
+      `[browser-page] error_code=browser_page_error error_name=${safeErrorName(error.name)}`,
+    ),
   );
   page.on("response", (response) => {
     const url = new URL(response.url());
@@ -499,9 +506,8 @@ export function installPhiSafeDiagnostics(page: Page) {
   });
   page.on("requestfailed", (request) => {
     const url = new URL(request.url());
-    if (!isConfiguredStorageOrigin(url)) return;
     console.log(
-      `[storage-request-failed] method=${request.method()} route=${sanitizeDiagnostic(url.pathname)} failure_code=browser_request_failed`,
+      `[request-failed] method=${request.method()} resource_type=${request.resourceType()} route=${sanitizeDiagnostic(url.pathname)} failure_code=${classifyRequestFailure(request.failure()?.errorText)}`,
     );
   });
 }
