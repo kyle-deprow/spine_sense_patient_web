@@ -1,6 +1,6 @@
 # Patient Web Playwright Scopes
 
-The package defaults to the seven-scope checkpoint suite for
+The package defaults to the ten-scope checkpoint suite for
 the exported patient app served through the patient-web BFF. Run them through
 the root Make lifecycle so the API, BFF, and synthetic support state are
 configured consistently:
@@ -27,8 +27,9 @@ non-exact gate before browser execution.
 The package runner resolves approved manifest scopes to exact spec arguments;
 the Playwright configuration does not use title filtering as a scope API.
 Without an explicit scope, the runner selects exactly `auth`,
-`consent-onboarding`, `documents`, `screening`, `adaptive`, `analysis`, and
-`results-report` in manifest order. The specs own their checkpoint setup and
+`consent-onboarding`, `onboarding-intro-idempotence`, `onboarding-resume`,
+`onboarding-draft-restore`, `documents`, `screening`, `adaptive`, `analysis`,
+and `results-report` in manifest order. The specs own their checkpoint setup and
 are independent; browser execution order is not part of the contract.
 Canonical Make runs allocate a unique runtime directory, Compose project,
 claimed host-port set, PID/log/env files, staged standalone build, and

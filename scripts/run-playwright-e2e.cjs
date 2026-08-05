@@ -20,19 +20,14 @@ const APPROVED_SCOPES = [
   "legacy-journey",
   "auth",
   "consent-onboarding",
+  "onboarding-intro-idempotence",
   "onboarding-resume",
   "onboarding-draft-restore",
-  "onboarding-intro-idempotence",
   "documents",
   "screening",
   "adaptive",
   "analysis",
   "results-report",
-];
-const OPT_IN_SCOPES = [
-  "onboarding-resume",
-  "onboarding-draft-restore",
-  "onboarding-intro-idempotence",
 ];
 const START_CHECKPOINTS = new Set([
   "fresh",
@@ -79,13 +74,10 @@ function assertManifest(manifest) {
     typeof manifest.scopes !== "object" ||
     JSON.stringify(manifest.default_scopes) !==
       JSON.stringify(
-        APPROVED_SCOPES.filter(
-          (scope) =>
-            scope !== "legacy-journey" && !OPT_IN_SCOPES.includes(scope),
-        ),
+        APPROVED_SCOPES.filter((scope) => scope !== "legacy-journey"),
       ) ||
-    JSON.stringify(Object.keys(manifest.scopes)) !==
-      JSON.stringify(APPROVED_SCOPES)
+    JSON.stringify(Object.keys(manifest.scopes).sort()) !==
+      JSON.stringify([...APPROVED_SCOPES].sort())
   ) {
     throw new Error("e2e/scopes.json is not a supported scope manifest");
   }
