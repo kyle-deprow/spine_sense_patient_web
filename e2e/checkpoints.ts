@@ -1106,6 +1106,21 @@ export async function prepareOnboarding(
       payload,
     );
   }
+
+  const narrative = requireString(
+    fullAssessmentScenario.onboarding.chiefComplaint,
+    "chief complaint narrative for pathway routing",
+  );
+  const routePayload = { narrative };
+  const routePath = "/api/proxy/api/v1/patients/me/intake/route";
+  assertExactIntakeRequestContract(
+    "POST",
+    routePath,
+    routePayload,
+    fullAssessmentScenario,
+  );
+  await bffJson(context, "POST", routePath, routePayload);
+  recordQuestionnaireMutation(context, "POST", routePath, routePayload);
 }
 
 export async function completeIntake(context: JourneyContext): Promise<void> {
