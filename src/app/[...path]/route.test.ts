@@ -5,7 +5,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 
-const { GET } = await import('@/app/[[...path]]/route')
+const { GET } = await import('@/app/[...path]/route')
 
 let exportDir: string | undefined
 

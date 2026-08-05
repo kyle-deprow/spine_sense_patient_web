@@ -3,6 +3,7 @@ import path from 'node:path'
 import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
 import { issueCsrfCookie } from '@/lib/server/auth'
+import { APP_ORIGIN, MARKETING_SITE_URL } from '@/lib/site'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -158,9 +159,6 @@ function rewriteViewportMeta(html: string): string {
   }
   return html.replace('</head>', `${VIEWPORT_META}</head>`)
 }
-
-const MARKETING_SITE_URL = 'https://spinesense.ai'
-const APP_ORIGIN = 'https://app.spinesense.ai'
 
 const SEO_TITLE = 'SpineSense: Understand Your Back or Neck Pain Before Your Appointment'
 const SEO_DESCRIPTION =

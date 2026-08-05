@@ -104,8 +104,16 @@ export function middleware(request: NextRequest) {
   }
 
   const nonce = crypto.randomUUID()
+  const csp = buildCspHeaderForPath(nonce, request.nextUrl.pathname)
   const requestHeaders = new Headers(request.headers)
   requestHeaders.set('x-nonce', nonce)
+  // Also on the *request*, which is how Next itself learns the nonce: it reads
+  // this header and stamps its own inline scripts with it. Without this, the
+  // first genuine Next page in this app (the landing page at `/`) renders its
+  // HTML fine but has its inline RSC payload blocked by our own CSP, so it
+  // never hydrates. The catch-all route handler is unaffected either way --
+  // it builds its HTML by hand and applies the nonce from `x-nonce` itself.
+  requestHeaders.set('Content-Security-Policy', csp)
 
   const response = NextResponse.next({
     request: {

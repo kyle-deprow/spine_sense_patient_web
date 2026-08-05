@@ -1,0 +1,261 @@
+/*
+ * Styles for the landing page at `/`.
+ *
+ * A CSS module rather than additions to globals.css: globals.css is loaded by
+ * every route and its class names (.shell, .topbar, .main) are create-next-app
+ * scaffold that nothing else uses. Keeping this scoped means the landing page
+ * cannot restyle the app shell by accident, which matters because the shell is
+ * an Expo export whose class names we do not control.
+ *
+ * Palette matches the marketing site's tokens so the two surfaces do not look
+ * like different products: navy-900 #04101E, navy-800 #071F3B, teal-400
+ * #2ABFBF, warm-50 #F7F8FA, body text #344054.
+ */
+
+.page {
+  --navy-900: #04101e;
+  --navy-800: #071f3b;
+  --teal-400: #2abfbf;
+  --teal-500: #22a6a6;
+  --warm-50: #f7f8fa;
+  --line: #d9e1ea;
+  --ink: #344054;
+  --ink-soft: #667085;
+
+  margin: 0 auto;
+  max-width: 100%;
+  background: #ffffff;
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.hero {
+  background: var(--navy-900);
+  color: #ffffff;
+  padding: 72px 24px 64px;
+  text-align: center;
+}
+
+.eyebrow {
+  margin: 0 0 16px;
+  color: var(--teal-400);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.h1 {
+  margin: 0 auto 20px;
+  max-width: 18ch;
+  font-size: clamp(2rem, 5vw, 3.1rem);
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+
+.lede {
+  margin: 0 auto 32px;
+  max-width: 60ch;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 1.06rem;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+}
+
+.primary,
+.secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  padding: 14px 28px;
+  font-size: 1rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.primary {
+  background: var(--teal-400);
+  color: #ffffff;
+}
+
+.primary:hover {
+  background: var(--teal-500);
+}
+
+/*
+ * Default to the light-background treatment. The hero overrides it below.
+ * The other order round is what shipped first and it made the closing
+ * section's secondary button white text on a white background -- invisible,
+ * and the only way to reach the condition library from this page.
+ */
+.secondary {
+  border: 1px solid var(--line);
+  color: var(--navy-800);
+}
+
+.secondary:hover {
+  border-color: var(--navy-800);
+}
+
+.hero .secondary {
+  border-color: rgba(255, 255, 255, 0.28);
+  color: #ffffff;
+}
+
+.hero .secondary:hover {
+  border-color: rgba(255, 255, 255, 0.6);
+}
+
+.note {
+  margin: 28px auto 0;
+  max-width: 52ch;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.86rem;
+}
+
+.section {
+  width: min(100%, 880px);
+  margin: 0 auto;
+  padding: 64px 24px 8px;
+}
+
+.h2 {
+  margin: 0 0 28px;
+  color: var(--navy-800);
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.h3 {
+  margin: 0 0 8px;
+  color: var(--navy-900);
+  font-size: 1.05rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.body,
+.prose {
+  margin: 0 0 16px;
+  color: var(--ink-soft);
+}
+
+.prose {
+  max-width: 68ch;
+  color: var(--ink);
+}
+
+.steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 20px;
+}
+
+.step {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 18px;
+  align-items: start;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--warm-50);
+  padding: 22px 24px;
+}
+
+.stepNum {
+  color: var(--teal-500);
+  font-size: 0.9rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  padding-top: 2px;
+}
+
+.grid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.card {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 22px 24px;
+}
+
+.notList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+
+.notItem {
+  border-left: 3px solid var(--line);
+  padding: 4px 0 4px 16px;
+  color: var(--ink-soft);
+}
+
+.closer {
+  width: min(100%, 880px);
+  margin: 56px auto 0;
+  padding: 48px 24px;
+  text-align: center;
+}
+
+.closer .actions {
+  margin-top: 24px;
+}
+
+.footer {
+  border-top: 1px solid var(--line);
+  margin-top: 32px;
+  padding: 32px 24px 56px;
+  color: var(--ink-soft);
+  font-size: 0.86rem;
+  text-align: center;
+}
+
+.footer p {
+  margin: 0 auto 14px;
+  max-width: 62ch;
+}
+
+.footerLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  justify-content: center;
+}
+
+.footerLinks a {
+  color: var(--ink-soft);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.footerLinks a:hover {
+  color: var(--navy-800);
+}
+
+@media (min-width: 720px) {
+  .hero {
+    padding: 104px 24px 88px;
+  }
+
+  .section {
+    padding-top: 80px;
+  }
+}
