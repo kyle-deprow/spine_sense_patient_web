@@ -1795,12 +1795,46 @@ export async function expectPatientWebCheckpointReady(
 
 export async function waitForAdaptiveReadyUi(
   page: JourneyContext["page"],
-  timeout = 120_000,
+  // ADAPTIVE_SELECTION is an INTERACTIVE-class LLM call (resilience_config.py):
+  // max_retries=2, attempt_timeout_s=120, total_timeout_s=240 -- a single
+  // legitimate backend cycle can take up to 240s on its own, before any
+  // client-side retry click here starts a fresh cycle. 120s never gave that
+  // budget a chance to be used.
+  timeout = 420_000,
 ): Promise<void> {
-  await waitForAnyVisibleTestId(
-    page,
-    ["adaptive-loading-state", "adaptive-screen"],
-    timeout,
+  const deadline = Date.now() + timeout;
+  const maxRetryAttempts = 3;
+  let retryAttempts = 0;
+
+  while (Date.now() < deadline) {
+    const state = await waitForAnyVisibleTestId(
+      page,
+      ["adaptive-loading-state", "adaptive-screen", "adaptive-error-state"],
+      Math.max(1, deadline - Date.now()),
+    );
+    // This checkpoint intentionally accepts loading as proof of pathway entry.
+    if (state === "adaptive-loading-state" || state === "adaptive-screen") {
+      return;
+    }
+
+    retryAttempts += 1;
+    if (retryAttempts > maxRetryAttempts) {
+      throw new Error(
+        `Adaptive checkpoint remained in adaptive-error-state after ${maxRetryAttempts} retry attempts`,
+      );
+    }
+
+    const retry = page.getByTestId("adaptive-retry");
+    await expect(retry).toBeVisible({
+      timeout: Math.max(1, Math.min(30_000, deadline - Date.now())),
+    });
+    await retry.click({
+      timeout: Math.max(1, Math.min(30_000, deadline - Date.now())),
+    });
+  }
+
+  throw new Error(
+    "Adaptive checkpoint did not reach a recognized loading or screen state before the deadline",
   );
 }
 

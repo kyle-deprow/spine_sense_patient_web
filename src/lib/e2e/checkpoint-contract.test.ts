@@ -1282,6 +1282,9 @@ describe("patient-web checkpoint contract", () => {
               completedSteps.push(path.split("/").at(-1) ?? "");
               return apiResponse(200, {});
             }
+            if (options.method === "POST" && path.endsWith("/intake/route")) {
+              return apiResponse(200, { pathway: "screening" });
+            }
             throw new Error(`unexpected ${options.method} ${path}`);
           },
         },
@@ -1299,6 +1302,7 @@ describe("patient-web checkpoint contract", () => {
       "GET /api/proxy/api/v1/patients/me/intake/story",
       "PUT /api/proxy/api/v1/patients/me/intake/steps/chief-complaint",
       "PUT /api/proxy/api/v1/patients/me/intake/steps/treatment-history",
+      "POST /api/proxy/api/v1/patients/me/intake/route",
     ]);
     expect(calls[0]?.data).toEqual({
       date_of_birth: "1988-04-22",
@@ -1360,6 +1364,9 @@ describe("patient-web checkpoint contract", () => {
               if (options.method === "PUT" && path.includes("/intake/steps/")) {
                 completedSteps.add(path.split("/").at(-1) ?? "");
                 return apiResponse(200, {});
+              }
+              if (options.method === "POST" && path.endsWith("/intake/route")) {
+                return apiResponse(200, { pathway: "screening" });
               }
               throw new Error(`unexpected ${options.method} ${path}`);
             },
