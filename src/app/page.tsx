@@ -1,15 +1,7 @@
-import type { Metadata } from 'next'
-import { cookies } from 'next/headers'
-import { redirect } from 'next/navigation'
+import { MARKETING_SITE_URL } from '@/lib/site'
 
-import { COOKIE_NAMES } from '@/lib/auth/cookies'
-import {
-  APP_ENTRY_PATH,
-  APP_ORIGIN,
-  APP_SIGNIN_PATH,
-  MARKETING_SITE_URL,
-} from '@/lib/site'
-
+import { buildLandingLinks, landingMetadata } from './landing-page-config'
+import RootLandingAnalytics from './root-landing-analytics'
 import styles from './page.module.css'
 
 /**
@@ -38,24 +30,7 @@ import styles from './page.module.css'
  * not FDA-cleared, and no wording here may imply otherwise.
  */
 
-const TITLE = 'SpineSense: How the Free Spine Assessment Works'
-const DESCRIPTION =
-  'SpineSense turns your own description of your back or neck pain, plus any imaging reports you have, into a plain-language summary for your appointment. Free, and built by spine surgeons.'
-
-export const metadata: Metadata = {
-  title: TITLE,
-  description: DESCRIPTION,
-  alternates: { canonical: APP_ORIGIN + '/' },
-  openGraph: {
-    title: TITLE,
-    description: DESCRIPTION,
-    url: APP_ORIGIN + '/',
-    siteName: 'SpineSense',
-    type: 'website',
-    locale: 'en_US',
-  },
-  twitter: { card: 'summary_large_image', title: TITLE, description: DESCRIPTION },
-}
+export const metadata = landingMetadata
 
 /* ------------------------------------------------------------------ */
 
@@ -116,39 +91,16 @@ const NOT_LIST = [
  * app's landing tracker reads them once the shell boots. This page now sits in
  * front of that, so anything it drops is attribution nobody gets back.
  */
-function withQuery(path: string, query: string): string {
-  return query.length > 0 ? `${path}?${query}` : path
-}
-
 export default async function LandingPage({
   searchParams,
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
-  // A returning visitor should land in the app, not on marketing copy. This
-  // checks only for the presence of a session cookie rather than validating it
-  // against the backend: the check is on the hot path of every cold visit, and
-  // a stale cookie costs nothing here because /welcome re-checks properly. It
-  // deliberately does not decide *where* in the app they belong -- that is the
-  // app's own routing, and duplicating it server-side would give us two places
-  // that have to agree about what "signed in" means.
-  const jar = await cookies()
-  const hasSession =
-    jar.has(COOKIE_NAMES.access) || jar.has(COOKIE_NAMES.refresh)
-
-  const params = new URLSearchParams()
-  for (const [key, value] of Object.entries(await searchParams)) {
-    if (typeof value === 'string') params.set(key, value)
-    else if (Array.isArray(value) && value[0] !== undefined) params.set(key, value[0])
-  }
-  const query = params.toString()
-
-  if (hasSession) redirect(withQuery(APP_ENTRY_PATH, query))
-
-  const startHref = withQuery(APP_ENTRY_PATH, query)
+  const { startHref, signInHref } = buildLandingLinks(await searchParams)
 
   return (
     <main className={styles.page}>
+      <RootLandingAnalytics />
       <section className={styles.hero}>
         <p className={styles.eyebrow}>Free for patients</p>
         <h1 className={styles.h1}>Understand your back or neck pain before your appointment</h1>
@@ -158,10 +110,14 @@ export default async function LandingPage({
           plain-language summary of what they describe — and what to ask about.
         </p>
         <div className={styles.actions}>
-          <a className={styles.primary} href={startHref}>
+          <a className={styles.primary} href={startHref} data-root-landing-event="root_cta_start">
             Start the free assessment
           </a>
-          <a className={styles.secondary} href={APP_SIGNIN_PATH}>
+          <a
+            className={styles.secondary}
+            href={signInHref}
+            data-root-landing-event="root_cta_signin"
+          >
             Sign in
           </a>
         </div>
@@ -234,7 +190,7 @@ export default async function LandingPage({
           and procedure, and needs no account.
         </p>
         <div className={styles.actions}>
-          <a className={styles.primary} href={startHref}>
+          <a className={styles.primary} href={startHref} data-root-landing-event="root_cta_start">
             Start the free assessment
           </a>
           <a className={styles.secondary} href={`${MARKETING_SITE_URL}/conditions`}>

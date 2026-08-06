@@ -41,7 +41,9 @@ export function buildCspHeader(nonce: string, options: CspOptions = {}): string 
 
 export function buildCspHeaderForPath(nonce: string, _pathname: string): string {
   return buildCspHeader(nonce, {
-    requireTrustedTypes: !isPatientAppShellPath(_pathname),
+    // `/` is a genuine Next page. All other extensionless paths are served by
+    // the Expo catch-all and retain its compatibility policy.
+    requireTrustedTypes: _pathname === '/' || !isPatientAppShellPath(_pathname),
   })
 }
 
