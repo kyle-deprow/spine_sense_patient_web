@@ -409,16 +409,21 @@ export async function runOnboardingDraftRestoreStage(
         narrative,
       );
 
-      // This waiter is armed immediately before the real hidden transition and
-      // expires before the 2s trailing debounce. The raw keepalive transport
-      // has no x-app-version header, while apiClient adds it to normal PUTs.
-      const timeoutMs =
+      // This waiter must be armed and the hidden transition dispatched before
+      // the 2s trailing debounce fires, so the arming window below still fails
+      // closed when setup ate the debounce budget. The response wait itself
+      // uses the standard flush budget: against a deployed estate the BFF->API
+      // round trip can outlive the debounce window, and the keepalive
+      // transport is already proven by the matcher — the raw keepalive fetch
+      // has no x-app-version header, while apiClient adds it to normal PUTs,
+      // so a debounce flush can never satisfy this waiter.
+      const armingWindowMs =
         INTAKE_DRAFT_DEBOUNCE_MS -
         (Date.now() - lastEditAt) -
         KEEPALIVE_WINDOW_SAFETY_MS;
-      if (timeoutMs < MIN_KEEPALIVE_WINDOW_MS) {
+      if (armingWindowMs < MIN_KEEPALIVE_WINDOW_MS) {
         throw new Error(
-          `Keepalive window collapsed to ${timeoutMs}ms; the debounce may already have flushed`,
+          `Keepalive window collapsed to ${armingWindowMs}ms; the debounce may already have flushed`,
         );
       }
       const keepaliveResponse = await waitForBffPut(
@@ -426,7 +431,7 @@ export async function runOnboardingDraftRestoreStage(
         "/intake/story",
         () => dispatchHiddenVisibilityChange(page, backgroundPage),
         {
-          timeoutMs,
+          timeoutMs: DRAFT_FLUSH_TIMEOUT_MS,
           matches: (response) =>
             response.request().headers()["x-app-version"] == null,
         },
