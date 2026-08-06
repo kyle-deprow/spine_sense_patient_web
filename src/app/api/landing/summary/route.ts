@@ -57,8 +57,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   // split, which is the question paid social traffic usually raises.
   const totals: Record<string, number> = {}
   let visits = 0
+  let rootVisits = 0
   for (const row of rows) {
     visits += row.visits
+    rootVisits += row.rootVisits
     for (const event of LANDING_EVENTS) {
       const count = row.events[event]
       if (count) totals[event] = (totals[event] ?? 0) + count
@@ -66,7 +68,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   }
 
   return NextResponse.json(
-    { days, generatedAt: new Date().toISOString(), visits, totals, rows },
+    { days, generatedAt: new Date().toISOString(), visits, rootVisits, totals, rows },
     { headers: { 'Cache-Control': 'no-store' } },
   )
 }

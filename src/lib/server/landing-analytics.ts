@@ -49,6 +49,12 @@ const RETENTION_SECONDS = 40 * 24 * 60 * 60
  * order, which is what `summary` reports.
  */
 export const LANDING_EVENTS = [
+  // The server-rendered `/` funnel is deliberately separate from the Expo
+  // shell funnel below so changing the paid entry URL does not redefine the
+  // historical meaning of `landing_view` or either shell CTA.
+  'root_view',
+  'root_cta_start',
+  'root_cta_signin',
   'landing_view',
   'consent_shown',
   'consent_accept',
@@ -69,6 +75,11 @@ export const LANDING_EVENTS = [
 export type LandingEvent = (typeof LANDING_EVENTS)[number]
 
 const EVENT_SET: ReadonlySet<string> = new Set(LANDING_EVENTS)
+const ROOT_EVENT_SET: ReadonlySet<LandingEvent> = new Set([
+  'root_view',
+  'root_cta_start',
+  'root_cta_signin',
+])
 
 export const DEVICE_CLASSES = ['phone', 'tablet', 'desktop'] as const
 export type DeviceClass = (typeof DEVICE_CLASSES)[number]
@@ -116,6 +127,7 @@ export interface LandingDayRow {
   campaign: string
   device: DeviceClass
   visits: number
+  rootVisits: number
   events: Record<string, number>
 }
 
@@ -131,6 +143,20 @@ function counterKey(day: string, campaign: string, device: string, event: string
 
 function visitsKey(day: string, campaign: string, device: string): string {
   return `${REDIS_KEY_PREFIX}u:${day}:${campaign}:${device}`
+}
+
+function rootVisitsKey(day: string, campaign: string, device: string): string {
+  return `${REDIS_KEY_PREFIX}ru:${day}:${campaign}:${device}`
+}
+
+function visitFunnels(events: readonly LandingEvent[]): { root: boolean; shell: boolean } {
+  let root = false
+  let shell = false
+  for (const event of events) {
+    if (ROOT_EVENT_SET.has(event)) root = true
+    else shell = true
+  }
+  return { root, shell }
 }
 
 /** Lets `read` enumerate the campaign/device pairs seen without scanning Redis. */
@@ -150,10 +176,16 @@ const memoryStore: LandingStore = {
     index.add(pair)
     memoryIndex.set(day, index)
 
-    const vKey = visitsKey(day, campaign, device)
-    const visits = memoryVisits.get(vKey) ?? new Set<string>()
-    visits.add(visitId)
-    memoryVisits.set(vKey, visits)
+    const funnels = visitFunnels(events)
+    for (const key of [
+      funnels.shell ? visitsKey(day, campaign, device) : null,
+      funnels.root ? rootVisitsKey(day, campaign, device) : null,
+    ]) {
+      if (key === null) continue
+      const visits = memoryVisits.get(key) ?? new Set<string>()
+      visits.add(visitId)
+      memoryVisits.set(key, visits)
+    }
 
     for (const event of events) {
       const key = counterKey(day, campaign, device, event)
@@ -175,6 +207,7 @@ const memoryStore: LandingStore = {
           campaign,
           device: normalizeDeviceClass(device),
           visits: memoryVisits.get(visitsKey(day, campaign, device))?.size ?? 0,
+          rootVisits: memoryVisits.get(rootVisitsKey(day, campaign, device))?.size ?? 0,
           events,
         })
       }
@@ -239,9 +272,15 @@ function redisStore(redisUrl: string): LandingStore {
       pipeline.sadd(indexKey(day), `${campaign}|${device}`)
       pipeline.expire(indexKey(day), RETENTION_SECONDS)
 
-      const vKey = visitsKey(day, campaign, device)
-      pipeline.pfadd(vKey, visitId)
-      pipeline.expire(vKey, RETENTION_SECONDS)
+      const funnels = visitFunnels(events)
+      for (const key of [
+        funnels.shell ? visitsKey(day, campaign, device) : null,
+        funnels.root ? rootVisitsKey(day, campaign, device) : null,
+      ]) {
+        if (key === null) continue
+        pipeline.pfadd(key, visitId)
+        pipeline.expire(key, RETENTION_SECONDS)
+      }
 
       for (const event of events) {
         const key = counterKey(day, campaign, device, event)
@@ -263,6 +302,7 @@ function redisStore(redisUrl: string): LandingStore {
 
           const pipeline = client.pipeline()
           pipeline.pfcount(visitsKey(day, campaign, device))
+          pipeline.pfcount(rootVisitsKey(day, campaign, device))
           for (const event of LANDING_EVENTS) {
             pipeline.get(counterKey(day, campaign, device, event))
           }
@@ -270,13 +310,21 @@ function redisStore(redisUrl: string): LandingStore {
           if (results === null) continue
 
           const visits = Number(results[0]?.[1] ?? 0)
+          const rootVisits = Number(results[1]?.[1] ?? 0)
           const events: Record<string, number> = {}
           LANDING_EVENTS.forEach((event, i) => {
-            const count = Number(results[i + 1]?.[1] ?? 0)
+            const count = Number(results[i + 2]?.[1] ?? 0)
             if (count > 0) events[event] = count
           })
 
-          rows.push({ day, campaign, device: normalizeDeviceClass(device), visits, events })
+          rows.push({
+            day,
+            campaign,
+            device: normalizeDeviceClass(device),
+            visits,
+            rootVisits,
+            events,
+          })
         }
       }
       return rows

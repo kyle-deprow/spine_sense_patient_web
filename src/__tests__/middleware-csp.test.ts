@@ -59,6 +59,12 @@ describe('middleware CSP', () => {
     )
   })
 
+  it('requires Trusted Types on the genuine Next landing page', () => {
+    expect(buildCspHeaderForPath('nonce-value', '/')).toContain(
+      "require-trusted-types-for 'script'",
+    )
+  })
+
   it('retains Trusted Types on API routes', () => {
     expect(buildCspHeaderForPath('nonce-value', '/api/health')).toContain(
       "require-trusted-types-for 'script'",
@@ -154,5 +160,23 @@ describe('middleware CSP', () => {
     expect(response.status).toBe(200)
     expect(warn).not.toHaveBeenCalled()
     warn.mockRestore()
+  })
+
+  it('forwards the response CSP and its nonce to Next on the request', () => {
+    vi.stubEnv('FRONT_DOOR_ORIGIN_GUARD_MODE', 'off')
+
+    const response = middleware(new NextRequest('https://patient.example.test/'))
+    const responseCsp = response.headers.get('content-security-policy')
+    const forwardedCsp = response.headers.get('x-middleware-request-content-security-policy')
+    const forwardedNonce = response.headers.get('x-middleware-request-x-nonce')
+
+    expect(responseCsp).not.toBeNull()
+    expect(forwardedCsp).toBe(responseCsp)
+    expect(forwardedNonce).toMatch(/^[0-9a-f-]{36}$/)
+    expect(responseCsp).toContain(`'nonce-${forwardedNonce}'`)
+    expect(response.headers.get('x-middleware-override-headers')).toContain(
+      'content-security-policy',
+    )
+    expect(response.headers.get('x-middleware-override-headers')).toContain('x-nonce')
   })
 })

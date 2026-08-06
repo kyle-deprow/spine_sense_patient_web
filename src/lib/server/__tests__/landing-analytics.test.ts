@@ -32,6 +32,9 @@ describe('campaign normalization', () => {
 
 describe('event allowlist', () => {
   it('admits known funnel events', () => {
+    expect(isLandingEvent('root_view')).toBe(true)
+    expect(isLandingEvent('root_cta_start')).toBe(true)
+    expect(isLandingEvent('root_cta_signin')).toBe(true)
     expect(isLandingEvent('landing_view')).toBe(true)
     expect(isLandingEvent('consent_deadend')).toBe(true)
   })
@@ -70,9 +73,59 @@ describe('recording and reading the funnel', () => {
     expect(row).toBeDefined()
     expect(row?.visits).toBe(2)
     expect(row?.events.landing_view).toBe(2)
+    expect(row?.rootVisits).toBe(0)
     expect(row?.events.consent_shown).toBe(2)
     expect(row?.events.cta_start).toBe(1)
     expect(row?.events.consent_decline).toBe(1)
+  })
+
+  it('keeps root-page events separate from existing shell funnel events', async () => {
+    await recordLandingBatch({
+      visitId: 'visit-root-page',
+      campaign: 'rd-01',
+      device: 'phone',
+      events: ['root_view', 'root_cta_start'],
+    })
+
+    const row = (await readLandingSummary(1)).find((r) => r.campaign === 'rd-01')
+    expect(row?.events.root_view).toBe(1)
+    expect(row?.events.root_cta_start).toBe(1)
+    expect(row?.visits).toBe(0)
+    expect(row?.rootVisits).toBe(1)
+    expect(row?.events.landing_view).toBeUndefined()
+    expect(row?.events.cta_start).toBeUndefined()
+  })
+
+  it('keeps shell and root distinct visits independent across a click-through', async () => {
+    await recordLandingBatch({
+      visitId: 'root-visit-aaaaaaaa',
+      campaign: 'rd-03',
+      device: 'desktop',
+      events: ['root_view', 'root_cta_start'],
+    })
+    await recordLandingBatch({
+      visitId: 'shell-visit-bbbbbbbb',
+      campaign: 'rd-03',
+      device: 'desktop',
+      events: ['landing_view'],
+    })
+
+    const row = (await readLandingSummary(1)).find((r) => r.campaign === 'rd-03')
+    expect(row?.visits).toBe(1)
+    expect(row?.rootVisits).toBe(1)
+  })
+
+  it('classifies an adversarially mixed batch into both funnels', async () => {
+    await recordLandingBatch({
+      visitId: 'mixed-visit-aaaaaaaa',
+      campaign: 'rd-04',
+      device: 'desktop',
+      events: ['root_view', 'landing_view'],
+    })
+
+    const row = (await readLandingSummary(1)).find((r) => r.campaign === 'rd-04')
+    expect(row?.visits).toBe(1)
+    expect(row?.rootVisits).toBe(1)
   })
 
   it('counts one visitor once, however many batches that tab sends', async () => {
@@ -87,6 +140,7 @@ describe('recording and reading the funnel', () => {
 
     const row = (await readLandingSummary(1)).find((r) => r.campaign === 'rd-02')
     expect(row?.visits).toBe(1)
+    expect(row?.rootVisits).toBe(0)
   })
 
   it('keeps campaigns separate so per-ad performance is readable', async () => {
