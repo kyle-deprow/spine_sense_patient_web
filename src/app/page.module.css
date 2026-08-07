@@ -208,6 +208,51 @@
   color: var(--ink-soft);
 }
 
+.sampleFigure {
+  margin: 0;
+  display: grid;
+  justify-items: center;
+  gap: 18px;
+}
+
+.sampleImg {
+  width: min(100%, 380px);
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  box-shadow: 0 24px 48px -24px rgba(4, 16, 30, 0.35);
+}
+
+.sampleCaption {
+  max-width: 52ch;
+  color: var(--ink-soft);
+  font-size: 0.95rem;
+  text-align: center;
+}
+
+.finePrint {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.86rem;
+}
+
+/*
+ * The condition library is the right next step for a researcher, but it leaves
+ * the domain; as a button it competed visually with the primary CTA for the
+ * paid-ad visitor. A text link keeps it reachable without the competition.
+ */
+.textLink {
+  align-self: center;
+  color: var(--ink-soft);
+  font-size: 0.95rem;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.textLink:hover {
+  color: var(--navy-800);
+}
+
 .closer {
   width: min(100%, 880px);
   margin: 56px auto 0;

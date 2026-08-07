@@ -2,6 +2,7 @@ import { MARKETING_SITE_URL } from '@/lib/site'
 
 import { buildLandingLinks, landingMetadata } from './landing-page-config'
 import RootLandingAnalytics from './root-landing-analytics'
+import sampleResult from './sample-result.webp'
 import styles from './page.module.css'
 
 /**
@@ -25,6 +26,11 @@ import styles from './page.module.css'
  * assistant asks when someone names the product. Both point at the same
  * assessment. Neither should be rewritten to chase the other's queries.
  *
+ * It is also the page paid ads land on, so the copy must answer the ad that
+ * was clicked: the imaging ads promise "see what your MRI report means", the
+ * MiScribe ads promise visit notes, and every ad promises free. Each of those
+ * promises needs a visible answer here or the click bounces.
+ *
  * Claim discipline matches the marketing site: this describes what the
  * assessment does and explicitly what it does not. It is not a diagnosis, it is
  * not FDA-cleared, and no wording here may imply otherwise.
@@ -43,7 +49,7 @@ const STEPS = [
   {
     n: '02',
     title: 'You add whatever records you already have',
-    body: 'MRI reports, clinic notes, X-ray results — as a PDF, a photo of the page, or pasted text. It reads them and pulls out the findings. This step is optional; the assessment works without it.',
+    body: 'MRI reports, clinic notes, X-ray results: a PDF, a photo of the page, or pasted text. It reads them and pulls out the findings. This step is optional; the assessment works without it.',
   },
   {
     n: '03',
@@ -60,7 +66,7 @@ const STEPS = [
 const DIFFERENCES = [
   {
     title: 'It reads your imaging reports',
-    body: 'Most symptom questionnaires only take answers to their own questions. If you have an MRI report full of terms nobody explained — disc desiccation, foraminal narrowing, Modic changes — this reads it and puts it in plain language alongside what you described.',
+    body: 'Most symptom questionnaires only take answers to their own questions. If you have an MRI report full of terms nobody explained, like disc desiccation, foraminal narrowing, or Modic changes, this reads it and puts it in plain language alongside what you described. It reads the written report, not the scan images themselves.',
   },
   {
     title: 'It branches by region, like a clinic would',
@@ -80,7 +86,7 @@ const NOT_LIST = [
   'A diagnosis, or a substitute for examination and imaging by a clinician',
   'A recommendation for or against surgery, injections or any other treatment',
   'An FDA-cleared medical device or clinical decision support system',
-  'A guarantee that a serious condition will be detected — it can miss things',
+  'A guarantee that a serious condition will be detected; it can miss things',
   'A way to get emergency care. If something feels like an emergency, call your local emergency number',
 ]
 
@@ -103,11 +109,12 @@ export default async function LandingPage({
       <RootLandingAnalytics />
       <section className={styles.hero}>
         <p className={styles.eyebrow}>Free for patients</p>
-        <h1 className={styles.h1}>Understand your back or neck pain before your appointment</h1>
+        <h1 className={styles.h1}>See what your symptoms and your MRI report actually describe</h1>
         <p className={styles.lede}>
-          SpineSense is a free spine assessment built by spine surgeons. You describe the
-          problem in your own words, add any imaging reports you have, and get back a
-          plain-language summary of what they describe — and what to ask about.
+          SpineSense is a free spine assessment built by spine surgeons. Describe the
+          problem in your own words, add your MRI, CT, or X-ray report if you have one,
+          and get a plain-language summary of what it all describes, what to ask about,
+          and how soon people with a similar pattern are usually seen.
         </p>
         <div className={styles.actions}>
           <a className={styles.primary} href={startHref} data-root-landing-event="root_cta_start">
@@ -122,9 +129,29 @@ export default async function LandingPage({
           </a>
         </div>
         <p className={styles.note}>
-          Typically 8–12 minutes. An account is required because the assessment handles
-          health information.
+          Typically 8 to 12 minutes. Free, with no card and nothing to cancel. An account
+          is required because the assessment handles health information.
         </p>
+      </section>
+
+      <section className={styles.section}>
+        <h2 className={styles.h2}>What you get back</h2>
+        <figure className={styles.sampleFigure}>
+          {/* eslint-disable-next-line @next/next/no-img-element -- one already-optimized
+              static webp; the image-optimizer pipeline is not worth its moving parts here */}
+          <img
+            className={styles.sampleImg}
+            src={sampleResult.src}
+            width={390}
+            height={719}
+            loading="lazy"
+            alt="SpineSense result screen: the most likely explanation in plain language, with a confidence level and guidance on how soon to be seen"
+          />
+          <figcaption className={styles.sampleCaption}>
+            A real result screen, shown with sample data: the likely explanation in plain
+            language, how confident the analysis is, and how soon to be seen.
+          </figcaption>
+        </figure>
       </section>
 
       <section className={styles.section}>
@@ -146,17 +173,16 @@ export default async function LandingPage({
         <h2 className={styles.h2}>Why it was built</h2>
         <p className={styles.prose}>
           Spine problems are unusually hard to pin down, and the person least equipped to
-          assemble the picture is usually the patient. The MRI is on a disc from three years
-          ago. The clinic notes are in one portal and the physical therapy summary is a fax
-          somewhere. By the time someone reaches a spine surgeon, the first appointment is
-          spent reconstructing a history the patient has already told four times — and the
-          referral that got them there was often made without any of it.
+          assemble the picture is usually the patient. The MRI is on a disc from three
+          years ago, the clinic notes are in one portal, and the physical therapy summary
+          is a fax somewhere. The first specialist appointment is spent reconstructing a
+          history the patient has already told four times.
         </p>
         <p className={styles.prose}>
-          SpineSense was built by spine surgeons to move that work before the appointment.
-          It gathers the history once, reads the records the patient already has, explains
-          what the terms mean, and produces something worth handing to a clinician. The
-          intent is not to replace the visit. It is to stop the visit from starting at zero.
+          SpineSense was built by spine surgeons to move that work before the
+          appointment: the history gathered once, the records read and explained, and
+          something worth handing to a clinician at the end. Not to replace the visit. To
+          stop it from starting at zero.
         </p>
       </section>
 
@@ -173,6 +199,20 @@ export default async function LandingPage({
       </section>
 
       <section className={styles.section}>
+        <h2 className={styles.h2}>Bring an AI scribe to your appointments</h2>
+        <p className={styles.prose}>
+          Doctors use AI scribes to take notes. MiScribe gives you the same help on your
+          side of the visit. Record an appointment with your clinician&apos;s permission,
+          and it keeps an organized summary of what was said, what was recommended, and
+          what comes next, so you can revisit the details and compare opinions later. It
+          is part of the same free account.
+        </p>
+        <p className={styles.finePrint}>
+          Always get your clinician&apos;s permission before recording.
+        </p>
+      </section>
+
+      <section className={styles.section}>
         <h2 className={styles.h2}>What it is not</h2>
         <ul className={styles.notList}>
           {NOT_LIST.map((item) => (
@@ -186,14 +226,14 @@ export default async function LandingPage({
       <section className={styles.closer}>
         <h2 className={styles.h2}>Start when you are ready</h2>
         <p className={styles.body}>
-          Or read first — the SpineSense library has sourced guides to every spine condition
-          and procedure, and needs no account.
+          Or read first: the SpineSense library has sourced guides to every spine
+          condition and procedure, and needs no account.
         </p>
         <div className={styles.actions}>
           <a className={styles.primary} href={startHref} data-root-landing-event="root_cta_start">
             Start the free assessment
           </a>
-          <a className={styles.secondary} href={`${MARKETING_SITE_URL}/conditions`}>
+          <a className={styles.textLink} href={`${MARKETING_SITE_URL}/conditions`}>
             Browse the condition library
           </a>
         </div>

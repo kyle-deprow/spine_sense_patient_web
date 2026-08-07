@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises'
+
 import { describe, expect, it } from 'vitest'
 
 import { campaignQuery } from '@/lib/campaign-query'
@@ -45,6 +47,51 @@ describe('root landing page', () => {
     expect(buildLandingLinks({ utm_campaign: 'summer', token: 'secret-token' })).toEqual({
       startHref: '/welcome?utm_campaign=summer',
       signInHref: '/login?utm_campaign=summer',
+    })
+  })
+
+  /**
+   * The page copy is pinned at the source level: vitest cannot import the
+   * .tsx (Next's `jsx: preserve` tsconfig), and the JSX-to-HTML step is
+   * mechanical, so asserting on the source text pins the same thing.
+   */
+  describe('page copy', () => {
+    async function pageSource(): Promise<string> {
+      return readFile(new URL('./page.tsx', import.meta.url), 'utf8')
+    }
+
+    it('leads with the imaging-and-symptoms value proposition the ads sell', async () => {
+      const source = await pageSource()
+
+      expect(source).toContain('See what your symptoms and your MRI report actually describe')
+      expect(source).toContain('MRI, CT, or X-ray report')
+    })
+
+    it('shows a sample result and answers the free objection at the call to action', async () => {
+      const source = await pageSource()
+
+      expect(source).toContain('sample-result.webp')
+      expect(source).toContain('shown with sample data')
+      expect(source).toContain('no card and nothing to cancel')
+    })
+
+    it('gives the MiScribe ads a landing section with the recording disclaimer', async () => {
+      const source = await pageSource()
+
+      expect(source).toContain('MiScribe')
+      expect(source).toContain('permission before recording')
+    })
+
+    it('contains no em dashes anywhere in the copy', async () => {
+      expect(await pageSource()).not.toContain('—')
+    })
+
+    it('keeps both calls to action wired to campaign-carrying links and analytics events', async () => {
+      const source = await pageSource()
+
+      expect(source).toContain('href={startHref}')
+      expect(source).toContain('data-root-landing-event="root_cta_start"')
+      expect(source).toContain('data-root-landing-event="root_cta_signin"')
     })
   })
 
