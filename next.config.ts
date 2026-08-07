@@ -46,6 +46,14 @@ const nextConfig: NextConfig = {
         source: '/_next/static/:path*',
         headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }],
       },
+      {
+        // The Metro bundles the catch-all serves from _expo/static are equally
+        // content-addressed. The route handler already marks them immutable,
+        // but these header sources are applied after handlers run, so the
+        // global no-store above was overriding it (verified live 08-07).
+        source: '/_expo/static/:path*',
+        headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }],
+      },
     ]
   },
 }

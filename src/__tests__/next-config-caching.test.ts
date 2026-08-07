@@ -23,14 +23,17 @@ describe('next config caching headers', () => {
     expect(globalRule?.headers).toContainEqual({ key: 'Cache-Control', value: 'no-store' })
   })
 
-  it('overrides no-store with immutable caching for content-hashed build assets', async () => {
-    const rules = await headerRules()
-    const staticRuleIndex = rules.findIndex((rule) => rule.source === '/_next/static/:path*')
-    const globalRuleIndex = rules.findIndex((rule) => rule.source === '/(.*)')
+  it.each(['/_next/static/:path*', '/_expo/static/:path*'])(
+    'overrides no-store with immutable caching for content-hashed assets under %s',
+    async (source) => {
+      const rules = await headerRules()
+      const staticRuleIndex = rules.findIndex((rule) => rule.source === source)
+      const globalRuleIndex = rules.findIndex((rule) => rule.source === '/(.*)')
 
-    expect(staticRuleIndex).toBeGreaterThan(globalRuleIndex)
-    expect(rules[staticRuleIndex]?.headers).toEqual([
-      { key: 'Cache-Control', value: 'public, max-age=31536000, immutable' },
-    ])
-  })
+      expect(staticRuleIndex).toBeGreaterThan(globalRuleIndex)
+      expect(rules[staticRuleIndex]?.headers).toEqual([
+        { key: 'Cache-Control', value: 'public, max-age=31536000, immutable' },
+      ])
+    },
+  )
 })
