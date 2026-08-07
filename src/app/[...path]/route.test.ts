@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { brotliDecompressSync, gunzipSync } from 'node:zlib'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
@@ -32,25 +33,122 @@ describe('patient app export route', () => {
   })
 
   it.each([
-    ['Satoshi-Regular.ttf', 'font/ttf'],
+    // Content-hashed file names are immutable; unhashed ones stay no-store.
+    ['Satoshi-Regular.ttf', 'font/ttf', 'no-store'],
     [
       'assets/node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/Ionicons.b4eb097d35f44ed943676fd56f6bdc51.ttf',
       'font/ttf',
+      'public, max-age=31536000, immutable',
     ],
-    ['Satoshi-Regular.otf', 'font/otf'],
-    ['Satoshi-Medium.otf', 'font/otf'],
-    ['Satoshi-Bold.otf', 'font/otf'],
-    ['ClashDisplay-Semibold.otf', 'font/otf'],
-    ['ClashDisplay-Bold.otf', 'font/otf'],
-  ])('serves %s with the expected font content type', async (fileName, contentType) => {
+    ['Satoshi-Regular.otf', 'font/otf', 'no-store'],
+    ['Satoshi-Medium.otf', 'font/otf', 'no-store'],
+    ['Satoshi-Bold.otf', 'font/otf', 'no-store'],
+    ['ClashDisplay-Semibold.otf', 'font/otf', 'no-store'],
+    ['ClashDisplay-Bold.otf', 'font/otf', 'no-store'],
+  ])('serves %s with the expected font content type', async (fileName, contentType, cacheControl) => {
     await makeExportFile(fileName, new Uint8Array([0, 1, 2, 3]))
 
     const response = await GET(new NextRequest(`http://localhost/${fileName}`))
 
     expect(response.status).toBe(200)
     expect(response.headers.get('Content-Type')).toBe(contentType)
-    expect(response.headers.get('Cache-Control')).toBe('no-store')
+    expect(response.headers.get('Cache-Control')).toBe(cacheControl)
     expect((await response.arrayBuffer()).byteLength).toBe(4)
+  })
+
+  describe('caching and compression', () => {
+    const HASHED_BUNDLE = '_expo/static/js/web/entry-bad5c6e2d7e958dcecba56b805dae447.js'
+    const BUNDLE_SOURCE = 'const spine = "sense";\n'.repeat(400)
+
+    it('treats everything under _expo/static as content-addressed and immutable', async () => {
+      await makeExportFile(HASHED_BUNDLE, BUNDLE_SOURCE)
+
+      const response = await GET(new NextRequest(`http://localhost/${HASHED_BUNDLE}`))
+
+      expect(response.status).toBe(200)
+      expect(response.headers.get('Cache-Control')).toBe('public, max-age=31536000, immutable')
+      expect(response.headers.get('Expires')).toBeNull()
+      expect(response.headers.get('Pragma')).toBeNull()
+    })
+
+    it('brotli-compresses the entry bundle when the client accepts it', async () => {
+      await makeExportFile(HASHED_BUNDLE, BUNDLE_SOURCE)
+
+      const response = await GET(
+        new NextRequest(`http://localhost/${HASHED_BUNDLE}`, {
+          headers: { 'accept-encoding': 'gzip, deflate, br' },
+        }),
+      )
+
+      expect(response.headers.get('Content-Encoding')).toBe('br')
+      expect(response.headers.get('Vary')).toBe('Accept-Encoding')
+      const payload = Buffer.from(await response.arrayBuffer())
+      expect(payload.byteLength).toBeLessThan(Buffer.byteLength(BUNDLE_SOURCE))
+      expect(brotliDecompressSync(payload).toString('utf8')).toBe(BUNDLE_SOURCE)
+    })
+
+    it('falls back to gzip when brotli is not offered', async () => {
+      await makeExportFile(HASHED_BUNDLE, BUNDLE_SOURCE)
+
+      const response = await GET(
+        new NextRequest(`http://localhost/${HASHED_BUNDLE}`, {
+          headers: { 'accept-encoding': 'gzip' },
+        }),
+      )
+
+      expect(response.headers.get('Content-Encoding')).toBe('gzip')
+      const payload = Buffer.from(await response.arrayBuffer())
+      expect(gunzipSync(payload).toString('utf8')).toBe(BUNDLE_SOURCE)
+    })
+
+    it('serves identity bytes when the client offers no supported encoding', async () => {
+      await makeExportFile(HASHED_BUNDLE, BUNDLE_SOURCE)
+
+      const response = await GET(new NextRequest(`http://localhost/${HASHED_BUNDLE}`))
+
+      expect(response.headers.get('Content-Encoding')).toBeNull()
+      expect(response.headers.get('Vary')).toBe('Accept-Encoding')
+      expect(Buffer.from(await response.arrayBuffer()).toString('utf8')).toBe(BUNDLE_SOURCE)
+    })
+
+    it('does not compress already-compressed image formats', async () => {
+      const image = 'assets/hipaa-shield.9c5ce064832b801274bd55305797c6bb.png'
+      await makeExportFile(image, new Uint8Array([1, 2, 3, 4]))
+
+      const response = await GET(
+        new NextRequest(`http://localhost/${image}`, {
+          headers: { 'accept-encoding': 'gzip, deflate, br' },
+        }),
+      )
+
+      expect(response.headers.get('Content-Encoding')).toBeNull()
+      expect(response.headers.get('Vary')).toBeNull()
+      expect(response.headers.get('Cache-Control')).toBe('public, max-age=31536000, immutable')
+      expect((await response.arrayBuffer()).byteLength).toBe(4)
+    })
+
+    it('gzips the HTML shell per request while keeping no-store and the nonce injections', async () => {
+      await makeExportFile(
+        'index.html',
+        '<!doctype html><html><head><title>SpineSense</title></head><body></body></html>',
+      )
+
+      const response = await GET(
+        new NextRequest('http://localhost/', {
+          headers: { 'x-nonce': 'test-nonce', 'accept-encoding': 'gzip, deflate, br' },
+        }),
+      )
+
+      expect(response.status).toBe(200)
+      expect(response.headers.get('Cache-Control')).toBe('no-store')
+      expect(response.headers.get('Content-Encoding')).toBe('gzip')
+      expect(response.headers.get('Vary')).toBe('Accept-Encoding')
+
+      const html = gunzipSync(Buffer.from(await response.arrayBuffer())).toString('utf8')
+      expect(html).toContain('data-patient-web-landing')
+      expect(html).toContain('nonce="test-nonce"')
+      expect(response.headers.getSetCookie().join('; ')).toContain('spine_patient_csrf=')
+    })
   })
 
   it('injects nonce-compatible web compatibility CSS into exported HTML', async () => {

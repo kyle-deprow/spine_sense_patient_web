@@ -36,7 +36,17 @@ const nextConfig: NextConfig = {
       })
     }
 
-    return [{ source: '/(.*)', headers }]
+    return [
+      { source: '/(.*)', headers },
+      {
+        // Next's own build assets are content-hashed and carry no PHI;
+        // `no-store` on them re-downloads the landing page's JS and CSS on
+        // every visit. Later entries win on key collision, so this narrows
+        // only Cache-Control while every security header above still applies.
+        source: '/_next/static/:path*',
+        headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }],
+      },
+    ]
   },
 }
 

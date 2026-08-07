@@ -1,5 +1,6 @@
 import { readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
+import { brotliCompressSync, constants as zlibConstants, gzipSync } from 'node:zlib'
 import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
 import { issueCsrfCookie } from '@/lib/server/auth'
@@ -25,6 +26,82 @@ const CONTENT_TYPES = new Map<string, string>([
   ['.woff', 'font/woff'],
   ['.woff2', 'font/woff2'],
 ])
+
+/**
+ * Content-hashed export assets are safe to cache forever: their URL changes
+ * whenever their bytes do, and none of them carry PHI. They are the built app
+ * bundle, fonts and images. `no-store` on these forced every visit to
+ * re-download a ~6 MB entry bundle, which on a slow phone connection meant a
+ * long blank screen for exactly the traffic the ads pay for. HTML is never
+ * treated as immutable: it embeds a per-request CSP nonce and keeps the strict
+ * no-store posture, as does anything without a content hash in its name.
+ */
+const HASHED_BASENAME_RE = /[.-][0-9a-f]{32}\./
+
+function isImmutableAsset(relativePath: string): boolean {
+  const normalized = relativePath.replaceAll('\\', '/')
+  if (normalized.endsWith('.html')) return false
+  if (normalized.startsWith('_expo/static/')) return true
+  return HASHED_BASENAME_RE.test(path.posix.basename(normalized))
+}
+
+// Formats that are not already compressed. woff/woff2/png/ico gain nothing.
+const COMPRESSIBLE_EXTENSIONS = new Set([
+  '.css',
+  '.html',
+  '.js',
+  '.json',
+  '.otf',
+  '.svg',
+  '.ttf',
+  '.txt',
+  '.wasm',
+])
+
+type ContentEncoding = 'br' | 'gzip'
+
+function acceptedEncoding(header: string | null): ContentEncoding | null {
+  if (!header) return null
+  const tokens = header
+    .toLowerCase()
+    .split(',')
+    .map((token) => token.split(';')[0]?.trim())
+  if (tokens.includes('br')) return 'br'
+  if (tokens.includes('gzip')) return 'gzip'
+  return null
+}
+
+/**
+ * Compressed variants of export assets, built lazily once per process. The
+ * export is baked into the container image at build time, so the file set is
+ * fixed and there is nothing to invalidate. Brotli quality 6 turns the ~6 MB
+ * Metro bundle into roughly a fifth of its size for a one-time cost of a few
+ * hundred milliseconds per replica. Next compresses its own responses, but
+ * route-handler bodies ship exactly the bytes given here.
+ */
+const compressedAssetCache = new Map<string, Uint8Array>()
+
+function toArrayBuffer(view: Uint8Array): ArrayBuffer {
+  return view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength) as ArrayBuffer
+}
+
+function compressExportAsset(filePath: string, body: Buffer, encoding: ContentEncoding): Uint8Array {
+  const cacheKey = `${encoding}:${filePath}`
+  const cached = compressedAssetCache.get(cacheKey)
+  if (cached !== undefined) return cached
+
+  const compressed =
+    encoding === 'br'
+      ? brotliCompressSync(body, {
+          params: {
+            [zlibConstants.BROTLI_PARAM_QUALITY]: 6,
+            [zlibConstants.BROTLI_PARAM_SIZE_HINT]: body.byteLength,
+          },
+        })
+      : gzipSync(body, { level: 8 })
+  compressedAssetCache.set(cacheKey, compressed)
+  return compressed
+}
 
 function exportDir(): string {
   return path.resolve(
@@ -102,7 +179,8 @@ async function servePatientApp(request: NextRequest, method: 'GET' | 'HEAD') {
     )
   }
 
-  const match = await findFile(exportDir(), request.nextUrl.pathname)
+  const root = exportDir()
+  const match = await findFile(root, request.nextUrl.pathname)
 
   if (!match) {
     return NextResponse.json(
@@ -111,12 +189,43 @@ async function servePatientApp(request: NextRequest, method: 'GET' | 'HEAD') {
     )
   }
 
-  const body = method === 'HEAD' ? null : await readResponseBody(match.filePath, match.contentType, request)
+  const isHtml = match.contentType.startsWith('text/html')
+  const headers = noStoreHeaders(match.contentType)
+  if (!isHtml && isImmutableAsset(path.relative(root, match.filePath))) {
+    headers.set('Cache-Control', 'public, max-age=31536000, immutable')
+    headers.delete('Expires')
+    headers.delete('Pragma')
+  }
 
-  const response = new NextResponse(body, {
-    headers: noStoreHeaders(match.contentType),
-  })
-  if (match.contentType.startsWith('text/html')) {
+  const compressible = COMPRESSIBLE_EXTENSIONS.has(path.extname(match.filePath))
+  if (compressible) headers.set('Vary', 'Accept-Encoding')
+  const encoding = compressible ? acceptedEncoding(request.headers.get('accept-encoding')) : null
+
+  let body: string | ArrayBuffer | null = null
+  if (method === 'GET') {
+    const raw = await readResponseBody(match.filePath, match.contentType, request)
+    if (encoding === null) {
+      body = raw
+    } else if (isHtml) {
+      // Nonce injection makes each HTML response unique, so it cannot share
+      // the asset cache. gzip keeps a ~30 KB shell to about a millisecond,
+      // and every browser that offers br offers gzip as well.
+      body = toArrayBuffer(
+        gzipSync(typeof raw === 'string' ? Buffer.from(raw, 'utf8') : Buffer.from(raw), {
+          level: 6,
+        }),
+      )
+      headers.set('Content-Encoding', 'gzip')
+    } else {
+      body = toArrayBuffer(
+        compressExportAsset(match.filePath, Buffer.from(raw as ArrayBuffer), encoding),
+      )
+      headers.set('Content-Encoding', encoding)
+    }
+  }
+
+  const response = new NextResponse(body, { headers })
+  if (isHtml) {
     // Belt and braces with the <meta name="robots"> tag above: a crawler that
     // reads only headers still learns the shell is not for indexing.
     response.headers.set('X-Robots-Tag', 'noindex, follow')
