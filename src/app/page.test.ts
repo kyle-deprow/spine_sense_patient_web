@@ -84,6 +84,40 @@ describe('root landing page', () => {
       expect(source).toContain('adaptive')
     })
 
+    /**
+     * A real-patient-volume claim shipped live on 2026-08-09 ("developed
+     * against thousands of real clinical cases") and had to be pulled.
+     * `GTM/research/product-05-clinical-evidence.md` records zero real patient
+     * records in the system and states all 162 eval scenarios are synthetic,
+     * and separately warns that scenario files are not validated cases.
+     *
+     * The brief keeps asking for this claim, so it gets a guard rather than a
+     * note. If a future edit needs volume, the honest framings are the
+     * 162-scenario library, the 67 recorded physician rulings, or the 6,923
+     * backend tests.
+     */
+    it('never claims real-patient volume or clinical validation', async () => {
+      const source = (await pageSource()).toLowerCase()
+
+      for (const claim of [
+        'real cases',
+        'real clinical cases',
+        'real patients',
+        'real-world cases',
+        'patient records',
+        'clinically validated',
+        'validated on',
+      ]) {
+        // The banned-claim comment above the trust rail names some of these,
+        // so match only what the rendered copy would contain.
+        const inCopy = source
+          .split('\n')
+          .filter((line) => !line.trimStart().startsWith('*') && !line.includes('//'))
+          .join('\n')
+        expect(inCopy).not.toContain(claim)
+      }
+    })
+
     it('shows a sample result and answers the free objection at the call to action', async () => {
       const source = await pageSource()
 

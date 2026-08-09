@@ -206,7 +206,14 @@ export default async function LandingPage({
 
           <ul className={styles.trustRail}>
             <li>Built and tuned by spine surgeons</li>
-            <li>Developed against thousands of real clinical cases</li>
+            {/*
+             * NOT "thousands of real cases". Verified false: GTM/research/
+             * product-05-clinical-evidence.md records zero real patient records
+             * in the system and states all 162 scenarios are synthetic. The same
+             * document warns against "validated on N cases" phrasing, since
+             * scenario files are not validated cases, so this says "tested".
+             */}
+            <li>Tested against a 162-scenario clinical library, including the presentations that must not be missed</li>
             <li>In evaluation at multiple large academic medical centers</li>
             <li>HIPAA-standard handling, encrypted end to end</li>
           </ul>
