@@ -43,9 +43,13 @@ describe('root landing page', () => {
     expect(query).not.toContain('arbitrary')
   })
 
-  it('preserves campaign attribution on start and sign-in links', () => {
+  /**
+   * Both calls to action land on the form itself, not on a screen that sells
+   * the product again before letting the visitor start (Ed, 2026-08-09).
+   */
+  it('sends both calls to action straight to the form, carrying campaign attribution', () => {
     expect(buildLandingLinks({ utm_campaign: 'summer', token: 'secret-token' })).toEqual({
-      startHref: '/welcome?utm_campaign=summer',
+      startHref: '/register?utm_campaign=summer',
       signInHref: '/login?utm_campaign=summer',
     })
   })
