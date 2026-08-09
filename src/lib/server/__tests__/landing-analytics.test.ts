@@ -5,10 +5,12 @@ vi.mock('server-only', () => ({}))
 import {
   clearLandingAnalytics,
   isLandingEvent,
+  type LandingDayRow,
   normalizeCampaign,
   normalizeDeviceClass,
   readLandingSummary,
   recordLandingBatch,
+  summarizeCampaigns,
   utcDay,
 } from '@/lib/server/landing-analytics'
 
@@ -180,6 +182,118 @@ describe('recording and reading the funnel', () => {
       events: [],
     })
     expect(await readLandingSummary(1)).toHaveLength(0)
+  })
+})
+
+/**
+ * The A/B test this exists for: one ad set points at `/`, another at
+ * `/welcome`, and the winner decides where paid traffic lands. The two entry
+ * points populate different visit counters, so a rollup that reads the same
+ * field for both scores the `/` arm against the people who already clicked
+ * through rather than against everyone the ad delivered.
+ */
+describe('campaign rollup for the entry-point A/B test', () => {
+  const day = '2026-08-09'
+
+  /** 100 land on `/`, 40 click through, 30 reach the form, 20 create an account. */
+  const landingArm: LandingDayRow = {
+    day,
+    campaign: 'rd-landing',
+    device: 'phone',
+    rootVisits: 100,
+    visits: 40,
+    events: {
+      root_view: 100,
+      root_cta_start: 40,
+      landing_view: 40,
+      cta_start: 38,
+      register_view: 30,
+      register_submit: 20,
+    },
+  }
+
+  /** 100 land straight on `/welcome`, 30 reach the form, 15 create an account. */
+  const appArm: LandingDayRow = {
+    day,
+    campaign: 'rd-app',
+    device: 'phone',
+    rootVisits: 0,
+    visits: 100,
+    events: {
+      landing_view: 100,
+      cta_start: 45,
+      register_view: 30,
+      register_submit: 15,
+    },
+  }
+
+  it('counts arrivals from the counter the arm actually populates', () => {
+    const [landing, app] = [
+      summarizeCampaigns([landingArm]).at(0),
+      summarizeCampaigns([appArm]).at(0),
+    ]
+
+    expect(landing?.entry).toBe('landing')
+    expect(landing?.arrivals).toBe(100)
+    expect(app?.entry).toBe('app')
+    expect(app?.arrivals).toBe(100)
+  })
+
+  it('scores both arms on signups against everyone the ad delivered', () => {
+    const rollup = summarizeCampaigns([landingArm, appArm])
+
+    expect(rollup.find((c) => c.campaign === 'rd-landing')?.conversion).toBe(0.2)
+    expect(rollup.find((c) => c.campaign === 'rd-app')?.conversion).toBe(0.15)
+  })
+
+  it('sums a campaign across days and device classes', () => {
+    const rollup = summarizeCampaigns([
+      landingArm,
+      { ...landingArm, day: '2026-08-08', device: 'desktop', rootVisits: 20 },
+    ])
+
+    expect(rollup).toHaveLength(1)
+    expect(rollup[0]?.arrivals).toBe(120)
+    expect(rollup[0]?.registerSubmit).toBe(40)
+  })
+
+  it('adds up both entry points’ start clicks under one `ctaStart`', () => {
+    expect(summarizeCampaigns([landingArm]).at(0)?.ctaStart).toBe(78)
+  })
+
+  it('flags a tag serving both arms, whose numbers cannot be split', () => {
+    expect(summarizeCampaigns([landingArm]).at(0)?.mixedEntrySuspected).toBe(false)
+
+    const shared: LandingDayRow = {
+      ...landingArm,
+      visits: 300,
+      events: { ...landingArm.events, landing_view: 300 },
+    }
+    expect(summarizeCampaigns([shared]).at(0)?.mixedEntrySuspected).toBe(true)
+  })
+
+  it('reports no conversion rate rather than a zero for a campaign with no arrivals', () => {
+    const empty: LandingDayRow = {
+      day,
+      campaign: 'rd-dead',
+      device: 'phone',
+      rootVisits: 0,
+      visits: 0,
+      events: {},
+    }
+    const [row] = summarizeCampaigns([empty])
+
+    expect(row?.entry).toBe('none')
+    expect(row?.conversion).toBeNull()
+  })
+
+  it('ranks campaigns by arrivals so the biggest spend reads first', () => {
+    const small: LandingDayRow = { ...appArm, campaign: 'rd-small', visits: 5 }
+
+    expect(summarizeCampaigns([small, appArm]).map((c) => c.campaign)).toEqual([
+      'rd-app',
+      'rd-small',
+    ])
   })
 })
 

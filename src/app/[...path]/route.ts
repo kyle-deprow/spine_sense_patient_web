@@ -454,6 +454,18 @@ function injectStyleNonceBootstrap(html: string, nonce: string): string {
  * earning the ad spend must not be able to fail because of its own
  * instrumentation.
  *
+ * `register_submit` is the deepest step measurable from here, and it is the
+ * one that matters: it is the account-creation click, so it is the conversion
+ * an ad is actually buying. Everything above it (arrivals, CTA, form reached)
+ * only tells you where a campaign leaks. It still fires strictly *before* an
+ * account exists, which is what keeps this whole surface pre-registration.
+ *
+ * `register_view` watches for the form itself rather than only the path. The
+ * path test alone recorded nothing on live for two campaigns (verified twice,
+ * 2026-08-04): the app swaps that screen in without the mutation sequence the
+ * observer was assuming. Both tests are kept, since their union can only
+ * find more.
+ *
  * See `@/lib/server/landing-analytics` for the privacy properties: no cookie,
  * no durable storage, no identifier that outlives the tab, no third party.
  */
@@ -503,6 +515,7 @@ document.addEventListener('click',function(ev){
       if(id==='cookie-consent-declined-back'){mark('consent_deadend_back');break;}
       if(id==='welcome-get-started'){mark('cta_start');flush();break;}
       if(id==='welcome-login'){mark('cta_signin');flush();break;}
+      if(id==='register-submit'){mark('register_submit');flush();break;}
       el=el.parentElement&&el.parentElement.closest?el.parentElement.closest('[data-testid]'):null;
     }
   }catch(e){}
@@ -528,7 +541,7 @@ var observer=new MutationObserver(function(){
     if(document.querySelector('[data-testid="cookie-consent-declined"]'))mark('consent_deadend');
     var s=document.querySelector('[data-testid="welcome-scroll"]');
     if(s&&s!==scroller){scroller=s;s.addEventListener('scroll',onScroll,{passive:true});}
-    if(!seenRegister&&location.pathname.indexOf('register')>=0){seenRegister=true;mark('register_view');flush();}
+    if(!seenRegister&&(document.querySelector('[data-testid="register-form"]')||location.pathname.indexOf('register')>=0)){seenRegister=true;mark('register_view');flush();}
   }catch(e){}
 });
 if(document.body){observer.observe(document.body,{childList:true,subtree:true});}

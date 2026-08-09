@@ -151,6 +151,41 @@ describe('patient app export route', () => {
     })
   })
 
+  /**
+   * The funnel's whole purpose is comparing paid entry points, and a
+   * comparison needs a conversion. `register_submit` sat in the event
+   * allowlist un-fired from the day it was written, so every campaign read
+   * bottomed out at "reached the form" and no ad could be scored on signups.
+   */
+  describe('landing tracker funnel wiring', () => {
+    async function trackerScript(): Promise<string> {
+      await makeExportFile(
+        'index.html',
+        '<!doctype html><html><head><title>SpineSense</title></head><body></body></html>',
+      )
+      const response = await GET(
+        new NextRequest('http://localhost/welcome', {
+          headers: { 'x-nonce': 'test-nonce' },
+        }),
+      )
+      return Buffer.from(await response.arrayBuffer()).toString('utf8')
+    }
+
+    it('marks the account-creation click, so a campaign can be scored on signups', async () => {
+      const html = await trackerScript()
+
+      expect(html).toContain("id==='register-submit'")
+      expect(html).toContain("mark('register_submit')")
+    })
+
+    it('detects the register screen by its form, not only by the URL path', async () => {
+      const html = await trackerScript()
+
+      expect(html).toContain('[data-testid="register-form"]')
+      expect(html).toContain("mark('register_view')")
+    })
+  })
+
   it('injects nonce-compatible web compatibility CSS into exported HTML', async () => {
     await makeExportFile(
       'index.html',

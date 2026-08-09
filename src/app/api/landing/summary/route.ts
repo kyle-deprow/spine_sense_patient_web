@@ -14,7 +14,11 @@ import { createHash, timingSafeEqual } from 'node:crypto'
 
 import { type NextRequest, NextResponse } from 'next/server'
 
-import { LANDING_EVENTS, readLandingSummary } from '@/lib/server/landing-analytics'
+import {
+  LANDING_EVENTS,
+  readLandingSummary,
+  summarizeCampaigns,
+} from '@/lib/server/landing-analytics'
 
 const DEFAULT_DAYS = 7
 const MAX_DAYS = 40
@@ -68,7 +72,18 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   }
 
   return NextResponse.json(
-    { days, generatedAt: new Date().toISOString(), visits, rootVisits, totals, rows },
+    {
+      days,
+      generatedAt: new Date().toISOString(),
+      visits,
+      rootVisits,
+      totals,
+      // One row per campaign tag, with the arrival counter already chosen to
+      // match the URL that campaign's ad points at. This is the view an A/B
+      // read should be taken from; `rows` stays below it as the raw grid.
+      byCampaign: summarizeCampaigns(rows),
+      rows,
+    },
     { headers: { 'Cache-Control': 'no-store' } },
   )
 }

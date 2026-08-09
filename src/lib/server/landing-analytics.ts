@@ -402,3 +402,105 @@ export async function readLandingSummary(
 export async function clearLandingAnalytics(): Promise<void> {
   await configuredStore().clear()
 }
+
+// ── campaign rollup ────────────────────────────────────────────────────────
+
+/**
+ * Which URL an ad for this campaign pointed at.
+ *
+ *   `landing` — the server-rendered `/`. Its arrivals are `rootVisits`; the
+ *               shell events underneath it are people who clicked through.
+ *   `app`     — straight to `/welcome`. Its arrivals are `visits`.
+ *   `none`    — the campaign recorded nothing yet.
+ */
+export type LandingEntry = 'landing' | 'app' | 'none'
+
+export interface CampaignFunnel {
+  campaign: string
+  entry: LandingEntry
+  /**
+   * Distinct people the ad delivered, read from whichever counter the entry
+   * URL actually populates. Comparing a `/` arm against a `/welcome` arm on
+   * the same field is the mistake this exists to prevent: on the `/` arm
+   * `visits` counts only the people who already clicked through, so using it
+   * as a denominator scores that arm against its own survivors.
+   */
+  arrivals: number
+  rootVisits: number
+  visits: number
+  /** Chose to begin, from either entry point. */
+  ctaStart: number
+  registerView: number
+  /** Account-creation click: the conversion an ad is buying. */
+  registerSubmit: number
+  /** `registerSubmit / arrivals`, rounded to four places; null with no arrivals. */
+  conversion: number | null
+  /**
+   * Both entry points are feeding one campaign tag, so the arms cannot be
+   * separated. On a `/` arm the shell is reached only by clicking through, so
+   * shell arrivals should not exceed the click-throughs by much; when they do,
+   * the same tag is almost certainly live on both ad sets. Give each arm its
+   * own tag and this clears.
+   */
+  mixedEntrySuspected: boolean
+}
+
+function rate(numerator: number, denominator: number): number | null {
+  if (denominator <= 0) return null
+  return Math.round((numerator / denominator) * 10_000) / 10_000
+}
+
+/**
+ * Collapse the day/device grid into one row per campaign.
+ *
+ * The raw rows are the source of truth and stay in the response, but reading an
+ * A/B result off them means summing three device classes across N days and then
+ * knowing which visit counter belongs to which arm. That is exactly the kind of
+ * arithmetic that gets a launch decision made off the wrong number.
+ */
+export function summarizeCampaigns(rows: readonly LandingDayRow[]): CampaignFunnel[] {
+  const byCampaign = new Map<string, CampaignFunnel & { landingView: number }>()
+
+  for (const row of rows) {
+    const existing = byCampaign.get(row.campaign)
+    const acc = existing ?? {
+      campaign: row.campaign,
+      entry: 'none' as LandingEntry,
+      arrivals: 0,
+      rootVisits: 0,
+      visits: 0,
+      ctaStart: 0,
+      registerView: 0,
+      registerSubmit: 0,
+      conversion: null,
+      mixedEntrySuspected: false,
+      landingView: 0,
+    }
+    if (!existing) byCampaign.set(row.campaign, acc)
+
+    acc.rootVisits += row.rootVisits
+    acc.visits += row.visits
+    acc.landingView += row.events.landing_view ?? 0
+    acc.ctaStart += (row.events.root_cta_start ?? 0) + (row.events.cta_start ?? 0)
+    acc.registerView += row.events.register_view ?? 0
+    acc.registerSubmit += row.events.register_submit ?? 0
+  }
+
+  return [...byCampaign.values()]
+    .map(({ landingView, ...funnel }) => {
+      const rootEntry = funnel.rootVisits > 0
+      const entry: LandingEntry = rootEntry ? 'landing' : funnel.visits > 0 ? 'app' : 'none'
+      const arrivals = rootEntry ? funnel.rootVisits : funnel.visits
+      return {
+        ...funnel,
+        entry,
+        arrivals,
+        conversion: rate(funnel.registerSubmit, arrivals),
+        // Heuristic, and named as one: a handful of shell views above the
+        // click-through count is ordinary noise (a reload, a back-navigation),
+        // a multiple of it is two ad sets sharing a tag.
+        mixedEntrySuspected: rootEntry && landingView > funnel.ctaStart * 1.5 + 5,
+      }
+    })
+    .sort((a, b) => b.arrivals - a.arrivals)
+}
