@@ -45,6 +45,12 @@ describe('event allowlist', () => {
     expect(isLandingEvent('arbitrary_key')).toBe(false)
     expect(isLandingEvent(42)).toBe(false)
   })
+
+  it('admits root scroll depth, which the `/` tracker emits', () => {
+    expect(isLandingEvent('root_scroll_1')).toBe(true)
+    expect(isLandingEvent('root_scroll_5')).toBe(true)
+    expect(isLandingEvent('root_scroll_6')).toBe(false)
+  })
 })
 
 describe('device class', () => {
@@ -96,6 +102,25 @@ describe('recording and reading the funnel', () => {
     expect(row?.rootVisits).toBe(1)
     expect(row?.events.landing_view).toBeUndefined()
     expect(row?.events.cta_start).toBeUndefined()
+  })
+
+  it('counts a scroll-depth beacon as a root arrival, never as a shell visit', async () => {
+    // The tracker batches depth marks into their own beacon, so this arrives
+    // with no `root_view` beside it. Classified as a shell event it would
+    // inflate `visits`, which is the `/` arm's click-through counter, and the
+    // arm would appear to convert people it never sent anywhere.
+    await recordLandingBatch({
+      visitId: 'visit-scroller',
+      campaign: 'rd-02',
+      device: 'phone',
+      events: ['root_scroll_1', 'root_scroll_2'],
+    })
+
+    const row = (await readLandingSummary(1)).find((r) => r.campaign === 'rd-02')
+    expect(row?.events.root_scroll_1).toBe(1)
+    expect(row?.events.root_scroll_2).toBe(1)
+    expect(row?.rootVisits).toBe(1)
+    expect(row?.visits).toBe(0)
   })
 
   it('keeps shell and root distinct visits independent across a click-through', async () => {
@@ -204,6 +229,8 @@ describe('campaign rollup for the entry-point A/B test', () => {
     visits: 40,
     events: {
       root_view: 100,
+      root_scroll_1: 55,
+      root_scroll_5: 12,
       root_cta_start: 40,
       landing_view: 40,
       cta_start: 38,
@@ -221,11 +248,36 @@ describe('campaign rollup for the entry-point A/B test', () => {
     visits: 100,
     events: {
       landing_view: 100,
+      scroll_1: 62,
       cta_start: 45,
       register_view: 30,
       register_submit: 15,
     },
   }
+
+  it('reports depth from whichever entry page the arm actually served', () => {
+    // The signal is "did they engage with the pitch", and each arm records it
+    // under its own event name, so the rollup has to read both to be
+    // comparable across arms.
+    expect(summarizeCampaigns([landingArm]).at(0)?.scrolled).toBe(55)
+    expect(summarizeCampaigns([appArm]).at(0)?.scrolled).toBe(62)
+  })
+
+  it('separates a bounce from a considered rejection', () => {
+    const bounced: LandingDayRow = {
+      day,
+      campaign: 'rd-bounce',
+      device: 'phone',
+      rootVisits: 24,
+      visits: 0,
+      events: { root_view: 24 },
+    }
+
+    const [row] = summarizeCampaigns([bounced])
+    expect(row?.arrivals).toBe(24)
+    expect(row?.scrolled).toBe(0)
+    expect(row?.ctaStart).toBe(0)
+  })
 
   it('counts arrivals from the counter the arm actually populates', () => {
     const [landing, app] = [

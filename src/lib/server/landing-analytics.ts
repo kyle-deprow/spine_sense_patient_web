@@ -53,6 +53,15 @@ export const LANDING_EVENTS = [
   // shell funnel below so changing the paid entry URL does not redefine the
   // historical meaning of `landing_view` or either shell CTA.
   'root_view',
+  // Scroll depth on the server-rendered `/` page, in fifths. Kept distinct
+  // from the shell's `scroll_*` for the same reason `root_view` is kept
+  // distinct from `landing_view`: the two pages are different lengths and
+  // different pitches, so one name must not come to mean two things.
+  'root_scroll_1',
+  'root_scroll_2',
+  'root_scroll_3',
+  'root_scroll_4',
+  'root_scroll_5',
   'root_cta_start',
   'root_cta_signin',
   'landing_view',
@@ -77,6 +86,11 @@ export type LandingEvent = (typeof LANDING_EVENTS)[number]
 const EVENT_SET: ReadonlySet<string> = new Set(LANDING_EVENTS)
 const ROOT_EVENT_SET: ReadonlySet<LandingEvent> = new Set([
   'root_view',
+  'root_scroll_1',
+  'root_scroll_2',
+  'root_scroll_3',
+  'root_scroll_4',
+  'root_scroll_5',
   'root_cta_start',
   'root_cta_signin',
 ])
@@ -428,6 +442,14 @@ export interface CampaignFunnel {
   arrivals: number
   rootVisits: number
   visits: number
+  /**
+   * Reached the first fifth of the entry page, from either entry point.
+   *
+   * The signal this exists for is the difference between "read the pitch and
+   * declined" and "left before the page registered", which arrivals alone
+   * cannot tell apart. Read it against `arrivals`, not against `ctaStart`.
+   */
+  scrolled: number
   /** Chose to begin, from either entry point. */
   ctaStart: number
   registerView: number
@@ -469,6 +491,7 @@ export function summarizeCampaigns(rows: readonly LandingDayRow[]): CampaignFunn
       arrivals: 0,
       rootVisits: 0,
       visits: 0,
+      scrolled: 0,
       ctaStart: 0,
       registerView: 0,
       registerSubmit: 0,
@@ -481,6 +504,7 @@ export function summarizeCampaigns(rows: readonly LandingDayRow[]): CampaignFunn
     acc.rootVisits += row.rootVisits
     acc.visits += row.visits
     acc.landingView += row.events.landing_view ?? 0
+    acc.scrolled += (row.events.root_scroll_1 ?? 0) + (row.events.scroll_1 ?? 0)
     acc.ctaStart += (row.events.root_cta_start ?? 0) + (row.events.cta_start ?? 0)
     acc.registerView += row.events.register_view ?? 0
     acc.registerSubmit += row.events.register_submit ?? 0
