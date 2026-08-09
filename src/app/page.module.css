@@ -7,59 +7,121 @@
  * cannot restyle the app shell by accident, which matters because the shell is
  * an Expo export whose class names we do not control.
  *
- * Palette matches the marketing site's tokens so the two surfaces do not look
- * like different products: navy-900 #04101E, navy-800 #071F3B, teal-400
- * #2ABFBF, warm-50 #F7F8FA, body text #344054.
+ * Palette and type are the patient app's own tokens
+ * (spine_sense_app/src/constants/colors.ts and typography.ts) rather than the
+ * marketing site's: navy #0E2543, deep navy #071D34, accent #E8985E, sheet
+ * cream #F7F1E8, Satoshi throughout. A visitor crosses from this page into the
+ * app in one click, and the previous teal-and-Inter treatment made that click
+ * feel like a hand-off to a different company. It is deliberately not an exact
+ * copy of the app screen -- wider measure, flat sections, no motion -- so the
+ * two read as one product rather than as the same page served twice.
+ *
+ * Every rule lives here rather than in a `style` attribute: the CSP for `/`
+ * sets `style-src-attr 'none'`, so an inline style silently does nothing.
  */
 
 .page {
-  --navy-900: #04101e;
-  --navy-800: #071f3b;
-  --teal-400: #2abfbf;
-  --teal-500: #22a6a6;
-  --warm-50: #f7f8fa;
-  --line: #d9e1ea;
-  --ink: #344054;
-  --ink-soft: #667085;
+  --navy: #0e2543;
+  --navy-deep: #071d34;
+  --accent: #e8985e;
+  --accent-strong: #d4784a;
+  --cream: #f7f1e8;
+  --cream-border: #dcc9b4;
+  --line: #e2e8f0;
+  --ink: #1a202c;
+  --ink-soft: #4a5568;
+  --on-navy: rgba(226, 232, 240, 0.88);
+  --on-navy-soft: rgba(226, 232, 240, 0.72);
+  --hairline-navy: rgba(231, 236, 243, 0.14);
 
   margin: 0 auto;
   max-width: 100%;
   background: #ffffff;
   color: var(--ink);
+  font-family: var(--font-satoshi), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: 16px;
   line-height: 1.6;
 }
 
+/* ── hero ────────────────────────────────────────────────────────── */
+
 .hero {
-  background: var(--navy-900);
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  background: var(--navy);
   color: #ffffff;
-  padding: 72px 24px 64px;
+  padding: 64px 24px 56px;
+}
+
+/*
+ * The app's own hero artwork, at the app's own peak opacity (0.72), behind a
+ * navy-to-transparent wash so the headline keeps contrast at the top where the
+ * image is busiest. Decorative, so it is a background rather than an <img>.
+ */
+.heroArt {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background-image:
+    linear-gradient(
+      to bottom,
+      rgba(7, 29, 52, 0.82) 0%,
+      rgba(7, 29, 52, 0.62) 45%,
+      rgba(14, 37, 67, 0.92) 100%
+    ),
+    url("./landing-hero-spine.jpg");
+  background-size: cover, cover;
+  background-position: center, center right;
+  background-repeat: no-repeat, no-repeat;
+}
+
+.heroInner {
+  width: min(100%, 860px);
+  margin: 0 auto;
   text-align: center;
 }
 
+/*
+ * The app's welcome screen opens on this wordmark, so the page a click arrives
+ * on has to as well; without it the first screen is unbranded and the hand-off
+ * to the app reads as a redirect to somewhere else.
+ */
+.wordmark {
+  display: block;
+  width: min(58vw, 200px);
+  height: auto;
+  margin: 0 auto 26px;
+}
+
 .eyebrow {
-  margin: 0 0 16px;
-  color: var(--teal-400);
-  font-size: 0.8rem;
+  margin: 0 0 18px;
+  color: var(--accent);
+  font-size: 0.78rem;
   font-weight: 700;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.18em;
   text-transform: uppercase;
 }
 
 .h1 {
   margin: 0 auto 20px;
-  max-width: 18ch;
-  font-size: clamp(2rem, 5vw, 3.1rem);
-  font-weight: 600;
-  line-height: 1.15;
-  letter-spacing: -0.01em;
+  /* Wide enough that "pain" never lands alone on a third line. */
+  max-width: 20ch;
+  font-size: clamp(2.05rem, 5.4vw, 3.35rem);
+  font-weight: 700;
+  line-height: 1.08;
+  letter-spacing: -0.02em;
+}
+
+.accent {
+  color: var(--accent);
 }
 
 .lede {
-  margin: 0 auto 32px;
-  max-width: 60ch;
-  color: rgba(255, 255, 255, 0.72);
-  font-size: 1.06rem;
+  margin: 0 auto 30px;
+  max-width: 58ch;
+  color: var(--on-navy);
+  font-size: 1.08rem;
 }
 
 .actions {
@@ -74,21 +136,23 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 10px;
-  padding: 14px 28px;
+  /* The app's CTA is a full pill; matching it is the cheapest continuity cue. */
+  border-radius: 999px;
+  padding: 15px 32px;
   font-size: 1rem;
-  font-weight: 600;
+  font-weight: 700;
   text-decoration: none;
-  transition: background-color 0.15s ease, border-color 0.15s ease;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
 .primary {
-  background: var(--teal-400);
-  color: #ffffff;
+  background: var(--accent);
+  color: #33210f;
 }
 
 .primary:hover {
-  background: var(--teal-500);
+  background: var(--accent-strong);
+  color: #ffffff;
 }
 
 /*
@@ -99,48 +163,225 @@
  */
 .secondary {
   border: 1px solid var(--line);
-  color: var(--navy-800);
+  color: var(--navy);
+  font-weight: 500;
 }
 
 .secondary:hover {
-  border-color: var(--navy-800);
+  border-color: var(--navy);
 }
 
 .hero .secondary {
-  border-color: rgba(255, 255, 255, 0.28);
+  border-color: rgba(255, 255, 255, 0.3);
   color: #ffffff;
 }
 
 .hero .secondary:hover {
-  border-color: rgba(255, 255, 255, 0.6);
+  border-color: rgba(255, 255, 255, 0.65);
 }
 
 .note {
-  margin: 28px auto 0;
+  margin: 20px auto 0;
   max-width: 52ch;
-  color: rgba(255, 255, 255, 0.5);
-  font-size: 0.86rem;
+  color: var(--on-navy-soft);
+  font-size: 0.9rem;
 }
 
-.section {
-  width: min(100%, 880px);
+/*
+ * The credibility line, kept inside the hero on purpose: most arrivals never
+ * scroll, so "who built this and is it safe" has to be answered on the first
+ * screen or not at all.
+ */
+.trustRail {
+  display: grid;
+  gap: 12px 30px;
+  margin: 34px auto 0;
+  padding: 22px 0 0;
+  /*
+   * A wrapping flex row centred each line independently, which left the four
+   * claims stair-stepped. A grid keeps the bullets on a common left edge, and
+   * the block as a whole stays centred under the CTA.
+   */
+  width: fit-content;
+  max-width: 100%;
+  border-top: 1px solid var(--hairline-navy);
+  list-style: none;
+  color: var(--on-navy-soft);
+  font-size: 0.88rem;
+  line-height: 1.45;
+  text-align: left;
+}
+
+.trustRail li {
+  position: relative;
+  padding-left: 18px;
+}
+
+.trustRail li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* ── stats ───────────────────────────────────────────────────────── */
+
+.statsBand {
+  background: var(--navy-deep);
+  color: #ffffff;
+  padding: 40px 24px;
+}
+
+.stats {
+  display: grid;
+  gap: 28px;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  width: min(100%, 980px);
   margin: 0 auto;
-  padding: 64px 24px 8px;
+}
+
+.stat {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+
+.statValue {
+  color: var(--accent);
+  font-size: clamp(2rem, 4vw, 2.6rem);
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.statLabel {
+  margin: 0;
+  max-width: 34ch;
+  color: var(--on-navy-soft);
+  font-size: 0.93rem;
+  line-height: 1.5;
+}
+
+/* ── guideline bodies ────────────────────────────────────────────── */
+
+.logoBand {
+  background: var(--cream);
+  border-bottom: 1px solid var(--cream-border);
+  padding: 56px 24px 44px;
+}
+
+.h2Center {
+  margin: 0 auto 12px;
+  max-width: 24ch;
+  color: var(--navy);
+  font-size: clamp(1.4rem, 3vw, 1.9rem);
+  font-weight: 700;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.logoLede {
+  margin: 0 auto 36px;
+  max-width: 62ch;
+  color: var(--ink-soft);
+  text-align: center;
+}
+
+/*
+ * Fixed column counts rather than auto-fit. Eight marks against `auto-fit`
+ * packed 5 into the first row and 3 into the second, which reads as an
+ * accident; 2 and 4 divide the set evenly at both breakpoints.
+ */
+.logoGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 34px 20px;
+  align-items: center;
+  justify-items: center;
+  width: min(100%, 960px);
+  margin: 0 auto;
+  padding: 0;
+  list-style: none;
+}
+
+.logoCell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 56px;
+}
+
+/*
+ * Per-mark widths rather than one shared height. The eight marks range from a
+ * near-square (AO Spine) to a long horizontal lockup (AANS), and equal height
+ * makes the long ones tower over the row; capping width by shape is what makes
+ * them read as one set. `max-height` keeps the tall ones honest.
+ */
+.logoNarrow,
+.logoWide,
+.logoXwide {
+  height: auto;
+  max-height: 52px;
+  object-fit: contain;
+  /*
+   * A hair of desaturation settles eight unrelated brand palettes into one
+   * row without misrepresenting any of them.
+   */
+  filter: saturate(0.88);
+}
+
+/* Near-square marks: AO Spine, EUROSPINE, NICE. */
+.logoNarrow {
+  width: min(100%, 88px);
+}
+
+/* Mark-plus-name lockups. */
+.logoWide {
+  width: min(100%, 158px);
+}
+
+/* Lockups carrying a full society name, which needs the extra measure to stay
+   readable at this size. */
+.logoXwide {
+  width: min(100%, 188px);
+}
+
+.logoNote {
+  margin: 36px auto 0;
+  max-width: 66ch;
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  text-align: center;
+}
+
+/* ── body sections ───────────────────────────────────────────────── */
+
+.section {
+  width: min(100%, 900px);
+  margin: 0 auto;
+  padding: 60px 24px 8px;
 }
 
 .h2 {
-  margin: 0 0 28px;
-  color: var(--navy-800);
+  margin: 0 0 26px;
+  color: var(--navy);
   font-size: clamp(1.5rem, 3vw, 2rem);
-  font-weight: 600;
+  font-weight: 700;
   line-height: 1.25;
+  letter-spacing: -0.01em;
 }
 
 .h3 {
   margin: 0 0 8px;
-  color: var(--navy-900);
-  font-size: 1.05rem;
-  font-weight: 600;
+  color: var(--navy);
+  font-size: 1.06rem;
+  font-weight: 700;
   line-height: 1.35;
 }
 
@@ -155,33 +396,6 @@
   color: var(--ink);
 }
 
-.steps {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: grid;
-  gap: 20px;
-}
-
-.step {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 18px;
-  align-items: start;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--warm-50);
-  padding: 22px 24px;
-}
-
-.stepNum {
-  color: var(--teal-500);
-  font-size: 0.9rem;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  padding-top: 2px;
-}
-
 .grid {
   display: grid;
   gap: 18px;
@@ -190,23 +404,58 @@
 
 .card {
   border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 22px 24px;
+  border-radius: 16px;
+  padding: 24px;
 }
 
-.notList {
+.steps {
   margin: 0;
   padding: 0;
   list-style: none;
   display: grid;
-  gap: 10px;
+  gap: 18px;
 }
 
-.notItem {
-  border-left: 3px solid var(--line);
-  padding: 4px 0 4px 16px;
-  color: var(--ink-soft);
+.step {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 18px;
+  align-items: start;
+  border: 1px solid var(--cream-border);
+  border-radius: 16px;
+  background: var(--cream);
+  padding: 22px 24px;
 }
+
+.stepNum {
+  color: var(--accent-strong);
+  font-size: 0.9rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  padding-top: 3px;
+}
+
+/* ── security ────────────────────────────────────────────────────── */
+
+.secure {
+  width: min(100%, 900px);
+  margin: 60px auto 0;
+  padding: 40px 24px 44px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: #fbfcfd;
+}
+
+.secure .h2 {
+  margin-bottom: 22px;
+}
+
+.secureCard {
+  border-left: 3px solid var(--accent);
+  padding: 2px 0 2px 16px;
+}
+
+/* ── sample result ───────────────────────────────────────────────── */
 
 .sampleFigure {
   margin: 0;
@@ -220,7 +469,7 @@
   height: auto;
   border: 1px solid var(--line);
   border-radius: 22px;
-  box-shadow: 0 24px 48px -24px rgba(4, 16, 30, 0.35);
+  box-shadow: 0 24px 48px -24px rgba(14, 37, 67, 0.35);
 }
 
 .sampleCaption {
@@ -250,14 +499,20 @@
 }
 
 .textLink:hover {
-  color: var(--navy-800);
+  color: var(--navy);
 }
 
 .closer {
-  width: min(100%, 880px);
+  width: min(100%, 900px);
   margin: 56px auto 0;
   padding: 48px 24px;
   text-align: center;
+}
+
+.closer .body {
+  margin-left: auto;
+  margin-right: auto;
+  max-width: 56ch;
 }
 
 .closer .actions {
@@ -292,15 +547,32 @@
 }
 
 .footerLinks a:hover {
-  color: var(--navy-800);
+  color: var(--navy);
 }
 
 @media (min-width: 720px) {
   .hero {
-    padding: 104px 24px 88px;
+    padding: 88px 24px 72px;
+  }
+
+  .wordmark {
+    width: 224px;
+    margin-bottom: 30px;
+  }
+
+  .statsBand {
+    padding: 48px 24px;
+  }
+
+  .trustRail {
+    grid-template-columns: repeat(2, auto);
+  }
+
+  .logoGrid {
+    grid-template-columns: repeat(4, 1fr);
   }
 
   .section {
-    padding-top: 80px;
+    padding-top: 78px;
   }
 }

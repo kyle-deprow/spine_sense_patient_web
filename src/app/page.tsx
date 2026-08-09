@@ -3,6 +3,15 @@ import { MARKETING_SITE_URL } from '@/lib/site'
 import { buildLandingLinks, landingMetadata } from './landing-page-config'
 import RootLandingAnalytics from './root-landing-analytics'
 import sampleResult from './sample-result.webp'
+import aaosLogo from './logos/aaos.png'
+import aansLogo from './logos/aans.png'
+import acrLogo from './logos/acr.png'
+import aospineLogo from './logos/aospine.png'
+import eurospineLogo from './logos/eurospine.png'
+import isslsLogo from './logos/issls.png'
+import naceLogo from './logos/nice.png'
+import nassLogo from './logos/nass.png'
+import wordmark from './logos/spinesense-wordmark-white.svg'
 import styles from './page.module.css'
 
 /**
@@ -26,19 +35,75 @@ import styles from './page.module.css'
  * assistant asks when someone names the product. Both point at the same
  * assessment. Neither should be rewritten to chase the other's queries.
  *
- * It is also the page paid ads land on, so the copy must answer the ad that
- * was clicked: the imaging ads promise "see what your MRI report means", the
- * MiScribe ads promise visit notes, and every ad promises free. Each of those
- * promises needs a visible answer here or the click bounces.
+ * It is also one of the two URLs paid ads land on. The other is `/welcome`,
+ * the app's own first screen, and the two are being A/B tested against each
+ * other; see `root-landing-analytics.tsx` for how the arms are told apart.
+ * Everything that has to land before a visitor decides -- what the assessment
+ * answers, who built it, what it is built on, that it is free -- is above the
+ * "How the assessment works" heading, because most arrivals never scroll past
+ * the first screen.
  *
- * Claim discipline matches the marketing site: this describes what the
- * assessment does and explicitly what it does not. It is not a diagnosis, it is
- * not FDA-cleared, and no wording here may imply otherwise.
+ * Copy positioning, set by Ed 2026-08-09: this is an advanced clinical
+ * assessment that explains the likely *cause* of someone's symptoms. It is not
+ * a note-taking aid for a clinic visit, and copy that frames it as one
+ * undersells what the pipeline actually does. Regulatory softening is a later,
+ * deliberate pass by counsel, not something to pre-apply here.
  */
 
 export const metadata = landingMetadata
 
 /* ------------------------------------------------------------------ */
+
+/**
+ * The bodies whose published guidelines inform the assessment logic (Ed's
+ * list, 2026-08-09).
+ *
+ * The marks are each organisation's own, normalized to one optical height.
+ * `note` below states the relationship in the only terms that are true: they
+ * publish the guidelines, they are not partners and they have not endorsed
+ * anything. Do not reword that line into anything warmer.
+ */
+const GUIDELINE_BODIES = [
+  { src: nassLogo.src, alt: 'North American Spine Society', className: styles.logoWide },
+  { src: aaosLogo.src, alt: 'American Academy of Orthopaedic Surgeons', className: styles.logoWide },
+  {
+    src: aansLogo.src,
+    alt: 'American Association of Neurological Surgeons',
+    className: styles.logoXwide,
+  },
+  { src: aospineLogo.src, alt: 'AO Spine', className: styles.logoNarrow },
+  { src: eurospineLogo.src, alt: 'EUROSPINE, the Spine Society of Europe', className: styles.logoNarrow },
+  {
+    src: isslsLogo.src,
+    alt: 'International Society for the Study of the Lumbar Spine',
+    className: styles.logoXwide,
+  },
+  {
+    src: naceLogo.src,
+    alt: 'National Institute for Health and Care Excellence',
+    className: styles.logoNarrow,
+  },
+  { src: acrLogo.src, alt: 'American College of Radiology', className: styles.logoWide },
+]
+
+const FINDINGS = [
+  {
+    title: 'What is most likely causing this',
+    body: 'The analysis names the clinical patterns your answers and your imaging fit, explains what each one means, and says which findings actually line up with what you feel and which are probably incidental.',
+  },
+  {
+    title: 'Why your symptoms are where they are',
+    body: 'Which nerve level would explain pain running down the back of one leg. Why one hand goes numb and the other does not. Why sitting helps and standing does not. The reasoning is shown, not just the conclusion.',
+  },
+  {
+    title: 'What your MRI report is actually saying',
+    body: 'Disc desiccation, foraminal narrowing, Modic changes, facet arthropathy. It reads the written report and puts it in plain language next to your symptoms, so you can see which lines matter and which are ordinary for your age.',
+  },
+  {
+    title: 'How soon this should be looked at',
+    body: 'Where your pattern sits on the urgency scale, which specific features would change that, and the questions worth putting to your clinician when you are seen.',
+  },
+]
 
 const STEPS = [
   {
@@ -48,46 +113,38 @@ const STEPS = [
   },
   {
     n: '02',
-    title: 'You add whatever records you already have',
-    body: 'MRI reports, clinic notes, X-ray results: a PDF, a photo of the page, or pasted text. It reads them and pulls out the findings. This step is optional; the assessment works without it.',
+    title: 'It asks the questions a specialist would ask',
+    body: 'A 271-question clinical bank across 13 domains, delivered adaptively: it tracks what it already knows and asks only what it still needs to separate one explanation from another. Neck, mid-back and lower back follow separate clinical paths, the way they do in clinic.',
   },
   {
     n: '03',
-    title: 'The questions adapt to what you have said',
-    body: 'It keeps track of what it already knows and asks only what it still needs. Neck, mid-back and lower back follow separate clinical paths rather than one shared set of questions.',
+    title: 'It reads the records you already have',
+    body: 'MRI reports, clinic notes, X-ray results: a PDF, a photo of the page, or pasted text. It extracts the findings and reconciles them against what you described. Optional, and the assessment works without it.',
   },
   {
     n: '04',
-    title: 'You get a summary written to be handed over',
-    body: 'What your symptoms and records describe, how confident that analysis is, how soon people with a similar pattern are usually seen, and the questions worth raising at your appointment.',
+    title: 'You get the analysis, in full',
+    body: 'The likely explanations in order, the reasoning behind each, how confident the analysis is, how soon people with this pattern are usually seen, and what to raise at your appointment.',
   },
 ]
 
-const DIFFERENCES = [
+const SECURITY = [
   {
-    title: 'It reads your imaging reports',
-    body: 'Most symptom questionnaires only take answers to their own questions. If you have an MRI report full of terms nobody explained, like disc desiccation, foraminal narrowing, or Modic changes, this reads it and puts it in plain language alongside what you described. It reads the written report, not the scan images themselves.',
+    title: 'Handled to HIPAA standards',
+    body: 'The same rules a clinic is held to, applied to everything you enter and every document you upload.',
   },
   {
-    title: 'It branches by region, like a clinic would',
-    body: 'A cervical problem and a lumbar problem do not share a question set. The paths here were written by spine surgeons around how the regions actually differ, not flattened into one generic back-pain flow.',
+    title: 'Encrypted in transit and at rest',
+    body: 'Your answers and your records are encrypted on the way to us and while they are stored.',
   },
   {
-    title: 'It is built to be given to a clinician',
-    body: 'The output is a structured history and a question list, not a score or a label. The point is that your first appointment starts as a conversation instead of fifteen minutes of repeating your history.',
+    title: 'No advertising or third-party trackers',
+    body: 'There is no ad-network pixel and no third-party analytics tag anywhere in the assessment. Nothing about your health leaves our own infrastructure.',
   },
   {
-    title: 'It tells you what it cannot do',
-    body: 'It does not diagnose, it is not an FDA-cleared device, and it can miss things. That is stated on the assessment itself, not buried in a footer.',
+    title: 'Your documents stay yours',
+    body: 'Anything you upload can be removed later, from inside your account.',
   },
-]
-
-const NOT_LIST = [
-  'A diagnosis, or a substitute for examination and imaging by a clinician',
-  'A recommendation for or against surgery, injections or any other treatment',
-  'An FDA-cleared medical device or clinical decision support system',
-  'A guarantee that a serious condition will be detected; it can miss things',
-  'A way to get emergency care. If something feels like an emergency, call your local emergency number',
 ]
 
 /**
@@ -107,31 +164,110 @@ export default async function LandingPage({
   return (
     <main className={styles.page}>
       <RootLandingAnalytics />
+
       <section className={styles.hero}>
-        <p className={styles.eyebrow}>Free for patients</p>
-        <h1 className={styles.h1}>See what your symptoms and your MRI report actually describe</h1>
-        <p className={styles.lede}>
-          SpineSense is a free spine assessment built by spine surgeons. Describe the
-          problem in your own words, add your MRI, CT, or X-ray report if you have one,
-          and get a plain-language summary of what it all describes, what to ask about,
-          and how soon people with a similar pattern are usually seen.
-        </p>
-        <div className={styles.actions}>
-          <a className={styles.primary} href={startHref} data-root-landing-event="root_cta_start">
-            Start the free assessment
-          </a>
-          <a
-            className={styles.secondary}
-            href={signInHref}
-            data-root-landing-event="root_cta_signin"
-          >
-            Sign in
-          </a>
+        <div className={styles.heroArt} aria-hidden="true" />
+        <div className={styles.heroInner}>
+          {/* eslint-disable-next-line @next/next/no-img-element -- an inline SVG
+              wordmark; nothing for the image optimizer to do */}
+          <img
+            className={styles.wordmark}
+            src={wordmark.src}
+            width={220}
+            height={52}
+            alt="SpineSense"
+          />
+          <p className={styles.eyebrow}>Advanced spine assessment</p>
+          <h1 className={styles.h1}>
+            Find out what is <span className={styles.accent}>actually causing</span> your back or
+            neck pain
+          </h1>
+          <p className={styles.lede}>
+            A thorough clinical spine assessment, built by spine surgeons. The interview adapts to
+            your answers the way a specialist would, reads your MRI, CT and X-ray reports, and
+            explains in detail what is most likely driving your symptoms.
+          </p>
+
+          <div className={styles.actions}>
+            <a className={styles.primary} href={startHref} data-root-landing-event="root_cta_start">
+              Start my assessment
+            </a>
+            <a
+              className={styles.secondary}
+              href={signInHref}
+              data-root-landing-event="root_cta_signin"
+            >
+              Sign in
+            </a>
+          </div>
+          <p className={styles.note}>
+            Free. About 8 minutes. No card, and nothing to cancel.
+          </p>
+
+          <ul className={styles.trustRail}>
+            <li>Built and tuned by spine surgeons</li>
+            <li>Developed against thousands of real clinical cases</li>
+            <li>In evaluation at multiple large academic medical centers</li>
+            <li>HIPAA-standard handling, encrypted end to end</li>
+          </ul>
         </div>
-        <p className={styles.note}>
-          Typically 8 to 12 minutes. Free, with no card and nothing to cancel. An account
-          is required because the assessment handles health information.
+      </section>
+
+      <section className={styles.statsBand}>
+        <dl className={styles.stats}>
+          <div className={styles.stat}>
+            <dt className={styles.statValue}>271</dt>
+            <dd className={styles.statLabel}>
+              clinical questions in the bank, asked adaptively so you only answer the ones that
+              apply to you
+            </dd>
+          </div>
+          <div className={styles.stat}>
+            <dt className={styles.statValue}>13</dt>
+            <dd className={styles.statLabel}>
+              assessment domains, with the neck, mid-back and lower back on separate clinical paths
+            </dd>
+          </div>
+          <div className={styles.stat}>
+            <dt className={styles.statValue}>8 min</dt>
+            <dd className={styles.statLabel}>
+              typical time to complete, including reading whichever imaging reports you upload
+            </dd>
+          </div>
+        </dl>
+      </section>
+
+      <section className={styles.logoBand}>
+        <h2 className={styles.h2Center}>Built on the published guidelines</h2>
+        <p className={styles.logoLede}>
+          The clinical logic follows recommendations published by the major spine, neurosurgical and
+          musculoskeletal bodies in North America, Europe and internationally.
         </p>
+        <ul className={styles.logoGrid}>
+          {GUIDELINE_BODIES.map((body) => (
+            <li key={body.alt} className={styles.logoCell}>
+              {/* eslint-disable-next-line @next/next/no-img-element -- eight small
+                  pre-normalized PNGs; the optimizer pipeline earns nothing here */}
+              <img className={body.className} src={body.src} alt={body.alt} loading="lazy" />
+            </li>
+          ))}
+        </ul>
+        <p className={styles.logoNote}>
+          These organizations publish the clinical guidelines the assessment draws on. They are not
+          affiliated with SpineSense and have not reviewed or endorsed it.
+        </p>
+      </section>
+
+      <section className={styles.section}>
+        <h2 className={styles.h2}>What the assessment tells you</h2>
+        <div className={styles.grid}>
+          {FINDINGS.map((item) => (
+            <div key={item.title} className={styles.card}>
+              <h3 className={styles.h3}>{item.title}</h3>
+              <p className={styles.body}>{item.body}</p>
+            </div>
+          ))}
+        </div>
       </section>
 
       <section className={styles.section}>
@@ -148,8 +284,8 @@ export default async function LandingPage({
             alt="SpineSense result screen: the most likely explanation in plain language, with a confidence level and guidance on how soon to be seen"
           />
           <figcaption className={styles.sampleCaption}>
-            A real result screen, shown with sample data: the likely explanation in plain
-            language, how confident the analysis is, and how soon to be seen.
+            A real result screen, shown with sample data: the likely explanation in plain language,
+            how confident the analysis is, and how soon to be seen.
           </figcaption>
         </figure>
       </section>
@@ -172,25 +308,30 @@ export default async function LandingPage({
       <section className={styles.section}>
         <h2 className={styles.h2}>Why it was built</h2>
         <p className={styles.prose}>
-          Spine problems are unusually hard to pin down, and the person least equipped to
-          assemble the picture is usually the patient. The MRI is on a disc from three
-          years ago, the clinic notes are in one portal, and the physical therapy summary
-          is a fax somewhere. The first specialist appointment is spent reconstructing a
-          history the patient has already told four times.
+          SpineSense was built to give spine patients a real understanding of what is happening in
+          their own back, and the detail they need to be taken seriously when they ask about it.
         </p>
         <p className={styles.prose}>
-          SpineSense was built by spine surgeons to move that work before the
-          appointment: the history gathered once, the records read and explained, and
-          something worth handing to a clinician at the end. Not to replace the visit. To
-          stop it from starting at zero.
+          Spine problems are unusually hard to pin down, and the person holding the least
+          information is almost always the patient. You feel something specific and complicated, and
+          you get a few minutes to explain it. The MRI report is written for another doctor. Nobody
+          has the time to draw out the details that would actually narrow it down: whether it is
+          worse sitting or standing, how far down the leg it travels, which two fingers went numb,
+          what changed in the last month.
+        </p>
+        <p className={styles.prose}>
+          This does that part properly, with no clock running, and then explains what it found in
+          language written for you rather than for a chart. The point is that you understand your
+          own spine, and that you and your doctor make the decisions about your care with the same
+          picture in front of both of you.
         </p>
       </section>
 
-      <section className={styles.section}>
-        <h2 className={styles.h2}>How it differs from a symptom checker</h2>
+      <section className={styles.secure}>
+        <h2 className={styles.h2}>Your health information stays yours</h2>
         <div className={styles.grid}>
-          {DIFFERENCES.map((item) => (
-            <div key={item.title} className={styles.card}>
+          {SECURITY.map((item) => (
+            <div key={item.title} className={styles.secureCard}>
               <h3 className={styles.h3}>{item.title}</h3>
               <p className={styles.body}>{item.body}</p>
             </div>
@@ -201,37 +342,26 @@ export default async function LandingPage({
       <section className={styles.section}>
         <h2 className={styles.h2}>Bring an AI scribe to your appointments</h2>
         <p className={styles.prose}>
-          Doctors use AI scribes to take notes. MiScribe gives you the same help on your
-          side of the visit. Record an appointment with your clinician&apos;s permission,
-          and it keeps an organized summary of what was said, what was recommended, and
-          what comes next, so you can revisit the details and compare opinions later. It
-          is part of the same free account.
+          Doctors use AI scribes to take notes. MyScribe gives you the same help on your side of the
+          visit. Record an appointment with your clinician&apos;s permission, and it keeps an
+          organized summary of what was said, what was recommended, and what comes next, so you can
+          revisit the details and compare opinions later. It is part of the same free account.
         </p>
         <p className={styles.finePrint}>
           Always get your clinician&apos;s permission before recording.
         </p>
       </section>
 
-      <section className={styles.section}>
-        <h2 className={styles.h2}>What it is not</h2>
-        <ul className={styles.notList}>
-          {NOT_LIST.map((item) => (
-            <li key={item} className={styles.notItem}>
-              {item}
-            </li>
-          ))}
-        </ul>
-      </section>
-
       <section className={styles.closer}>
         <h2 className={styles.h2}>Start when you are ready</h2>
         <p className={styles.body}>
-          Or read first: the SpineSense library has sourced guides to every spine
-          condition and procedure, and needs no account.
+          Free, about 8 minutes, and no scan is required to begin. If you would rather read first,
+          the SpineSense library has sourced guides to every spine condition and procedure, and
+          needs no account.
         </p>
         <div className={styles.actions}>
           <a className={styles.primary} href={startHref} data-root-landing-event="root_cta_start">
-            Start the free assessment
+            Start my assessment
           </a>
           <a className={styles.textLink} href={`${MARKETING_SITE_URL}/conditions`}>
             Browse the condition library
@@ -241,8 +371,8 @@ export default async function LandingPage({
 
       <footer className={styles.footer}>
         <p>
-          SpineSense is education and preparation, not medical advice, and it does not
-          replace examination by a clinician.
+          SpineSense provides clinical information and analysis to help you understand your
+          symptoms. It does not replace examination by a clinician.
         </p>
         <p className={styles.footerLinks}>
           <a href={MARKETING_SITE_URL}>spinesense.ai</a>

@@ -3,9 +3,9 @@ import type { Metadata } from 'next'
 import { campaignQuery } from '@/lib/campaign-query'
 import { APP_ENTRY_PATH, APP_ORIGIN, APP_SIGNIN_PATH, MARKETING_SITE_URL } from '@/lib/site'
 
-const TITLE = 'SpineSense: How the Free Spine Assessment Works'
+const TITLE = 'SpineSense: Find Out What Is Causing Your Back or Neck Pain'
 const DESCRIPTION =
-  'SpineSense turns your own description of your back or neck pain, plus any imaging reports you have, into a plain-language summary for your appointment. Free, and built by spine surgeons.'
+  'A thorough clinical spine assessment built by spine surgeons. An adaptive interview and your own MRI, CT or X-ray reports produce a detailed explanation of what is most likely driving your symptoms, and how soon it should be looked at. Free.'
 const SOCIAL_IMAGE = `${MARKETING_SITE_URL}/opengraph-image`
 
 export const landingMetadata: Metadata = {

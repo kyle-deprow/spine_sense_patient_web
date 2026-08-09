@@ -60,11 +60,28 @@ describe('root landing page', () => {
       return readFile(new URL('./page.tsx', import.meta.url), 'utf8')
     }
 
-    it('leads with the imaging-and-symptoms value proposition the ads sell', async () => {
+    /**
+     * Positioning, set by Ed 2026-08-09. The page previously sold itself as a
+     * way to arrive at an appointment organized, which undersells the pipeline
+     * and reads as a note-taking aid; it leads on cause now. A rewrite that
+     * drifts back to "summary for your visit" should fail here.
+     */
+    it('leads on what is causing the pain rather than on visit preparation', async () => {
       const source = await pageSource()
 
-      expect(source).toContain('See what your symptoms and your MRI report actually describe')
-      expect(source).toContain('MRI, CT, or X-ray report')
+      expect(source).toContain('Find out what is')
+      expect(source).toContain('actually causing')
+      expect(source).toContain('what is most likely driving your')
+    })
+
+    it('states the assessment depth that backs the claim', async () => {
+      const source = await pageSource()
+
+      // Both verified against the live question bank (13 sections, 271
+      // question objects in v2.0.json). Never state them as anything else.
+      expect(source).toContain('271')
+      expect(source).toContain('13')
+      expect(source).toContain('adaptive')
     })
 
     it('shows a sample result and answers the free objection at the call to action', async () => {
@@ -72,13 +89,35 @@ describe('root landing page', () => {
 
       expect(source).toContain('sample-result.webp')
       expect(source).toContain('shown with sample data')
-      expect(source).toContain('no card and nothing to cancel')
+      expect(source).toContain('No card, and nothing to cancel')
     })
 
-    it('gives the MiScribe ads a landing section with the recording disclaimer', async () => {
+    /**
+     * The guideline bodies are the page's authority claim, and using their
+     * marks is only defensible alongside the sentence that says what the
+     * relationship is. The two ship together or not at all.
+     */
+    it('pairs the guideline logos with the no-endorsement statement', async () => {
       const source = await pageSource()
 
-      expect(source).toContain('MiScribe')
+      for (const logo of ['nass', 'aaos', 'aans', 'aospine', 'eurospine', 'issls', 'nice', 'acr']) {
+        expect(source).toContain(`./logos/${logo}.png`)
+      }
+      // JSX rewraps prose on edit, so match the sentence, not its line breaks.
+      expect(source.replace(/\s+/g, ' ')).toContain(
+        'not affiliated with SpineSense and have not reviewed or endorsed it',
+      )
+    })
+
+    /**
+     * The patient-facing name is MyScribe; MiScribe is the internal module
+     * name and shipped here by mistake until 2026-08-09.
+     */
+    it('names the scribe feature the way the app does, with the recording disclaimer', async () => {
+      const source = await pageSource()
+
+      expect(source).toContain('MyScribe')
+      expect(source).not.toContain('MiScribe')
       expect(source).toContain('permission before recording')
     })
 
