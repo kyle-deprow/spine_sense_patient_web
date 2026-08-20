@@ -104,16 +104,41 @@ export async function forwardPatientWebTestSupport(
   });
 }
 
-export function testSupportBackendFailure(status: number) {
+export function testSupportBackendFailure(
+  status: number,
+  upstreamCode?: string | null,
+) {
   if (status === 404) {
     return jsonNoStore({ detail: "Not found" }, { status: 404 });
   }
   if (status === 409) {
     return jsonNoStore({ error: "support_conflict" }, { status: 409 });
   }
-  return jsonNoStore({ error: "service_unavailable" }, { status: 503 });
+  // Carry the backend status through, plus the backend's own fault code when
+  // it supplies one. Without this every upstream failure is an
+  // indistinguishable 503 and the only way to tell them apart is to reproduce
+  // the run with a debugger attached.
+  const code =
+    upstreamCode == null
+      ? `backend_status_${status}`
+      : `backend_status_${status}:${upstreamCode}`;
+  return jsonNoStore({ error: "service_unavailable", code }, { status: 503 });
 }
 
-export function testSupportUnavailableResponse() {
-  return jsonNoStore({ error: "service_unavailable" }, { status: 503 });
+/**
+ * A 503 that names why it happened.
+ *
+ * These routes previously collapsed five distinct failures -- no outbound
+ * token, a non-2xx backend, a mismatched document id, a mismatched scan
+ * status, and a thrown exception -- into one identical body. The E2E suite
+ * already reports `code=...` from the response, so the code was being asked
+ * for and never supplied, and every failure read `code=unknown`.
+ *
+ * Codes are stable identifiers only: never a document id, email, key, or any
+ * backend message.
+ */
+export function testSupportUnavailableResponse(
+  code: string = "test_support_unavailable",
+) {
+  return jsonNoStore({ error: "service_unavailable", code }, { status: 503 });
 }

@@ -41,9 +41,29 @@ export async function POST(request: NextRequest) {
       "/test/document-scan-result",
       { document_id: documentId, email, verdict },
     );
-    if (backendResponse === null) return testSupportUnavailableResponse();
+    if (backendResponse === null) {
+      return testSupportUnavailableResponse("backend_token_unavailable");
+    }
     if (!backendResponse.ok) {
-      return testSupportBackendFailure(backendResponse.status);
+      // Read the backend's PHI-free fault code so the failure identifies
+      // itself instead of arriving as an opaque 503.
+      let upstreamCode: string | null = null;
+      try {
+        const errorBody = await readJsonBody<unknown>(backendResponse);
+        if (
+          errorBody != null &&
+          typeof errorBody === "object" &&
+          !Array.isArray(errorBody)
+        ) {
+          const raw = (errorBody as Record<string, unknown>).code;
+          if (typeof raw === "string" && /^[A-Za-z0-9_:.=-]{1,120}$/.test(raw)) {
+            upstreamCode = raw;
+          }
+        }
+      } catch {
+        // A missing or unreadable body leaves the status alone as the signal.
+      }
+      return testSupportBackendFailure(backendResponse.status, upstreamCode);
     }
 
     const backendBody = await readJsonBody<unknown>(backendResponse);
@@ -60,10 +80,10 @@ export async function POST(request: NextRequest) {
         body.document_id.toLowerCase() === documentId.toLowerCase()
       )
     ) {
-      return testSupportUnavailableResponse();
+      return testSupportUnavailableResponse("document_id_mismatch");
     }
     if (body?.scan_status !== verdict) {
-      return testSupportUnavailableResponse();
+      return testSupportUnavailableResponse("scan_status_mismatch");
     }
 
     return jsonNoStore({
@@ -71,6 +91,6 @@ export async function POST(request: NextRequest) {
       scan_status: verdict,
     });
   } catch {
-    return testSupportUnavailableResponse();
+    return testSupportUnavailableResponse("scan_forward_exception");
   }
 }

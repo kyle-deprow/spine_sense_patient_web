@@ -143,7 +143,7 @@ describe("patient web document-analysis-persistence support route", () => {
     const response = await POST(makeRequest(BODY));
 
     expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({ error: "service_unavailable" });
+    expect(await response.json()).toEqual({ error: "service_unavailable", code: "test_support_unavailable" });
   });
 
   it("fails closed when the persisted OCR provider is unproven", async () => {
@@ -161,7 +161,7 @@ describe("patient web document-analysis-persistence support route", () => {
     const response = await POST(makeRequest(BODY));
 
     expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({ error: "service_unavailable" });
+    expect(await response.json()).toEqual({ error: "service_unavailable", code: "test_support_unavailable" });
   });
 
   it.each([
@@ -188,7 +188,7 @@ describe("patient web document-analysis-persistence support route", () => {
       const response = await POST(makeRequest(BODY));
 
       expect(response.status).toBe(503);
-      expect(await response.json()).toEqual({ error: "service_unavailable" });
+      expect(await response.json()).toEqual({ error: "service_unavailable", code: "test_support_unavailable" });
     },
   );
 
@@ -234,6 +234,6 @@ describe("patient web document-analysis-persistence support route", () => {
     const response = await POST(makeRequest(BODY));
 
     expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({ error: "service_unavailable" });
+    expect(await response.json()).toEqual({ error: "service_unavailable", code: "test_support_unavailable" });
   });
 });

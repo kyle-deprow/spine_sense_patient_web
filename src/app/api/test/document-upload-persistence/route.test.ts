@@ -151,7 +151,7 @@ describe("patient web document-upload-persistence support route", () => {
     const response = await POST(makeRequest(BODY));
 
     expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({ error: "service_unavailable" });
+    expect(await response.json()).toEqual({ error: "service_unavailable", code: "test_support_unavailable" });
   });
 
   it("fails closed when the backend cannot attest the final receipt", async () => {
@@ -171,7 +171,7 @@ describe("patient web document-upload-persistence support route", () => {
     const response = await POST(makeRequest(BODY));
 
     expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({ error: "service_unavailable" });
+    expect(await response.json()).toEqual({ error: "service_unavailable", code: "test_support_unavailable" });
   });
 
   it("fails closed when the backend cannot attest OCR lineage", async () => {
@@ -191,7 +191,7 @@ describe("patient web document-upload-persistence support route", () => {
     const response = await POST(makeRequest(BODY));
 
     expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({ error: "service_unavailable" });
+    expect(await response.json()).toEqual({ error: "service_unavailable", code: "test_support_unavailable" });
   });
 
   it("fails closed when the backend cannot attest the OCR provider", async () => {
@@ -211,7 +211,7 @@ describe("patient web document-upload-persistence support route", () => {
     const response = await POST(makeRequest(BODY));
 
     expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({ error: "service_unavailable" });
+    expect(await response.json()).toEqual({ error: "service_unavailable", code: "test_support_unavailable" });
   });
 
   it("maps a backend mismatch to a metadata-only conflict", async () => {
