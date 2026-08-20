@@ -145,7 +145,14 @@ describe("records documents readiness", () => {
       await expect(readiness).resolves.toEqual(
         expect.objectContaining({ state: "complete" }),
       );
-      expect(DOCUMENT_OCR_READINESS_TIMEOUT_MS).toBe(300_000);
+      // A floor, not an exact value. The budget has to cover one 60s KEDA
+      // polling interval plus a full OCR execution, and a production run on
+      // 2026-08-20 observed a single execution take 5m42s on its own -- longer
+      // than the 300_000ms this used to pin, which is what failed
+      // results-report while OCR was still healthily processing. Raising the
+      // budget must stay allowed; shrinking it below the observed latency must
+      // not.
+      expect(DOCUMENT_OCR_READINESS_TIMEOUT_MS).toBeGreaterThanOrEqual(600_000);
     } finally {
       vi.useRealTimers();
     }
