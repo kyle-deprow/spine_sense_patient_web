@@ -145,14 +145,13 @@ describe("records documents readiness", () => {
       await expect(readiness).resolves.toEqual(
         expect.objectContaining({ state: "complete" }),
       );
-      // A floor, not an exact value. The budget has to cover one 60s KEDA
-      // polling interval plus a full OCR execution, and a production run on
-      // 2026-08-20 observed a single execution take 5m42s on its own -- longer
-      // than the 300_000ms this used to pin, which is what failed
-      // results-report while OCR was still healthily processing. Raising the
-      // budget must stay allowed; shrinking it below the observed latency must
-      // not.
-      expect(DOCUMENT_OCR_READINESS_TIMEOUT_MS).toBeGreaterThanOrEqual(600_000);
+      // Held at five minutes on purpose. The multi-minute OCR executions that
+      // briefly justified a larger budget were dependency resolution at
+      // container start, not OCR: every `uv run` re-resolved from PyPI before
+      // doing any work. That is fixed at the runtime, so the budget goes back
+      // to asserting that a document becomes readable promptly. A floor rather
+      // than an exact value, so a slower environment can still raise it.
+      expect(DOCUMENT_OCR_READINESS_TIMEOUT_MS).toBeGreaterThanOrEqual(300_000);
     } finally {
       vi.useRealTimers();
     }

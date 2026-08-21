@@ -16,21 +16,19 @@ export function readPositiveIntegerEnv(
 
 // Azure's event-triggered OCR job is KEDA-scaled from zero, so readiness costs
 // up to one 60-second polling interval before an execution even starts, plus
-// however long that execution takes.
+// the execution itself.
 //
-// The old 5-minute budget assumed one polling interval and a quick execution.
-// That does not hold under the suite's own load: on 2026-08-20 a production
-// run observed a single OCR execution take 5m42s -- longer than the entire
-// budget before counting the polling wait -- and results-report failed at the
-// 5-minute deadline while OCR was still actively processing. Every OCR
-// execution in that window succeeded, so the document was never stuck; the
-// wait was simply shorter than the pipeline it waits on.
+// Deliberately held at 5 minutes. This was briefly raised to 10 on 2026-08-20
+// to get past OCR waits, and that was the wrong call: OCR taking longer than
+// this is a production latency defect, not test flake, and a patient waiting
+// minutes for a document to become readable is the thing the budget exists to
+// surface. Raising it hides the regression instead of reporting it.
 //
-// Overridable like the analysis budget below, so a slow environment can be
-// given room without editing code.
+// Overridable like the analysis budget below, for genuinely slower
+// environments -- not as a way to silence a slow production pipeline.
 export const DOCUMENT_OCR_READINESS_TIMEOUT_MS = readPositiveIntegerEnv(
   "PATIENT_WEB_E2E_OCR_BUDGET_MS",
-  10 * 60 * 1000,
+  5 * 60 * 1000,
 );
 export const ASSESSMENT_ANALYSIS_READINESS_TIMEOUT_MS = readPositiveIntegerEnv(
   "PATIENT_WEB_E2E_ANALYSIS_BUDGET_MS",
