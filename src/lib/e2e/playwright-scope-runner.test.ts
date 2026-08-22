@@ -26,6 +26,7 @@ describe("patient-web Playwright scope runner", () => {
     expect(runner.resolveScopeSpecs()).toEqual([
       "e2e/scopes/auth.spec.ts",
       "e2e/scopes/consent-onboarding.spec.ts",
+      "e2e/scopes/story-voice.spec.ts",
       "e2e/scopes/onboarding-intro-idempotence.spec.ts",
       "e2e/scopes/onboarding-resume.spec.ts",
       "e2e/scopes/onboarding-draft-restore.spec.ts",
@@ -44,7 +45,7 @@ describe("patient-web Playwright scope runner", () => {
     ]);
   });
 
-  it("collects the ten-test checkpoint suite and excludes the legacy journey", () => {
+  it("collects the eleven-test checkpoint suite and excludes the legacy journey", () => {
     const result = spawnSync(
       process.execPath,
       ["scripts/run-playwright-e2e.cjs", "test", "--list"],
@@ -56,12 +57,12 @@ describe("patient-web Playwright scope runner", () => {
     );
 
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toMatch(/Total: 10 tests(?:\s|$)/);
+    expect(result.stdout).toMatch(/Total: 11 tests(?:\s|$)/);
     expect(result.stdout).not.toContain("@legacy-journey");
     const discoveredTests = result.stdout
       .split("\n")
       .filter((line) => line.includes("@scope-"));
-    expect(discoveredTests).toHaveLength(10);
+    expect(discoveredTests).toHaveLength(11);
     for (const scope of scopeManifest.default_scopes) {
       expect(
         discoveredTests.filter((line) => line.includes(`@scope-${scope}`)),
@@ -314,6 +315,7 @@ describe("patient-web Playwright scope runner", () => {
       "e2e/legacy-journey.spec.ts",
       "e2e/scopes/auth.spec.ts",
       "e2e/scopes/consent-onboarding.spec.ts",
+      "e2e/scopes/story-voice.spec.ts",
       "e2e/scopes/onboarding-intro-idempotence.spec.ts",
       "e2e/scopes/onboarding-resume.spec.ts",
       "e2e/scopes/onboarding-draft-restore.spec.ts",

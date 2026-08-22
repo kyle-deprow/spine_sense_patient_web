@@ -3,6 +3,7 @@
   "default_scopes": [
     "auth",
     "consent-onboarding",
+    "story-voice",
     "onboarding-intro-idempotence",
     "onboarding-resume",
     "onboarding-draft-restore",
@@ -32,6 +33,14 @@
     "consent-onboarding": {
       "tag": "@scope-consent-onboarding",
       "spec": "e2e/scopes/consent-onboarding.spec.ts",
+      "start_checkpoint": "verified_pending_consent",
+      "end_checkpoint": "records_ready",
+      "timeout_class": "short",
+      "real_analysis": false
+    },
+    "story-voice": {
+      "tag": "@scope-story-voice",
+      "spec": "e2e/scopes/story-voice.spec.ts",
       "start_checkpoint": "verified_pending_consent",
       "end_checkpoint": "records_ready",
       "timeout_class": "short",
