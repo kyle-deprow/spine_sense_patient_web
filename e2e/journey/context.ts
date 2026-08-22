@@ -14,6 +14,7 @@ import { performance } from "node:perf_hooks";
 import { SYNTHETIC_DOCUMENT_UPLOAD_CONTRACT } from "../../src/lib/e2e/document-upload-fixture";
 import { fullAssessmentScenario } from "../fixtures/fullAssessmentScenario";
 import {
+  classifyApiErrorCode,
   classifyRequestFailure,
   safeErrorName,
   safeRequestId,
@@ -499,10 +500,27 @@ export function installPhiSafeDiagnostics(page: Page) {
     const requestId = safeRequestId(
       response.headers()["x-request-id"] ?? response.headers()["request-id"],
     );
-    console.log(
+    const base =
       `[response] route=${sanitizeDiagnostic(url.pathname)} status=${response.status()}` +
-        (requestId == null ? "" : ` request_id=${requestId}`),
-    );
+      (requestId == null ? "" : ` request_id=${requestId}`);
+    if (response.status() < 400) {
+      console.log(base);
+      return;
+    }
+    // An error status hides which of several distinct server conditions fired.
+    // A 503 on an idempotency-guarded route is `idempotency_in_progress` (a
+    // duplicate of a still-running mutation, working as designed) or
+    // `idempotency_unavailable` (the coordination store is down) -- and the
+    // status code alone cannot tell them apart. Only the allowlisted machine
+    // code is logged; the body is never echoed.
+    void response
+      .text()
+      .then((body) => {
+        console.log(`${base} error_code=${classifyApiErrorCode(body)}`);
+      })
+      .catch(() => {
+        console.log(`${base} error_code=unknown`);
+      });
   });
   page.on("requestfailed", (request) => {
     const url = new URL(request.url());

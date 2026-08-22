@@ -1,10 +1,69 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  classifyApiErrorCode,
   classifyRequestFailure,
+  isSafeApiErrorCode,
   isSafeErrorCode,
   safeErrorName,
 } from "../../../e2e/support/diagnostics";
+
+describe("classifyApiErrorCode", () => {
+  it.each([
+    ["idempotency_in_progress", '{"code":"idempotency_in_progress","detail":"x"}'],
+    ["idempotency_unavailable", '{"code":"idempotency_unavailable","detail":"x"}'],
+    ["screening_incomplete", '{"error":{"code":"screening_incomplete"}}'],
+  ])("extracts %s", (expected, body) => {
+    expect(classifyApiErrorCode(body)).toBe(expected);
+  });
+
+  it("distinguishes the two 503 families, which share a status code", () => {
+    // This is the whole point: a duplicate of an in-flight mutation is working
+    // as designed, a downed coordination store is not, and both are HTTP 503.
+    expect(classifyApiErrorCode('{"code":"idempotency_in_progress"}')).not.toBe(
+      classifyApiErrorCode('{"code":"idempotency_unavailable"}'),
+    );
+  });
+
+  it("never echoes free-text detail, which can carry patient-derived text", () => {
+    // DomainError bodies (including the LLM 503s) carry only `detail`.
+    const body = JSON.stringify({
+      detail: "Patient Jane Doe reported severe lower back pain since 2019",
+    });
+    expect(classifyApiErrorCode(body)).toBe("unknown");
+  });
+
+  it("never returns an unrecognized code, even a well-formed one", () => {
+    expect(classifyApiErrorCode('{"code":"some_new_server_code"}')).toBe("unknown");
+  });
+
+  it.each([
+    ["undefined", undefined],
+    ["empty", ""],
+    ["not json", "<html>502 Bad Gateway</html>"],
+    ["json but not an object", '"a string"'],
+    ["null", "null"],
+    ["code is not a string", '{"code":{"nested":true}}'],
+  ])("returns unknown for %s", (_label, body) => {
+    expect(classifyApiErrorCode(body as string | undefined)).toBe("unknown");
+  });
+
+  it("refuses to parse an oversized body rather than reading it into the log", () => {
+    const oversized = `{"code":"idempotency_in_progress","pad":"${"x".repeat(4096)}"}`;
+    expect(classifyApiErrorCode(oversized)).toBe("unknown");
+  });
+
+  it("only ever emits values that are safe to log", () => {
+    for (const body of [
+      '{"code":"idempotency_in_progress"}',
+      '{"detail":"free text"}',
+      "not json",
+      '{"code":"unrecognized"}',
+    ]) {
+      expect(isSafeApiErrorCode(classifyApiErrorCode(body))).toBe(true);
+    }
+  });
+});
 
 describe("classifyRequestFailure", () => {
   it.each([
