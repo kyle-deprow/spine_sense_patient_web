@@ -145,6 +145,58 @@ describe("proxy allowlist", () => {
     }
   });
 
+  it("allows canonical segmented intake story POST routes", () => {
+    const cases = [
+      "/api/v1/patients/me/intake/story/segments/session",
+      "/api/v1/patients/me/intake/story/segments",
+      "/api/v1/patients/me/intake/story/segments/finalize",
+    ] as const;
+
+    for (const targetPath of cases) {
+      expect(
+        validateProxyTarget(
+          targetPath.slice(1).split("/"),
+          "POST",
+          `/api/proxy${targetPath}`,
+        ),
+      ).toEqual({
+        ok: true,
+        targetPath,
+      });
+    }
+  });
+
+  it("keeps segmented intake story routes exact and POST-only", () => {
+    const cases = [
+      [
+        "GET",
+        "/api/v1/patients/me/intake/story/segments/session",
+      ],
+      ["PUT", "/api/v1/patients/me/intake/story/segments"],
+      [
+        "POST",
+        "/api/v1/patients/me/intake/story/segments/finalize/extra",
+      ],
+    ] as const;
+
+    for (const [method, targetPath] of cases) {
+      expect(
+        validateProxyTarget(
+          targetPath.slice(1).split("/"),
+          method,
+          `/api/proxy${targetPath}`,
+        ),
+      ).toEqual({
+        ok: false,
+        status: method === "POST" ? 404 : 405,
+        code:
+          method === "POST"
+            ? "proxy_path_not_allowed"
+            : "proxy_method_not_allowed",
+      });
+    }
+  });
+
   it("allows only the exact intake live-story HTTP control-plane shapes", () => {
     const cases = [
       ["POST", "/api/v1/patients/me/intake/story/live-transcription-session"],

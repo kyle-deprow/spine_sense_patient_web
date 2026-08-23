@@ -39,6 +39,12 @@ const INTAKE_STORY_TRANSCRIPTIONS_RE =
 const INTAKE_STORY_EXACT_RE = /^\/api\/v1\/patients\/me\/intake\/story$/i;
 const INTAKE_STORY_LIVE_TRANSCRIPTION_SESSION_RE =
   /^\/api\/v1\/patients\/me\/intake\/story\/live-transcription-session$/i;
+const INTAKE_STORY_SEGMENTS_SESSION_RE =
+  /^\/api\/v1\/patients\/me\/intake\/story\/segments\/session$/i;
+const INTAKE_STORY_SEGMENTS_RE =
+  /^\/api\/v1\/patients\/me\/intake\/story\/segments$/i;
+const INTAKE_STORY_SEGMENTS_FINALIZE_RE =
+  /^\/api\/v1\/patients\/me\/intake\/story\/segments\/finalize$/i;
 const INTAKE_ALLOWED_RE =
   /^\/api\/v1\/patients\/me\/intake(?:\/(?:progress|progress\/latest|progress\/complete|steps|steps\/[^/]+(?:\/draft)?|complete))?$/i;
 const INTAKE_ROUTE_RE = /^\/api\/v1\/patients\/me\/intake\/route$/i;
@@ -196,6 +202,21 @@ export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
     prefix: "/api/v1/patients/me/intake",
     methods: ["POST"],
     pathPattern: INTAKE_STORY_LIVE_TRANSCRIPTION_SESSION_RE,
+  },
+  {
+    prefix: "/api/v1/patients/me/intake",
+    methods: ["POST"],
+    pathPattern: INTAKE_STORY_SEGMENTS_SESSION_RE,
+  },
+  {
+    prefix: "/api/v1/patients/me/intake",
+    methods: ["POST"],
+    pathPattern: INTAKE_STORY_SEGMENTS_RE,
+  },
+  {
+    prefix: "/api/v1/patients/me/intake",
+    methods: ["POST"],
+    pathPattern: INTAKE_STORY_SEGMENTS_FINALIZE_RE,
   },
   {
     prefix: "/api/v1/patients/me/intake",

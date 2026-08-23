@@ -156,6 +156,20 @@ async function captureAndReviewVoiceStory(page: Page): Promise<void> {
       { timeout: VOICE_TRANSCRIPTION_TIMEOUT_MS },
     )
     .catch(() => null);
+  const segmentedStoryAttachResponsePromise = page
+    .waitForResponse(
+      (response) => {
+        const url = new URL(response.url());
+        return (
+          response.request().method() === "POST" &&
+          url.pathname ===
+            "/api/proxy/api/v1/patients/me/intake/story/segments" &&
+          response.ok()
+        );
+      },
+      { timeout: VOICE_TRANSCRIPTION_TIMEOUT_MS },
+    )
+    .catch(() => null);
 
   await waitForEnabledAndClick(
     page,
@@ -184,6 +198,10 @@ async function captureAndReviewVoiceStory(page: Page): Promise<void> {
   const serverStory = await readServerStoryResponse(
     await serverStoryResponsePromise,
   );
+  expect(
+    await segmentedStoryAttachResponsePromise,
+    "segmented story attach should receive a 2xx POST response during voice capture",
+  ).not.toBeNull();
   const matchedKeywords = TRANSCRIPT_KEYWORDS.filter((keyword) =>
     transcript.toLocaleLowerCase().includes(keyword),
   );
