@@ -1041,4 +1041,67 @@ describe("proxy allowlist", () => {
       });
     }
   });
+
+  it("allows patient provider linking routes through the PHI proxy", () => {
+    const linkId = "10000000-0000-4000-8000-000000000001";
+    const cases = [
+      ["POST", "/api/v1/invite-codes/validate"],
+      ["POST", "/api/v1/patients/me/link"],
+      ["GET", "/api/v1/patients/me/providers"],
+      ["POST", `/api/v1/patients/me/providers/${linkId}/revoke`],
+    ] as const;
+
+    for (const [method, targetPath] of cases) {
+      expect(
+        validateProxyTarget(
+          targetPath.slice(1).split("/"),
+          method,
+          `/api/proxy${targetPath}`,
+        ),
+      ).toEqual({
+        ok: true,
+        targetPath,
+      });
+    }
+  });
+
+  it("keeps staff-only invite-code create and list off the patient proxy", () => {
+    const cases = [
+      ["POST", "/api/proxy/api/v1/invite-codes"],
+      ["POST", "/api/proxy/api/v1/invite-codes/"],
+      ["GET", "/api/proxy/api/v1/invite-codes"],
+      ["GET", "/api/proxy/api/v1/invite-codes/"],
+    ] as const;
+
+    for (const [method, rawPathname] of cases) {
+      expect(
+        validateProxyTarget(["api", "v1", "invite-codes"], method, rawPathname),
+      ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
+    }
+  });
+
+  it("scopes the linking routes to their exact methods and UUID link ids", () => {
+    // The exact-match POST entry makes the path itself known, so every other
+    // verb on it is a method violation rather than an unknown path.
+    for (const method of ["GET", "DELETE"] as const) {
+      expect(
+        validateProxyTarget(
+          ["api", "v1", "patients", "me", "link"],
+          method,
+          "/api/proxy/api/v1/patients/me/link",
+        ),
+      ).toEqual({ ok: false, status: 405, code: "proxy_method_not_allowed" });
+    }
+
+    // A malformed link id never matches the anchored revoke pattern. The only
+    // remaining match is the pre-existing read-only providers prefix entry, so
+    // the write is rejected as a method violation and never reaches the API.
+    expect(
+      validateProxyTarget(
+        ["api", "v1", "patients", "me", "providers", "not-a-uuid", "revoke"],
+        "POST",
+        "/api/proxy/api/v1/patients/me/providers/not-a-uuid/revoke",
+      ),
+    ).toEqual({ ok: false, status: 405, code: "proxy_method_not_allowed" });
+  });
 });

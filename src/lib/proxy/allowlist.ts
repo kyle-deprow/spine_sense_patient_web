@@ -82,6 +82,10 @@ const MISCRIBE_RECORDING_SUMMARY_RE = new RegExp(
   `${MISCRIBE_RECORDING_RE}\\/summary$`,
   "i",
 );
+const PATIENT_PROVIDER_REVOKE_RE = new RegExp(
+  `^\\/api\\/v1\\/patients\\/me\\/providers\\/${UUID_RE}\\/revoke$`,
+  "i",
+);
 const FHIR_CONNECTION_RE = `^\\/api\\/v1\\/fhir\\/connections\\/${UUID_RE}`;
 const FHIR_CONNECTION_EXACT_RE = new RegExp(`${FHIR_CONNECTION_RE}$`, "i");
 const FHIR_CONNECTION_PERMISSION_RE = new RegExp(
@@ -329,8 +333,33 @@ export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
     pathPattern: MISCRIBE_RECORDING_SUMMARY_RE,
   },
   { prefix: "/api/v1/patients/me/providers", methods: ["GET"] },
+  // Patient-initiated provider linking. Redeeming an invite code links the
+  // signed-in patient to a practice; revoke tears a single link down by id.
+  // Both are patient-scoped writes the backend authorizes against the session
+  // cookie, and both are mounted slash-free on the backend, so neither needs a
+  // BACKEND_ROOT_PATHS_WITH_TRAILING_SLASH entry. Revoke is UUID-anchored so no
+  // other child of /providers becomes writable through the BFF.
+  {
+    prefix: "/api/v1/patients/me/link",
+    methods: ["POST"],
+    match: "exact",
+  },
+  {
+    prefix: "/api/v1/patients/me/providers",
+    methods: ["POST"],
+    pathPattern: PATIENT_PROVIDER_REVOKE_RE,
+  },
   { prefix: "/api/v1/patients/me", methods: ["GET", "PATCH"], match: "exact" },
-  { prefix: "/api/v1/invite-codes", methods: ["GET", "POST"] },
+  // Public invite-code validation only. This replaces a bare
+  // /api/v1/invite-codes prefix entry that also reached the STAFF-ONLY create
+  // (POST) and list (GET) endpoints, which the backend mounts with a trailing
+  // slash. The backend 403s a patient session on those, but the BFF boundary is
+  // least-privilege, so only the slash-free validate route stays exposed.
+  {
+    prefix: "/api/v1/invite-codes/validate",
+    methods: ["POST"],
+    match: "exact",
+  },
   { prefix: "/api/v1/safety", methods: ["GET", "POST"] },
   // Patient creating a third-party share token for a completed report. Kept
   // exact + POST-only so only the collection endpoint is reachable; the public
