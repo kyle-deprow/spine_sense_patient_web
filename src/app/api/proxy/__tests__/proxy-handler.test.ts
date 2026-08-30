@@ -953,16 +953,6 @@ describe("proxy route handler", () => {
     );
     expect(
       isLongRunningBackendCall(
-        "/api/v1/patients/me/intake/story/transcriptions",
-      ),
-    ).toBe(true);
-    expect(
-      isLongRunningBackendCall(
-        "/api/v1/patients/me/intake/story/transcriptions/audio",
-      ),
-    ).toBe(true);
-    expect(
-      isLongRunningBackendCall(
         "/api/v1/patients/me/intake/story/audio-uploads",
       ),
     ).toBe(false);
@@ -993,15 +983,12 @@ describe("proxy route handler", () => {
     ).toBe(false);
   });
 
-  it("streams completed intake story audio through the proxy without buffering", async () => {
-    mockedBackendFetch.mockResolvedValue(
-      Response.json(
-        { narrative: "synthetic transcript", input_method: "voice" },
-        { status: 201 },
-      ),
-    );
-    const csrf = createCsrfToken(CSRF_SECRET, "story-audio-stream");
-    const targetPath = "/api/v1/patients/me/intake/story/transcriptions/audio";
+  it.each([
+    "/api/v1/patients/me/intake/story/transcriptions",
+    "/api/v1/patients/me/intake/story/transcriptions/audio",
+    "/api/v1/patients/me/intake/story/live-transcription-session",
+  ])("blocks retired intake story route before backend forwarding: %s", async (targetPath) => {
+    const csrf = createCsrfToken(CSRF_SECRET, "retired-story-route");
     const request = makeProxyRequest(
       `/api/proxy${targetPath}`,
       "POST",
@@ -1011,37 +998,26 @@ describe("proxy route handler", () => {
         [CSRF_HEADER]: csrf,
         Origin: ORIGIN,
       },
-      new Blob([new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, 0x00])], {
-        type: "audio/webm",
-      }),
+      new Blob(["synthetic transcript"], { type: "audio/webm" }),
     );
 
     const response = await POST(
       request,
-      makeContext([
-        "api",
-        "v1",
-        "patients",
-        "me",
-        "intake",
-        "story",
-        "transcriptions",
-        "audio",
-      ]),
+      makeContext(targetPath.slice(1).split("/")),
     );
 
-    expect(response.status).toBe(201);
-    expect(mockedBackendFetch).toHaveBeenCalledWith(
-      targetPath,
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: "proxy_path_not_allowed",
+    });
+    expect(mockedBackendFetch).not.toHaveBeenCalled();
+    expect(mockedAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({
-        method: "POST",
-        body: expect.any(ReadableStream),
-        duplex: "half",
+        event: "phi.proxy.denied",
+        reason: "proxy_path_not_allowed",
+        status: 404,
       }),
-      { timeoutMs: LONG_BACKEND_TIMEOUT_MS },
     );
-    const requestInit = mockedBackendFetch.mock.calls[0]?.[1];
-    expect(requestInit?.body).not.toBeInstanceOf(ArrayBuffer);
     expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain(
       "synthetic transcript",
     );

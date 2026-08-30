@@ -34,11 +34,7 @@ const ASSESSMENT_QUESTION_NOTE_LIVE_TRANSCRIPTION_SESSION_RE = new RegExp(
 );
 const INTAKE_STORY_AUDIO_UPLOADS_RE =
   /^\/api\/v1\/patients\/me\/intake\/story\/audio-uploads$/i;
-const INTAKE_STORY_TRANSCRIPTIONS_RE =
-  /^\/api\/v1\/patients\/me\/intake\/story\/transcriptions(?:\/audio)?$/i;
 const INTAKE_STORY_EXACT_RE = /^\/api\/v1\/patients\/me\/intake\/story$/i;
-const INTAKE_STORY_LIVE_TRANSCRIPTION_SESSION_RE =
-  /^\/api\/v1\/patients\/me\/intake\/story\/live-transcription-session$/i;
 const INTAKE_STORY_SEGMENTS_SESSION_RE =
   /^\/api\/v1\/patients\/me\/intake\/story\/segments\/session$/i;
 const INTAKE_STORY_SEGMENTS_RE =
@@ -192,16 +188,6 @@ export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
     prefix: "/api/v1/patients/me/intake",
     methods: ["POST"],
     pathPattern: INTAKE_STORY_AUDIO_UPLOADS_RE,
-  },
-  {
-    prefix: "/api/v1/patients/me/intake",
-    methods: ["POST"],
-    pathPattern: INTAKE_STORY_TRANSCRIPTIONS_RE,
-  },
-  {
-    prefix: "/api/v1/patients/me/intake",
-    methods: ["POST"],
-    pathPattern: INTAKE_STORY_LIVE_TRANSCRIPTION_SESSION_RE,
   },
   {
     prefix: "/api/v1/patients/me/intake",

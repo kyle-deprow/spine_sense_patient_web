@@ -127,8 +127,6 @@ describe("proxy allowlist", () => {
   it("allows only canonical completed-file onboarding story audio routes", () => {
     const cases = [
       "/api/v1/patients/me/intake/story/audio-uploads",
-      "/api/v1/patients/me/intake/story/transcriptions",
-      "/api/v1/patients/me/intake/story/transcriptions/audio",
     ] as const;
 
     for (const targetPath of cases) {
@@ -199,7 +197,6 @@ describe("proxy allowlist", () => {
 
   it("allows only the exact intake live-story HTTP control-plane shapes", () => {
     const cases = [
-      ["POST", "/api/v1/patients/me/intake/story/live-transcription-session"],
       ["GET", "/api/v1/patients/me/intake/story"],
       ["PUT", "/api/v1/patients/me/intake/story"],
       ["POST", "/api/v1/patients/me/intake/route"],
@@ -249,7 +246,6 @@ describe("proxy allowlist", () => {
 
   it("rejects method mismatches on exact intake live-story shapes", () => {
     const cases = [
-      ["GET", "/api/v1/patients/me/intake/story/live-transcription-session"],
       ["POST", "/api/v1/patients/me/intake/story"],
       ["PUT", "/api/v1/patients/me/intake/route"],
     ] as const;
@@ -278,6 +274,9 @@ describe("proxy allowlist", () => {
       "/api/v1/patients/me/intake/story/recordings/not-a-uuid/transcription",
       "/api/v1/patients/me/intake/story/recordings/10000000-0000-4000-8000-000000000001/transcription/extra",
       "/api/v1/patients/me/intake/story/audio-uploads/extra",
+      "/api/v1/patients/me/intake/story/transcriptions",
+      "/api/v1/patients/me/intake/story/transcriptions/audio",
+      "/api/v1/patients/me/intake/story/live-transcription-session",
       "/api/v1/patients/me/intake/story/transcriptions/extra",
       "/api/v1/patients/me/intake/story/transcriptions/audio/extra",
     ] as const;
@@ -300,8 +299,6 @@ describe("proxy allowlist", () => {
   it("blocks method mismatches on canonical onboarding story audio routes", () => {
     const cases = [
       ["GET", "/api/v1/patients/me/intake/story/audio-uploads"],
-      ["GET", "/api/v1/patients/me/intake/story/transcriptions"],
-      ["GET", "/api/v1/patients/me/intake/story/transcriptions/audio"],
     ] as const;
 
     for (const [method, targetPath] of cases) {
