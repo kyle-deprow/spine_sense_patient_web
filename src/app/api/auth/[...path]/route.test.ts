@@ -32,16 +32,20 @@ const SIGNING_KEY = {
 };
 
 // Import after mocking so the route module picks up the mocked dependencies.
-const { DELETE, GET, POST } = await import("@/app/api/auth/[...path]/route");
+const { DELETE, GET, PATCH, POST, PUT } =
+  await import("@/app/api/auth/[...path]/route");
 
 function makeAuthRequest(
   pathname: string,
   body: unknown = {},
   options: {
-    method?: "DELETE" | "GET" | "POST";
+    method?: "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
     accessToken?: string;
+    refreshToken?: string;
+    sessionIssuedAt?: number;
     auditActorId?: string;
     registrationVerificationToken?: string;
+    extraCookies?: readonly string[];
     origin?: string;
     userAgent?: string;
   } = {},
@@ -52,14 +56,21 @@ function makeAuthRequest(
   const cookies = [`spine_patient_csrf=${csrf}`];
   if (options.accessToken)
     cookies.push(`spine_patient_sess=${options.accessToken}`);
+  if (options.refreshToken)
+    cookies.push(`spine_patient_refresh=${options.refreshToken}`);
   if (options.registrationVerificationToken) {
     cookies.push(
       `${COOKIE_NAMES.registrationVerification}=${options.registrationVerificationToken}`,
     );
   }
+  if (options.extraCookies) cookies.push(...options.extraCookies);
+  if (options.sessionIssuedAt !== undefined) {
+    cookies.push(`spine_patient_sess_iat=${options.sessionIssuedAt}`);
+  }
   if (options.auditActorId && options.accessToken) {
-    const issuedAt = Math.floor(Date.now() / 1000);
-    cookies.push(`spine_patient_sess_iat=${issuedAt}`);
+    const issuedAt = options.sessionIssuedAt ?? Math.floor(Date.now() / 1000);
+    if (options.sessionIssuedAt === undefined)
+      cookies.push(`spine_patient_sess_iat=${issuedAt}`);
     cookies.push(
       `spine_patient_audit_actor=${signAuditActorCookie(options.auditActorId, options.accessToken, issuedAt, SIGNING_KEY)}`,
     );
@@ -81,10 +92,137 @@ function makeAuthRequest(
   );
 }
 
+type BrowserCookie = { value: string; path: string };
+
+function makeBrowserCookieJar(
+  accessToken: string,
+  refreshToken: string,
+  csrfToken: string,
+): Map<string, BrowserCookie> {
+  return new Map([
+    [COOKIE_NAMES.access, { value: accessToken, path: "/api" }],
+    [COOKIE_NAMES.refresh, { value: refreshToken, path: "/api/auth" }],
+    [
+      COOKIE_NAMES.sessionIssuedAt,
+      { value: String(Math.floor(Date.now() / 1000)), path: "/api" },
+    ],
+    [COOKIE_NAMES.csrf, { value: csrfToken, path: "/" }],
+  ]);
+}
+
+function browserPathMatches(cookiePath: string, requestPath: string): boolean {
+  if (cookiePath === requestPath) return true;
+  if (!requestPath.startsWith(cookiePath)) return false;
+  return cookiePath.endsWith("/") || requestPath[cookiePath.length] === "/";
+}
+
+function browserCookieHeader(
+  jar: Map<string, BrowserCookie>,
+  requestPath: string,
+): string {
+  return [...jar.entries()]
+    .filter(([, cookie]) => browserPathMatches(cookie.path, requestPath))
+    .map(([name, cookie]) => `${name}=${cookie.value}`)
+    .join("; ");
+}
+
+function applySetCookies(
+  jar: Map<string, BrowserCookie>,
+  response: Response,
+): void {
+  for (const setCookie of response.headers.getSetCookie()) {
+    const [pair, ...attributes] = setCookie.split(";");
+    if (!pair) continue;
+    const separator = pair.indexOf("=");
+    if (separator < 1) continue;
+    const name = pair.slice(0, separator);
+    const value = pair.slice(separator + 1);
+    const pathAttribute = attributes.find((attribute) =>
+      attribute.trim().toLowerCase().startsWith("path="),
+    );
+    const path = pathAttribute?.trim().slice("Path=".length) ?? "/";
+    const maxAge = attributes
+      .find((attribute) =>
+        attribute.trim().toLowerCase().startsWith("max-age="),
+      )
+      ?.trim()
+      .slice("Max-Age=".length);
+
+    if (maxAge === "0") {
+      const current = jar.get(name);
+      if (current?.path === path) jar.delete(name);
+      continue;
+    }
+    jar.set(name, { value, path });
+  }
+}
+
+function makeBrowserAuthRequest(
+  pathname: string,
+  jar: Map<string, BrowserCookie>,
+): NextRequest {
+  const url = new URL(`http://localhost${pathname}`);
+  const csrfToken = jar.get(COOKIE_NAMES.csrf)?.value;
+  return new NextRequest(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Cookie: browserCookieHeader(jar, url.pathname),
+      [CSRF_HEADER]: csrfToken ?? "",
+      Origin: ORIGIN,
+    },
+    body: JSON.stringify({}),
+  });
+}
+
 function makeContext(pathSegments: string[]): {
   params: Promise<{ path: string[] }>;
 } {
   return { params: Promise.resolve({ path: pathSegments }) };
+}
+
+function expectAuthCookiesCleared(response: Response): void {
+  const setCookies = response.headers.getSetCookie();
+  for (const name of [
+    COOKIE_NAMES.access,
+    COOKIE_NAMES.refresh,
+    COOKIE_NAMES.sessionIssuedAt,
+    COOKIE_NAMES.auditActor,
+    COOKIE_NAMES.mfaTransaction,
+    COOKIE_NAMES.mfaMethod,
+    COOKIE_NAMES.mfaPending,
+    COOKIE_NAMES.registrationVerification,
+  ]) {
+    expect(
+      setCookies.some(
+        (cookie) =>
+          cookie.startsWith(`${name}=;`) && cookie.includes("Max-Age=0"),
+      ),
+    ).toBe(true);
+  }
+
+  expect(
+    setCookies.some(
+      (cookie) =>
+        cookie.startsWith(`${COOKIE_NAMES.refresh}=;`) &&
+        cookie.includes("Path=/api/auth;") &&
+        cookie.includes("Max-Age=0"),
+    ),
+  ).toBe(true);
+  expect(
+    setCookies.some(
+      (cookie) =>
+        cookie.startsWith(`${COOKIE_NAMES.refresh}=;`) &&
+        cookie.includes("Path=/api/auth/refresh") &&
+        cookie.includes("Max-Age=0"),
+    ),
+  ).toBe(true);
+
+  const csrfCookie = setCookies.find((cookie) =>
+    cookie.startsWith(`${COOKIE_NAMES.csrf}=`),
+  );
+  expect(csrfCookie).toBeDefined();
+  expect(csrfCookie).not.toContain("Max-Age=0");
 }
 
 describe("auth catch-all route handler", () => {
@@ -388,6 +526,1368 @@ describe("auth catch-all route handler", () => {
       );
     },
   );
+
+  it("proxies logout-all to the backend and clears the BFF session cookies", async () => {
+    const backendAccessToken = "backend-private-access-token";
+    const backendRefreshToken = "backend-private-refresh-token";
+    mockedBackendFetch.mockResolvedValue(
+      Response.json({
+        revoked: 3,
+        access_token: backendAccessToken,
+        refresh_token: backendRefreshToken,
+        user_id: ACTOR_ID,
+      }),
+    );
+
+    const response = await POST(
+      makeAuthRequest(
+        "/api/auth/logout-all",
+        {},
+        {
+          accessToken: ACCESS_TOKEN,
+          refreshToken: "current-refresh-cookie",
+          extraCookies: [`${COOKIE_NAMES.refresh}=legacy-refresh-cookie`],
+          auditActorId: ACTOR_ID,
+        },
+      ),
+      makeContext(["logout-all"]),
+    );
+
+    expect(response.status).toBe(200);
+    const responseBody = await response.json();
+    expect(responseBody).toEqual({ revoked: 3 });
+    expect(JSON.stringify(responseBody)).not.toContain(backendAccessToken);
+    expect(JSON.stringify(responseBody)).not.toContain(backendRefreshToken);
+    expectAuthCookiesCleared(response);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(mockedAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "auth.generic.allowed",
+        resourceType: "auth.logout_all",
+        status: 200,
+        reason: "confirmed_success",
+      }),
+    );
+    expect(mockedAuditLog).toHaveBeenCalledTimes(1);
+
+    const [backendPath, init] = mockedBackendFetch.mock.calls[0] ?? [];
+    expect(backendPath).toBe("/api/v1/auth/logout-all");
+    expect(init?.method).toBe("POST");
+    await expect(new Response(init?.body).text()).resolves.toBe("{}");
+    const headers = new Headers(init?.headers);
+    expect(headers.get("Authorization")).toBe(`Bearer ${ACCESS_TOKEN}`);
+    expect(headers.get("Cookie")).toBeNull();
+    expect(response.headers.getSetCookie().join("\n")).not.toContain(
+      backendAccessToken,
+    );
+    expect(response.headers.getSetCookie().join("\n")).not.toContain(
+      backendRefreshToken,
+    );
+    expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain(
+      ACCESS_TOKEN,
+    );
+    expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain(
+      backendRefreshToken,
+    );
+  });
+
+  it("does not claim global revocation or clear cookies on backend 401", async () => {
+    mockedBackendFetch.mockResolvedValue(
+      Response.json(
+        {
+          error: "private unauthorized detail",
+          access_token: "private-unauthorized-token",
+        },
+        { status: 401 },
+      ),
+    );
+
+    const response = await POST(
+      makeAuthRequest(
+        "/api/auth/logout-all",
+        {},
+        { accessToken: ACCESS_TOKEN, auditActorId: ACTOR_ID },
+      ),
+      makeContext(["logout-all"]),
+    );
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({
+      error: "refresh_required",
+    });
+    expect(response.headers.getSetCookie()).toEqual([]);
+    expect(mockedAuditLog).toHaveBeenCalledTimes(1);
+    expect(mockedAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "auth.generic.allowed",
+        resourceType: "auth.logout_all",
+        status: 401,
+        reason: "unauthorized_global_revocation_unproven",
+      }),
+    );
+    const auditOutput = JSON.stringify(mockedAuditLog.mock.calls);
+    expect(auditOutput).not.toContain("private unauthorized detail");
+    expect(auditOutput).not.toContain("private-unauthorized-token");
+  });
+
+  it("returns missing authentication without clearing cookies when access is absent", async () => {
+    const response = await POST(
+      makeAuthRequest("/api/auth/logout-all"),
+      makeContext(["logout-all"]),
+    );
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({
+      error: "refresh_required",
+    });
+    expect(response.headers.getSetCookie()).toEqual([]);
+    expect(mockedBackendFetch).not.toHaveBeenCalled();
+    expect(mockedAuditLog).toHaveBeenCalledTimes(1);
+    expect(mockedAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "auth.generic.allowed",
+        resourceType: "auth.logout_all",
+        status: 401,
+        reason: "missing_authentication",
+      }),
+    );
+  });
+
+  it("treats a browser carrying only the legacy refresh path as refresh-required", async () => {
+    const csrfToken = createCsrfToken(CSRF_SECRET, "legacy-only-browser");
+    const legacyOnlyJar = new Map<string, BrowserCookie>([
+      [
+        COOKIE_NAMES.refresh,
+        { value: "legacy-refresh-token", path: "/api/auth/refresh" },
+      ],
+      [COOKIE_NAMES.csrf, { value: csrfToken, path: "/" }],
+    ]);
+
+    // Browser path matching intentionally omits the legacy cookie from
+    // /logout-all. The patient app must perform its bounded /auth/refresh
+    // migration request before retrying this route.
+    const request = makeBrowserAuthRequest(
+      "/api/auth/logout-all",
+      legacyOnlyJar,
+    );
+    expect(request.headers.get("Cookie")).toBe(
+      `${COOKIE_NAMES.csrf}=${csrfToken}`,
+    );
+
+    const response = await POST(request, makeContext(["logout-all"]));
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({
+      error: "refresh_required",
+    });
+    expect(response.headers.getSetCookie()).toEqual([]);
+    expect(mockedBackendFetch).not.toHaveBeenCalled();
+    expect(mockedAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resourceType: "auth.logout_all",
+        status: 401,
+        reason: "missing_authentication",
+      }),
+    );
+  });
+
+  it("uses a valid refresh credential when access is missing before logout-all", async () => {
+    const refreshedAccessToken = "missing-access-refreshed-token";
+    mockedBackendFetch
+      .mockResolvedValueOnce(
+        Response.json({
+          access_token: refreshedAccessToken,
+          refresh_token: "missing-access-refreshed-refresh-token",
+          token_type: "bearer",
+          user_id: ACTOR_ID,
+        }),
+      )
+      .mockResolvedValueOnce(Response.json({ revoked: 1 }));
+
+    const response = await POST(
+      makeAuthRequest(
+        "/api/auth/logout-all",
+        {},
+        {
+          refreshToken: "missing-access-refresh-token",
+          sessionIssuedAt: Math.floor(Date.now() / 1000),
+        },
+      ),
+      makeContext(["logout-all"]),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ revoked: 1 });
+    expectAuthCookiesCleared(response);
+    expect(mockedBackendFetch).toHaveBeenCalledTimes(2);
+    expect(mockedBackendFetch.mock.calls[0]?.[0]).toBe("/api/v1/auth/refresh");
+    expect(mockedBackendFetch.mock.calls[1]?.[0]).toBe(
+      "/api/v1/auth/logout-all",
+    );
+    expect(
+      new Headers(mockedBackendFetch.mock.calls[1]?.[1]?.headers).get(
+        "Authorization",
+      ),
+    ).toBe(`Bearer ${refreshedAccessToken}`);
+    expect(mockedAuditLog.mock.calls.map(([record]) => record)).toEqual([
+      expect.objectContaining({
+        event: "auth.token.issued",
+        resourceType: "auth.logout_all",
+        status: 200,
+        actorId: ACTOR_ID,
+        sessionCorrelation: sessionCorrelationFromToken(refreshedAccessToken),
+        reason: "refresh_token_pair",
+      }),
+      expect.objectContaining({
+        event: "auth.generic.allowed",
+        resourceType: "auth.logout_all",
+        status: 200,
+        reason: "confirmed_success",
+      }),
+    ]);
+    expect(mockedAuditLog).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves local state and returns a sanitized failure when logout-all fails", async () => {
+    mockedBackendFetch.mockResolvedValue(
+      Response.json(
+        {
+          error: "private backend detail",
+          access_token: "private-failure-access-token",
+        },
+        { status: 503 },
+      ),
+    );
+
+    const response = await POST(
+      makeAuthRequest(
+        "/api/auth/logout-all",
+        {},
+        { accessToken: ACCESS_TOKEN, auditActorId: ACTOR_ID },
+      ),
+      makeContext(["logout-all"]),
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: "service_unavailable",
+    });
+    expect(response.headers.getSetCookie()).toEqual([]);
+    expect(mockedAuditLog).toHaveBeenCalledTimes(1);
+    expect(mockedAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "auth.generic.allowed",
+        resourceType: "auth.logout_all",
+        status: 503,
+        reason: "retryable_backend_failure",
+      }),
+    );
+    expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain(
+      "private backend detail",
+    );
+    expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain(
+      "private-failure-access-token",
+    );
+  });
+
+  it("preserves local state when the logout-all backend is unavailable", async () => {
+    mockedBackendFetch.mockRejectedValue(new BackendUnavailableError());
+
+    const response = await POST(
+      makeAuthRequest(
+        "/api/auth/logout-all",
+        {},
+        { accessToken: ACCESS_TOKEN, auditActorId: ACTOR_ID },
+      ),
+      makeContext(["logout-all"]),
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: "service_unavailable",
+    });
+    expect(response.headers.getSetCookie()).toEqual([]);
+    expect(mockedAuditLog).toHaveBeenCalledTimes(1);
+    expect(mockedAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "auth.generic.allowed",
+        resourceType: "auth.logout_all",
+        status: 503,
+        reason: "retryable_backend_failure",
+      }),
+    );
+  });
+
+  it("preserves retry state across backend failure and reaches the backend on retry", async () => {
+    mockedBackendFetch
+      .mockResolvedValueOnce(
+        Response.json({ error: "private backend detail" }, { status: 503 }),
+      )
+      .mockResolvedValueOnce(Response.json({ revoked: 2 }));
+
+    const requestOptions = {
+      accessToken: ACCESS_TOKEN,
+      auditActorId: ACTOR_ID,
+      registrationVerificationToken: "registration-challenge",
+      extraCookies: [
+        `${COOKIE_NAMES.mfaTransaction}=mfa-transaction`,
+        `${COOKIE_NAMES.mfaMethod}=mfa-method`,
+        `${COOKIE_NAMES.mfaPending}=mfa-pending`,
+      ],
+    } as const;
+    const firstResponse = await POST(
+      makeAuthRequest("/api/auth/logout-all", {}, requestOptions),
+      makeContext(["logout-all"]),
+    );
+
+    expect(firstResponse.status).toBe(503);
+    await expect(firstResponse.json()).resolves.toEqual({
+      error: "service_unavailable",
+    });
+    expect(firstResponse.headers.getSetCookie()).toEqual([]);
+
+    const secondResponse = await POST(
+      makeAuthRequest("/api/auth/logout-all", {}, requestOptions),
+      makeContext(["logout-all"]),
+    );
+
+    expect(secondResponse.status).toBe(200);
+    await expect(secondResponse.json()).resolves.toEqual({ revoked: 2 });
+    expectAuthCookiesCleared(secondResponse);
+    expect(mockedBackendFetch).toHaveBeenCalledTimes(2);
+    const [retryPath, retryInit] = mockedBackendFetch.mock.calls[1] ?? [];
+    expect(retryPath).toBe("/api/v1/auth/logout-all");
+    expect(new Headers(retryInit?.headers).get("Authorization")).toBe(
+      `Bearer ${ACCESS_TOKEN}`,
+    );
+    expect(mockedAuditLog.mock.calls.map(([record]) => record)).toEqual([
+      expect.objectContaining({
+        event: "auth.generic.allowed",
+        resourceType: "auth.logout_all",
+        status: 503,
+        reason: "retryable_backend_failure",
+      }),
+      expect.objectContaining({
+        event: "auth.generic.allowed",
+        resourceType: "auth.logout_all",
+        status: 200,
+        reason: "confirmed_success",
+      }),
+    ]);
+  });
+
+  it("preserves local state and sanitizes a bounded refresh backend failure", async () => {
+    mockedBackendFetch
+      .mockResolvedValueOnce(
+        Response.json({ error: "unauthorized" }, { status: 401 }),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            error: "private refresh backend detail",
+            access_token: "private-refresh-failure-token",
+          },
+          { status: 503 },
+        ),
+      );
+
+    const response = await POST(
+      makeAuthRequest(
+        "/api/auth/logout-all",
+        {},
+        {
+          accessToken: "expired-private-access-token",
+          refreshToken: "retryable-private-refresh-token",
+          sessionIssuedAt: Math.floor(Date.now() / 1000),
+        },
+      ),
+      makeContext(["logout-all"]),
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: "service_unavailable",
+    });
+    expect(response.headers.getSetCookie()).toEqual([]);
+    expect(mockedBackendFetch).toHaveBeenCalledTimes(2);
+    expect(mockedAuditLog.mock.calls.map(([record]) => record)).toEqual([
+      expect.objectContaining({
+        event: "auth.generic.allowed",
+        resourceType: "auth.logout_all",
+        status: 503,
+        reason: "retryable_backend_failure",
+      }),
+    ]);
+    const auditOutput = JSON.stringify(mockedAuditLog.mock.calls);
+    expect(auditOutput).not.toContain("private refresh backend detail");
+    expect(auditOutput).not.toContain("private-refresh-failure-token");
+  });
+
+  it("returns a retryable sanitized response for a malformed logout-all 204", async () => {
+    mockedBackendFetch.mockResolvedValue(new Response(null, { status: 204 }));
+
+    const response = await POST(
+      makeAuthRequest(
+        "/api/auth/logout-all",
+        {},
+        { accessToken: ACCESS_TOKEN, auditActorId: ACTOR_ID },
+      ),
+      makeContext(["logout-all"]),
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: "service_unavailable",
+    });
+    expect(response.headers.getSetCookie()).toEqual([]);
+    expect(mockedBackendFetch).toHaveBeenCalledTimes(1);
+    expect(mockedAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resourceType: "auth.logout_all",
+        status: 503,
+        reason: "retryable_backend_failure",
+      }),
+    );
+  });
+
+  it("reissues a rotated pair from the trusted pre-rotation actor when logout retry fails", async () => {
+    const rotatedAccessToken = "trusted-rotated-access-token";
+    const rotatedRefreshToken = "trusted-rotated-refresh-token";
+    mockedBackendFetch
+      .mockResolvedValueOnce(
+        Response.json({ error: "expired" }, { status: 401 }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          access_token: rotatedAccessToken,
+          refresh_token: rotatedRefreshToken,
+          token_type: "bearer",
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({ error: "private transient failure" }, { status: 503 }),
+      );
+
+    const response = await POST(
+      makeAuthRequest(
+        "/api/auth/logout-all",
+        {},
+        {
+          accessToken: "expired-access-token",
+          refreshToken: "single-use-refresh-token",
+          sessionIssuedAt: Math.floor(Date.now() / 1000),
+          auditActorId: ACTOR_ID,
+        },
+      ),
+      makeContext(["logout-all"]),
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: "service_unavailable",
+    });
+    const setCookies = response.headers.getSetCookie().join("\n");
+    expect(setCookies).toContain(`spine_patient_sess=${rotatedAccessToken}`);
+    expect(setCookies).toContain(
+      `spine_patient_refresh=${rotatedRefreshToken}`,
+    );
+    expect(setCookies).not.toContain("expired-access-token");
+    expect(mockedBackendFetch).toHaveBeenCalledTimes(3);
+    expect(mockedBackendFetch.mock.calls.map(([path]) => path)).toEqual([
+      "/api/v1/auth/logout-all",
+      "/api/v1/auth/refresh",
+      "/api/v1/auth/logout-all",
+    ]);
+    expect(
+      new Headers(mockedBackendFetch.mock.calls[2]?.[1]?.headers).get(
+        "Authorization",
+      ),
+    ).toBe(`Bearer ${rotatedAccessToken}`);
+    expect(mockedAuditLog.mock.calls.map(([record]) => record)).toEqual([
+      expect.objectContaining({
+        event: "auth.token.issued",
+        resourceType: "auth.logout_all",
+        actorId: ACTOR_ID,
+        sessionCorrelation: sessionCorrelationFromToken(rotatedAccessToken),
+        reason: "refresh_token_pair",
+      }),
+      expect.objectContaining({
+        event: "auth.generic.allowed",
+        resourceType: "auth.logout_all",
+        status: 503,
+        reason: "retryable_backend_failure",
+      }),
+    ]);
+    expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain(
+      rotatedAccessToken,
+    );
+    expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain(
+      rotatedRefreshToken,
+    );
+  });
+
+  it("reissues rotated cookies when the final logout-all response remains unauthorized", async () => {
+    const rotatedAccessToken = "unauthorized-rotated-access-token";
+    const rotatedRefreshToken = "unauthorized-rotated-refresh-token";
+    mockedBackendFetch
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            error: "private initial authorization detail",
+            access_token: "private-initial-access-token",
+          },
+          { status: 401 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          access_token: rotatedAccessToken,
+          refresh_token: rotatedRefreshToken,
+          token_type: "bearer",
+          user_id: ACTOR_ID,
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            error: "private final authorization detail",
+            access_token: "private-final-access-token",
+          },
+          { status: 401 },
+        ),
+      );
+
+    const request = makeAuthRequest(
+      "/api/auth/logout-all",
+      {},
+      {
+        accessToken: "expired-access-token",
+        refreshToken: "single-use-refresh-token",
+        sessionIssuedAt: Math.floor(Date.now() / 1000),
+        auditActorId: ACTOR_ID,
+        registrationVerificationToken: "registration-recovery-token",
+        extraCookies: [`${COOKIE_NAMES.mfaTransaction}=mfa-recovery-token`],
+      },
+    );
+    const initialCsrfToken = request.headers.get(CSRF_HEADER);
+    const response = await POST(request, makeContext(["logout-all"]));
+
+    expect(response.status).toBe(401);
+    const responseBody = await response.json();
+    expect(responseBody).toEqual({ error: "logout_authorization_unproven" });
+    const setCookies = response.headers.getSetCookie();
+    expect(
+      setCookies.some(
+        (cookie) =>
+          cookie.startsWith(`${COOKIE_NAMES.access}=${rotatedAccessToken}`) &&
+          cookie.includes("HttpOnly"),
+      ),
+    ).toBe(true);
+    expect(
+      setCookies.some(
+        (cookie) =>
+          cookie.startsWith(`${COOKIE_NAMES.refresh}=${rotatedRefreshToken}`) &&
+          cookie.includes("Path=/api/auth;") &&
+          cookie.includes("HttpOnly"),
+      ),
+    ).toBe(true);
+    expect(
+      setCookies.some(
+        (cookie) =>
+          cookie.startsWith(`${COOKIE_NAMES.refresh}=;`) &&
+          cookie.includes("Path=/api/auth/refresh") &&
+          cookie.includes("Max-Age=0"),
+      ),
+    ).toBe(true);
+    expect(
+      setCookies.some(
+        (cookie) =>
+          cookie.startsWith(`${COOKIE_NAMES.refresh}=;`) &&
+          cookie.includes("Path=/api/auth;") &&
+          cookie.includes("Max-Age=0"),
+      ),
+    ).toBe(false);
+    const csrfCookie = setCookies.find((cookie) =>
+      cookie.startsWith(`${COOKIE_NAMES.csrf}=`),
+    );
+    expect(csrfCookie).toBeDefined();
+    expect(csrfCookie).not.toContain("Max-Age=0");
+    expect(csrfCookie?.split(";", 1)[0]?.split("=", 2)[1]).not.toBe(
+      initialCsrfToken,
+    );
+    for (const name of [
+      COOKIE_NAMES.access,
+      COOKIE_NAMES.sessionIssuedAt,
+      COOKIE_NAMES.auditActor,
+      COOKIE_NAMES.mfaTransaction,
+      COOKIE_NAMES.registrationVerification,
+    ]) {
+      expect(
+        setCookies.some(
+          (cookie) =>
+            cookie.startsWith(`${name}=;`) && cookie.includes("Max-Age=0"),
+        ),
+      ).toBe(false);
+    }
+
+    expect(mockedBackendFetch).toHaveBeenCalledTimes(3);
+    expect(mockedBackendFetch.mock.calls.map(([path]) => path)).toEqual([
+      "/api/v1/auth/logout-all",
+      "/api/v1/auth/refresh",
+      "/api/v1/auth/logout-all",
+    ]);
+    await expect(
+      new Response(mockedBackendFetch.mock.calls[1]?.[1]?.body).json(),
+    ).resolves.toEqual({ refresh_token: "single-use-refresh-token" });
+    expect(
+      new Headers(mockedBackendFetch.mock.calls[0]?.[1]?.headers).get(
+        "Authorization",
+      ),
+    ).toBe("Bearer expired-access-token");
+    expect(
+      new Headers(mockedBackendFetch.mock.calls[2]?.[1]?.headers).get(
+        "Authorization",
+      ),
+    ).toBe(`Bearer ${rotatedAccessToken}`);
+    for (const [, init] of mockedBackendFetch.mock.calls) {
+      expect(new Headers(init?.headers).get("Cookie")).toBeNull();
+    }
+    expect(mockedAuditLog.mock.calls.map(([record]) => record)).toEqual([
+      expect.objectContaining({
+        event: "auth.token.issued",
+        resourceType: "auth.logout_all",
+        status: 200,
+        actorId: ACTOR_ID,
+        sessionCorrelation: sessionCorrelationFromToken(rotatedAccessToken),
+        reason: "refresh_token_pair",
+      }),
+      expect.objectContaining({
+        event: "auth.generic.allowed",
+        resourceType: "auth.logout_all",
+        status: 401,
+        reason: "unauthorized_global_revocation_unproven",
+      }),
+    ]);
+    const output = JSON.stringify({
+      body: responseBody,
+      audits: mockedAuditLog.mock.calls,
+    });
+    expect(output).not.toContain(rotatedAccessToken);
+    expect(output).not.toContain(rotatedRefreshToken);
+    expect(output).not.toContain("private final authorization detail");
+  });
+
+  it("reissues rotated cookies when the final logout-all transport fails", async () => {
+    const rotatedAccessToken = "transport-rotated-access-token";
+    const rotatedRefreshToken = "transport-rotated-refresh-token";
+    mockedBackendFetch
+      .mockResolvedValueOnce(
+        Response.json({ error: "private initial failure" }, { status: 401 }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          access_token: rotatedAccessToken,
+          refresh_token: rotatedRefreshToken,
+          token_type: "bearer",
+          user_id: ACTOR_ID,
+        }),
+      )
+      .mockRejectedValueOnce(new BackendUnavailableError());
+
+    const request = makeAuthRequest(
+      "/api/auth/logout-all",
+      {},
+      {
+        accessToken: "transport-expired-access-token",
+        refreshToken: "transport-single-use-refresh-token",
+        sessionIssuedAt: Math.floor(Date.now() / 1000),
+        auditActorId: ACTOR_ID,
+        registrationVerificationToken: "transport-registration-token",
+        extraCookies: [`${COOKIE_NAMES.mfaPending}=transport-mfa-token`],
+      },
+    );
+    const initialCsrfToken = request.headers.get(CSRF_HEADER);
+    const response = await POST(request, makeContext(["logout-all"]));
+
+    expect(response.status).toBe(503);
+    const responseBody = await response.json();
+    expect(responseBody).toEqual({ error: "service_unavailable" });
+    const setCookies = response.headers.getSetCookie();
+    expect(
+      setCookies.some(
+        (cookie) =>
+          cookie.startsWith(`${COOKIE_NAMES.access}=${rotatedAccessToken}`) &&
+          cookie.includes("HttpOnly"),
+      ),
+    ).toBe(true);
+    expect(
+      setCookies.some(
+        (cookie) =>
+          cookie.startsWith(`${COOKIE_NAMES.refresh}=${rotatedRefreshToken}`) &&
+          cookie.includes("Path=/api/auth;") &&
+          cookie.includes("HttpOnly"),
+      ),
+    ).toBe(true);
+    expect(
+      setCookies.some(
+        (cookie) =>
+          cookie.startsWith(`${COOKIE_NAMES.refresh}=;`) &&
+          cookie.includes("Path=/api/auth/refresh") &&
+          cookie.includes("Max-Age=0"),
+      ),
+    ).toBe(true);
+    expect(
+      setCookies.some(
+        (cookie) =>
+          cookie.startsWith(`${COOKIE_NAMES.refresh}=;`) &&
+          cookie.includes("Path=/api/auth;") &&
+          cookie.includes("Max-Age=0"),
+      ),
+    ).toBe(false);
+    const csrfCookie = setCookies.find((cookie) =>
+      cookie.startsWith(`${COOKIE_NAMES.csrf}=`),
+    );
+    expect(csrfCookie).toBeDefined();
+    expect(csrfCookie).not.toContain("Max-Age=0");
+    expect(csrfCookie?.split(";", 1)[0]?.split("=", 2)[1]).not.toBe(
+      initialCsrfToken,
+    );
+    for (const name of [
+      COOKIE_NAMES.access,
+      COOKIE_NAMES.sessionIssuedAt,
+      COOKIE_NAMES.auditActor,
+      COOKIE_NAMES.mfaPending,
+      COOKIE_NAMES.registrationVerification,
+    ]) {
+      expect(
+        setCookies.some(
+          (cookie) =>
+            cookie.startsWith(`${name}=;`) && cookie.includes("Max-Age=0"),
+        ),
+      ).toBe(false);
+    }
+
+    expect(mockedBackendFetch).toHaveBeenCalledTimes(3);
+    expect(mockedBackendFetch.mock.calls.map(([path]) => path)).toEqual([
+      "/api/v1/auth/logout-all",
+      "/api/v1/auth/refresh",
+      "/api/v1/auth/logout-all",
+    ]);
+    await expect(
+      new Response(mockedBackendFetch.mock.calls[1]?.[1]?.body).json(),
+    ).resolves.toEqual({
+      refresh_token: "transport-single-use-refresh-token",
+    });
+    expect(
+      new Headers(mockedBackendFetch.mock.calls[0]?.[1]?.headers).get(
+        "Authorization",
+      ),
+    ).toBe("Bearer transport-expired-access-token");
+    expect(
+      new Headers(mockedBackendFetch.mock.calls[2]?.[1]?.headers).get(
+        "Authorization",
+      ),
+    ).toBe(`Bearer ${rotatedAccessToken}`);
+    for (const [, init] of mockedBackendFetch.mock.calls) {
+      expect(new Headers(init?.headers).get("Cookie")).toBeNull();
+    }
+    expect(mockedAuditLog.mock.calls.map(([record]) => record)).toEqual([
+      expect.objectContaining({
+        event: "auth.token.issued",
+        resourceType: "auth.logout_all",
+        status: 200,
+        actorId: ACTOR_ID,
+        sessionCorrelation: sessionCorrelationFromToken(rotatedAccessToken),
+        reason: "refresh_token_pair",
+      }),
+      expect.objectContaining({
+        event: "auth.generic.allowed",
+        resourceType: "auth.logout_all",
+        status: 503,
+        reason: "retryable_backend_failure",
+      }),
+    ]);
+    const output = JSON.stringify({
+      body: responseBody,
+      audits: mockedAuditLog.mock.calls,
+    });
+    expect(output).not.toContain(rotatedAccessToken);
+    expect(output).not.toContain(rotatedRefreshToken);
+    expect(output).not.toContain("private initial failure");
+  });
+
+  it("clears all cookies when logout-all confirms revocation with missing refresh user metadata", async () => {
+    const rotatedAccessToken = "metadata-missing-access-token";
+    mockedBackendFetch
+      .mockResolvedValueOnce(
+        Response.json({ error: "expired" }, { status: 401 }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          access_token: rotatedAccessToken,
+          refresh_token: "metadata-missing-refresh-token",
+          token_type: "bearer",
+        }),
+      )
+      .mockResolvedValueOnce(Response.json({ revoked: 1 }, { status: 200 }));
+
+    const response = await POST(
+      makeAuthRequest(
+        "/api/auth/logout-all",
+        {},
+        {
+          accessToken: "expired-access-token",
+          refreshToken: "single-use-refresh-token",
+          sessionIssuedAt: Math.floor(Date.now() / 1000),
+        },
+      ),
+      makeContext(["logout-all"]),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ revoked: 1 });
+    expectAuthCookiesCleared(response);
+    expect(mockedBackendFetch).toHaveBeenCalledTimes(3);
+    expect(
+      new Headers(mockedBackendFetch.mock.calls[2]?.[1]?.headers).get(
+        "Authorization",
+      ),
+    ).toBe(`Bearer ${rotatedAccessToken}`);
+    expect(mockedAuditLog.mock.calls.map(([record]) => record)).toEqual([
+      expect.objectContaining({
+        event: "auth.generic.allowed",
+        resourceType: "auth.logout_all",
+        status: 200,
+        reason: "confirmed_success",
+      }),
+    ]);
+    expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain(
+      rotatedAccessToken,
+    );
+  });
+
+  it("expires consumed state and revokes a partial rotation once when safe reissue is impossible", async () => {
+    const partialAccessToken = "partial-rotated-access-token";
+    mockedBackendFetch
+      .mockResolvedValueOnce(
+        Response.json({ error: "expired" }, { status: 401 }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({ access_token: partialAccessToken }, { status: 200 }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+
+    const response = await POST(
+      makeAuthRequest(
+        "/api/auth/logout-all",
+        {},
+        {
+          accessToken: "expired-access-token",
+          refreshToken: "single-use-refresh-token",
+          sessionIssuedAt: Math.floor(Date.now() / 1000),
+        },
+      ),
+      makeContext(["logout-all"]),
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: "logout_recovery_required",
+    });
+    expectAuthCookiesCleared(response);
+    expect(mockedBackendFetch.mock.calls.map(([path]) => path)).toEqual([
+      "/api/v1/auth/logout-all",
+      "/api/v1/auth/refresh",
+      "/api/v1/auth/logout",
+    ]);
+    expect(
+      new Headers(mockedBackendFetch.mock.calls[2]?.[1]?.headers).get(
+        "Authorization",
+      ),
+    ).toBe(`Bearer ${partialAccessToken}`);
+    expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain(
+      partialAccessToken,
+    );
+  });
+
+  it.each([
+    [
+      "partial token pair",
+      Response.json({ access_token: "browser-partial-access-token" }),
+      [
+        "/api/v1/auth/logout-all",
+        "/api/v1/auth/refresh",
+        "/api/v1/auth/logout",
+      ],
+    ],
+    [
+      "204 rotation response",
+      new Response(null, { status: 204 }),
+      ["/api/v1/auth/logout-all", "/api/v1/auth/refresh"],
+    ],
+  ] as const)(
+    "browser retry normalizes a consumed %s with bounded calls and no leaked state",
+    async (_case, rotationResponse, expectedPaths) => {
+      mockedBackendFetch.mockResolvedValueOnce(
+        Response.json({ error: "expired" }, { status: 401 }),
+      );
+      mockedBackendFetch.mockResolvedValueOnce(rotationResponse);
+      if (expectedPaths.length === 3) {
+        mockedBackendFetch.mockResolvedValueOnce(
+          new Response(null, { status: 200 }),
+        );
+      }
+
+      const jar = makeBrowserCookieJar(
+        "browser-expired-access-token",
+        "browser-spent-refresh-token",
+        createCsrfToken(CSRF_SECRET, `browser-${_case}`),
+      );
+      const response = await POST(
+        makeBrowserAuthRequest("/api/auth/logout-all", jar),
+        makeContext(["logout-all"]),
+      );
+
+      expect(response.status).toBe(503);
+      await expect(response.json()).resolves.toEqual({
+        error: "logout_recovery_required",
+      });
+      expectAuthCookiesCleared(response);
+      applySetCookies(jar, response);
+      expect(jar.has(COOKIE_NAMES.access)).toBe(false);
+      expect(jar.has(COOKIE_NAMES.refresh)).toBe(false);
+      expect(mockedBackendFetch.mock.calls.map(([path]) => path)).toEqual(
+        expectedPaths,
+      );
+      for (const [, init] of mockedBackendFetch.mock.calls) {
+        expect(new Headers(init?.headers).get("Cookie")).toBeNull();
+      }
+      const output = JSON.stringify(mockedAuditLog.mock.calls);
+      expect(output).not.toContain("browser-partial-access-token");
+      expect(output).not.toContain("browser-spent-refresh-token");
+    },
+  );
+
+  it("does not reuse a rotated refresh token when refresh user_id is missing", async () => {
+    mockedBackendFetch
+      .mockResolvedValueOnce(
+        Response.json({ error: "unauthorized" }, { status: 401 }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          access_token: "rotated-access-token-must-not-be-used",
+          refresh_token: "rotated-refresh-token-must-not-be-used",
+          token_type: "bearer",
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({ error: "private logout failure" }, { status: 503 }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+
+    const response = await POST(
+      makeAuthRequest(
+        "/api/auth/logout-all",
+        {},
+        {
+          accessToken: "expired-private-access-token",
+          refreshToken: "single-use-refresh-token",
+          sessionIssuedAt: Math.floor(Date.now() / 1000),
+        },
+      ),
+      makeContext(["logout-all"]),
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: "logout_recovery_required",
+    });
+    expectAuthCookiesCleared(response);
+    expect(mockedBackendFetch).toHaveBeenCalledTimes(4);
+    expect(mockedBackendFetch.mock.calls.map(([path]) => path)).toEqual([
+      "/api/v1/auth/logout-all",
+      "/api/v1/auth/refresh",
+      "/api/v1/auth/logout-all",
+      "/api/v1/auth/logout",
+    ]);
+    expect(
+      new Headers(mockedBackendFetch.mock.calls[2]?.[1]?.headers).get(
+        "Authorization",
+      ),
+    ).toBe("Bearer rotated-access-token-must-not-be-used");
+    expect(
+      new Headers(mockedBackendFetch.mock.calls[3]?.[1]?.headers).get(
+        "Authorization",
+      ),
+    ).toBe("Bearer rotated-access-token-must-not-be-used");
+    expect(mockedAuditLog.mock.calls.map(([record]) => record)).toEqual([
+      expect.objectContaining({
+        event: "auth.generic.allowed",
+        resourceType: "auth.logout_all",
+        status: 503,
+        reason: "retryable_backend_failure",
+      }),
+      expect.objectContaining({
+        event: "auth.generic.allowed",
+        resourceType: "auth.logout_all",
+        status: 503,
+        reason: "logout_recovery_required",
+      }),
+    ]);
+    expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain(
+      "rotated-access-token-must-not-be-used",
+    );
+    expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain(
+      "rotated-refresh-token-must-not-be-used",
+    );
+  });
+
+  it("applies rotated cookies to the next browser retry without reusing the refresh family", async () => {
+    const accessTokenAfterFirstRefresh = "rotated-private-access-token";
+    const refreshTokenAfterFirstRefresh = "rotated-private-refresh-token";
+    const accessTokenAfterSecondRefresh = "second-rotated-private-access-token";
+    const refreshTokenAfterSecondRefresh =
+      "second-rotated-private-refresh-token";
+    mockedBackendFetch
+      .mockResolvedValueOnce(
+        Response.json({ error: "unauthorized" }, { status: 401 }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          access_token: accessTokenAfterFirstRefresh,
+          refresh_token: refreshTokenAfterFirstRefresh,
+          token_type: "bearer",
+          user_id: ACTOR_ID,
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          { error: "private transient logout failure" },
+          { status: 503 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        Response.json({ error: "unauthorized" }, { status: 401 }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          access_token: accessTokenAfterSecondRefresh,
+          refresh_token: refreshTokenAfterSecondRefresh,
+          token_type: "bearer",
+          user_id: ACTOR_ID,
+        }),
+      )
+      .mockResolvedValueOnce(Response.json({ revoked: 2 }));
+
+    const initialCsrfToken = createCsrfToken(
+      CSRF_SECRET,
+      "browser-retry-initial",
+    );
+    const jar = makeBrowserCookieJar(
+      "expired-private-access-token",
+      "first-family-private-refresh-token",
+      initialCsrfToken,
+    );
+    const firstResponse = await POST(
+      makeBrowserAuthRequest("/api/auth/logout-all", jar),
+      makeContext(["logout-all"]),
+    );
+
+    expect(firstResponse.status).toBe(503);
+    await expect(firstResponse.json()).resolves.toEqual({
+      error: "service_unavailable",
+    });
+    expect(firstResponse.headers.getSetCookie()).not.toEqual([]);
+    expect(
+      firstResponse.headers
+        .getSetCookie()
+        .some((cookie) =>
+          cookie.startsWith(
+            `${COOKIE_NAMES.access}=${accessTokenAfterFirstRefresh}`,
+          ),
+        ),
+    ).toBe(true);
+    for (const cookie of firstResponse.headers
+      .getSetCookie()
+      .filter(
+        (value) =>
+          value.startsWith(`${COOKIE_NAMES.access}=`) ||
+          value.startsWith(`${COOKIE_NAMES.refresh}=`),
+      )) {
+      expect(cookie).toContain("HttpOnly");
+    }
+    applySetCookies(jar, firstResponse);
+
+    const rotatedCsrfToken = jar.get(COOKIE_NAMES.csrf)?.value;
+    expect(rotatedCsrfToken).toBeDefined();
+    expect(rotatedCsrfToken).not.toBe(initialCsrfToken);
+    expect(jar.get(COOKIE_NAMES.access)?.value).toBe(
+      accessTokenAfterFirstRefresh,
+    );
+    expect(jar.get(COOKIE_NAMES.refresh)?.value).toBe(
+      refreshTokenAfterFirstRefresh,
+    );
+    expect(browserCookieHeader(jar, "/api/auth/logout-all")).toContain(
+      `${COOKIE_NAMES.refresh}=${refreshTokenAfterFirstRefresh}`,
+    );
+
+    const secondRequest = makeBrowserAuthRequest("/api/auth/logout-all", jar);
+    expect(secondRequest.headers.get(CSRF_HEADER)).toBe(rotatedCsrfToken);
+    const secondResponse = await POST(
+      secondRequest,
+      makeContext(["logout-all"]),
+    );
+
+    expect(secondResponse.status).toBe(200);
+    await expect(secondResponse.json()).resolves.toEqual({ revoked: 2 });
+    expectAuthCookiesCleared(secondResponse);
+    expect(mockedBackendFetch).toHaveBeenCalledTimes(6);
+    expect(mockedBackendFetch.mock.calls.map(([path]) => path)).toEqual([
+      "/api/v1/auth/logout-all",
+      "/api/v1/auth/refresh",
+      "/api/v1/auth/logout-all",
+      "/api/v1/auth/logout-all",
+      "/api/v1/auth/refresh",
+      "/api/v1/auth/logout-all",
+    ]);
+
+    await expect(
+      new Response(mockedBackendFetch.mock.calls[1]?.[1]?.body).json(),
+    ).resolves.toEqual({
+      refresh_token: "first-family-private-refresh-token",
+    });
+    await expect(
+      new Response(mockedBackendFetch.mock.calls[4]?.[1]?.body).json(),
+    ).resolves.toEqual({
+      refresh_token: refreshTokenAfterFirstRefresh,
+    });
+    expect(
+      new Headers(mockedBackendFetch.mock.calls[3]?.[1]?.headers).get(
+        "Authorization",
+      ),
+    ).toBe(`Bearer ${accessTokenAfterFirstRefresh}`);
+    expect(
+      new Headers(mockedBackendFetch.mock.calls[5]?.[1]?.headers).get(
+        "Authorization",
+      ),
+    ).toBe(`Bearer ${accessTokenAfterSecondRefresh}`);
+    for (const [, init] of mockedBackendFetch.mock.calls) {
+      expect(new Headers(init?.headers).get("Cookie")).toBeNull();
+    }
+
+    expect(mockedAuditLog.mock.calls.map(([record]) => record)).toEqual([
+      expect.objectContaining({
+        event: "auth.token.issued",
+        resourceType: "auth.logout_all",
+        status: 200,
+        actorId: ACTOR_ID,
+        sessionCorrelation: sessionCorrelationFromToken(
+          accessTokenAfterFirstRefresh,
+        ),
+        reason: "refresh_token_pair",
+      }),
+      expect.objectContaining({
+        event: "auth.generic.allowed",
+        resourceType: "auth.logout_all",
+        status: 503,
+        reason: "retryable_backend_failure",
+      }),
+      expect.objectContaining({
+        event: "auth.token.issued",
+        resourceType: "auth.logout_all",
+        status: 200,
+        actorId: ACTOR_ID,
+        sessionCorrelation: sessionCorrelationFromToken(
+          accessTokenAfterSecondRefresh,
+        ),
+        reason: "refresh_token_pair",
+      }),
+      expect.objectContaining({
+        event: "auth.generic.allowed",
+        resourceType: "auth.logout_all",
+        status: 200,
+        reason: "confirmed_success",
+      }),
+    ]);
+    const auditOutput = JSON.stringify(mockedAuditLog.mock.calls);
+    for (const token of [
+      accessTokenAfterFirstRefresh,
+      refreshTokenAfterFirstRefresh,
+      accessTokenAfterSecondRefresh,
+      refreshTokenAfterSecondRefresh,
+    ]) {
+      expect(auditOutput).not.toContain(token);
+    }
+  });
+
+  it("refreshes once after an expired access token and retries logout-all server-side", async () => {
+    const refreshedAccessToken = "refreshed-private-access-token";
+    const refreshedRefreshToken = "refreshed-private-refresh-token";
+    mockedBackendFetch
+      .mockResolvedValueOnce(
+        Response.json({ error: "unauthorized" }, { status: 401 }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          access_token: refreshedAccessToken,
+          refresh_token: refreshedRefreshToken,
+          token_type: "bearer",
+          user_id: ACTOR_ID,
+        }),
+      )
+      .mockResolvedValueOnce(Response.json({ revoked: 4 }));
+
+    const response = await POST(
+      makeAuthRequest(
+        "/api/auth/logout-all",
+        {},
+        {
+          accessToken: "expired-private-access-token",
+          refreshToken: "valid-private-refresh-token",
+          sessionIssuedAt: Math.floor(Date.now() / 1000),
+        },
+      ),
+      makeContext(["logout-all"]),
+    );
+
+    expect(response.status).toBe(200);
+    const responseBody = await response.json();
+    expect(responseBody).toEqual({ revoked: 4 });
+    expect(JSON.stringify(responseBody)).not.toContain(refreshedAccessToken);
+    expect(JSON.stringify(responseBody)).not.toContain(refreshedRefreshToken);
+    expectAuthCookiesCleared(response);
+    expect(mockedBackendFetch).toHaveBeenCalledTimes(3);
+
+    const [refreshPath, refreshInit] = mockedBackendFetch.mock.calls[1] ?? [];
+    expect(refreshPath).toBe("/api/v1/auth/refresh");
+    await expect(new Response(refreshInit?.body).json()).resolves.toEqual({
+      refresh_token: "valid-private-refresh-token",
+    });
+    const [retryPath, retryInit] = mockedBackendFetch.mock.calls[2] ?? [];
+    expect(retryPath).toBe("/api/v1/auth/logout-all");
+    expect(new Headers(retryInit?.headers).get("Authorization")).toBe(
+      `Bearer ${refreshedAccessToken}`,
+    );
+    expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain(
+      refreshedAccessToken,
+    );
+    expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain(
+      refreshedRefreshToken,
+    );
+    expect(mockedAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resourceType: "auth.logout_all",
+        status: 200,
+        reason: "confirmed_success",
+      }),
+    );
+    expect(mockedAuditLog).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves cookies and does not claim revocation when refresh is terminal", async () => {
+    mockedBackendFetch
+      .mockResolvedValueOnce(
+        Response.json({ error: "unauthorized" }, { status: 401 }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({ error: "refresh token revoked" }, { status: 401 }),
+      );
+
+    const response = await POST(
+      makeAuthRequest(
+        "/api/auth/logout-all",
+        {},
+        {
+          accessToken: "expired-private-access-token",
+          refreshToken: "stale-private-refresh-token",
+          sessionIssuedAt: Math.floor(Date.now() / 1000),
+        },
+      ),
+      makeContext(["logout-all"]),
+    );
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({
+      error: "refresh_required",
+    });
+    expect(response.headers.getSetCookie()).toEqual([]);
+    expect(mockedBackendFetch).toHaveBeenCalledTimes(2);
+    expect(mockedAuditLog).toHaveBeenCalledTimes(1);
+    expect(mockedAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resourceType: "auth.logout_all",
+        status: 401,
+        reason: "unauthorized_global_revocation_unproven",
+      }),
+    );
+    expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain(
+      "refresh token revoked",
+    );
+  });
+
+  it.each([
+    ["GET", GET],
+    ["PUT", PUT],
+    ["PATCH", PATCH],
+    ["DELETE", DELETE],
+  ] as const)(
+    "rejects non-POST logout-all requests for %s without forwarding or clearing cookies",
+    async (method, routeHandler) => {
+      const response = await routeHandler(
+        makeAuthRequest(
+          "/api/auth/logout-all",
+          {},
+          { method, accessToken: ACCESS_TOKEN },
+        ),
+        makeContext(["logout-all"]),
+      );
+
+      expect(response.status).toBe(405);
+      expect(response.headers.get("Allow")).toBe("POST");
+      await expect(response.json()).resolves.toEqual({
+        error: "method_not_allowed",
+      });
+      expect(mockedBackendFetch).not.toHaveBeenCalled();
+      expect(response.headers.getSetCookie()).toEqual([]);
+      expect(mockedAuditLog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "auth.generic.denied",
+          resourceType: "auth.logout_all",
+          status: 405,
+          reason: "method_not_allowed",
+        }),
+      );
+      expect(mockedAuditLog).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("denies logout-all without CSRF before forwarding or clearing cookies", async () => {
+    const request = new NextRequest("http://localhost/api/auth/logout-all", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${COOKIE_NAMES.access}=${ACCESS_TOKEN}`,
+        Origin: ORIGIN,
+      },
+      body: "{}",
+    });
+
+    const response = await POST(request, makeContext(["logout-all"]));
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({ error: "csrf_missing" });
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(response.headers.getSetCookie()).toEqual([]);
+    expect(mockedBackendFetch).not.toHaveBeenCalled();
+    expect(mockedAuditLog.mock.calls.map(([record]) => record)).toEqual([
+      expect.objectContaining({
+        event: "auth.generic.denied",
+        resourceType: "auth.logout_all",
+        status: 403,
+        reason: "request_policy_denied",
+      }),
+    ]);
+  });
 
   it("audits CSRF denial without forwarding the call", async () => {
     const request = new NextRequest("http://localhost/api/auth/verify/send", {

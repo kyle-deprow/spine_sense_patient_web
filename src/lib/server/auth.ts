@@ -262,9 +262,32 @@ export interface IssuedSessionAudit {
   sessionCorrelation: string;
 }
 
+export interface IssuedSessionCredentials {
+  accessToken: string;
+  refreshToken: string;
+  actorId: string;
+  issuedAt: number;
+}
+
+export interface RotatedTokenPair {
+  accessToken: string;
+  refreshToken: string;
+}
+
+export interface RefreshWithCookieOptions {
+  /** Called immediately after a valid pair is received, before actor checks. */
+  onTokenPairReceived?: (pair: RotatedTokenPair, backendStatus: number) => void;
+  onTokenPairIssued?: (session: IssuedSessionCredentials) => void;
+  /** Called when a successful backend rotation has no complete token pair. */
+  onMalformedTokenPair?: (accessToken?: string) => void;
+  preserveBackendStatusOnFailure?: boolean;
+  preserveCookiesOnFailure?: boolean;
+}
+
 export async function refreshWithCookie(
   request: NextRequest,
   onTokenIssued?: (issued: IssuedSessionAudit) => void,
+  options: RefreshWithCookieOptions = {},
 ): Promise<NextResponse> {
   const refreshToken = request.cookies.get(COOKIE_NAMES.refresh)?.value;
   if (!refreshToken) {
@@ -272,14 +295,14 @@ export async function refreshWithCookie(
       { error: "refresh_token_missing" },
       { status: 401 },
     );
-    clearAuthCookies(response);
+    if (!options.preserveCookiesOnFailure) clearAuthCookies(response);
     // The CSRF cookie is not an authentication credential — it is precisely what
     // an UNauthenticated client needs in order to log in or register. Tearing it
     // down along with the auth cookies on a failed refresh strands the user: the
     // very next login/register attempt fails CSRF validation before it ever
-    // reaches the backend. Always reissue it here, same as sessionFromCookie does
-    // on its 401 paths.
-    issueCsrfCookie(response);
+    // reaches the backend. Reissue it for the browser-facing refresh route;
+    // internal callers that must preserve the original retry state opt out.
+    if (!options.preserveCookiesOnFailure) issueCsrfCookie(response);
     return response;
   }
 
@@ -291,8 +314,10 @@ export async function refreshWithCookie(
   if (iat === null || iat > now + 60 || now - iat > SESSION_MAX_AGE_SECONDS) {
     // Session has exceeded absolute lifetime — force re-login
     const response = jsonNoStore({ error: "session_expired" }, { status: 401 });
-    clearAuthCookies(response);
-    issueCsrfCookie(response);
+    if (!options.preserveCookiesOnFailure) {
+      clearAuthCookies(response);
+      issueCsrfCookie(response);
+    }
     return response;
   }
 
@@ -301,19 +326,54 @@ export async function refreshWithCookie(
     authBackendRequest({ refresh_token: refreshToken }, request),
   );
   const data = await readJsonBody<JsonRecord>(backendResponse);
+  const tokenPairIssued = hasTokenPair(data);
 
-  if (!backendResponse.ok || !hasTokenPair(data)) {
-    const response = jsonNoStore({ error: "refresh_failed" }, { status: 401 });
-    clearAuthCookies(response);
-    issueCsrfCookie(response);
+  if (!backendResponse.ok || !tokenPairIssued) {
+    // A successful response without a complete pair may still have consumed
+    // the single-use refresh credential. Treat it as a protocol failure, not
+    // as a retryable 2xx, and let internal callers revoke any usable access
+    // token without putting the old refresh token back in a browser cookie.
+    if (backendResponse.ok) {
+      const candidateAccessToken =
+        typeof data?.access_token === "string" && data.access_token.length > 0
+          ? data.access_token
+          : undefined;
+      options.onMalformedTokenPair?.(candidateAccessToken);
+    }
+    const response = jsonNoStore(
+      { error: "refresh_failed" },
+      {
+        status: backendResponse.ok
+          ? 502
+          : options.preserveBackendStatusOnFailure
+            ? backendResponse.status
+            : 401,
+      },
+    );
+    if (!options.preserveCookiesOnFailure) {
+      clearAuthCookies(response);
+      issueCsrfCookie(response);
+    }
     return response;
   }
 
-  const actorId = await resolveBackendAuthenticatedActorId(
-    data["user_id"],
-    data,
-  );
+  // Capture the backend pair before resolving metadata. The refresh endpoint
+  // has already rotated the old credential at this point; a missing user_id
+  // must never cause the old refresh cookie to be reused.
+  const rotatedPair = toTokenPair(data);
+  options.onTokenPairReceived?.(rotatedPair, backendResponse.status);
+
+  // The refresh contract carries the backend-authenticated actor directly.
+  // Do not call /auth/session after rotation: a malformed response must not
+  // turn the newly issued access token into a second backend lookup.
+  const actorId = backendAuthenticatedActorId(data["user_id"]);
   if (actorId === undefined) {
+    if (options.preserveCookiesOnFailure) {
+      return jsonNoStore(
+        { error: "authenticated_actor_unavailable" },
+        { status: 502 },
+      );
+    }
     // Same defect as the three 401 paths above: this clears auth cookies via
     // clearAndNoStore and must not leave the client without a CSRF cookie either,
     // or the ensuing forced re-login would itself fail CSRF validation.
@@ -327,12 +387,14 @@ export async function refreshWithCookie(
 
   const response = jsonNoStore({ success: true });
   clearAuthCookies(response);
-  const issued = issueAuthenticatedSessionCookies(response, {
-    ...toTokenPair(data),
+  const session: IssuedSessionCredentials = {
+    ...rotatedPair,
     actorId,
     issuedAt: iat,
-  });
+  };
+  const issued = issueAuthenticatedSessionCookies(response, session);
   issueCsrfCookie(response);
+  options.onTokenPairIssued?.(session);
   onTokenIssued?.({ actorId, sessionCorrelation: issued.sessionCorrelation });
   return response;
 }

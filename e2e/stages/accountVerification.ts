@@ -101,11 +101,18 @@ export async function expectAuthenticatedCookieSession(page: Page) {
   expect(
     cookieHasExpectedShape(cookies, "spine_patient_refresh", {
       httpOnly: true,
-      path: "/api/auth/refresh",
+      path: "/api/auth",
       sameSite: "Strict",
       secure: EXPECT_SECURE_COOKIES,
     }),
   ).toBe(true);
+  expect(
+    cookies.some(
+      (cookie) =>
+        cookie.name === "spine_patient_refresh" &&
+        cookie.path === "/api/auth/refresh",
+    ),
+  ).toBe(false);
   expect(
     cookieHasExpectedShape(cookies, "spine_patient_csrf", {
       httpOnly: false,

@@ -36,6 +36,7 @@ const UUID_RE =
 const BASE64URL_SHA256_RE = /^[A-Za-z0-9_-]{43}$/;
 const KEY_ID_RE = /^[A-Za-z0-9_-]{1,32}$/;
 const UNIX_SECONDS_RE = /^[1-9][0-9]{9}$/;
+const REFRESH_COOKIE_MAINTENANCE = new WeakSet<object>();
 
 export interface CookieOptions {
   httpOnly: boolean;
@@ -102,6 +103,21 @@ export function accessCookieOptions(): CookieOptions {
 }
 
 export function refreshCookieOptions(): CookieOptions {
+  return {
+    httpOnly: true,
+    secure: shouldUseSecureCookies(),
+    sameSite: "strict",
+    path: "/api/auth",
+    maxAge: REFRESH_TOKEN_MAX_AGE_SECONDS,
+  };
+}
+
+/**
+ * Deployment compatibility: versions before the common auth cookie path used
+ * `/api/auth/refresh`. Keep this exact option set for deterministic migration
+ * and deletion; a cookie with this path cannot reach `/api/auth/logout-all`.
+ */
+export function legacyRefreshCookieOptions(): CookieOptions {
   return {
     httpOnly: true,
     secure: shouldUseSecureCookies(),
@@ -352,11 +368,9 @@ export function issueAuthenticatedSessionCookies(
     session.accessToken,
     accessCookieOptions(),
   );
-  response.cookies.set(
-    COOKIE_NAMES.refresh,
-    session.refreshToken,
-    refreshCookieOptions(),
-  );
+  // Expire the old path before setting the new path. This order is part of the
+  // rollout contract: every successful rotation/login migrates duplicate
+  // same-name cookies without ever forwarding the refresh token to backend JS.
   response.cookies.set(
     COOKIE_NAMES.sessionIssuedAt,
     String(issuedAt),
@@ -367,6 +381,12 @@ export function issueAuthenticatedSessionCookies(
     actorCookie,
     auditActorCookieOptions(),
   );
+  response.cookies.set(
+    COOKIE_NAMES.refresh,
+    session.refreshToken,
+    refreshCookieOptions(),
+  );
+  maintainRefreshCookieVariants(response);
   return {
     actorId,
     issuedAt,
@@ -386,10 +406,6 @@ export function clearAuthenticatedSessionCookies(response: NextResponse): void {
     ...accessCookieOptions(),
     maxAge: 0,
   });
-  response.cookies.set(COOKIE_NAMES.refresh, "", {
-    ...refreshCookieOptions(),
-    maxAge: 0,
-  });
   response.cookies.set(COOKIE_NAMES.csrf, "", {
     ...csrfCookieOptions(),
     maxAge: 0,
@@ -402,6 +418,11 @@ export function clearAuthenticatedSessionCookies(response: NextResponse): void {
     ...auditActorCookieOptions(),
     maxAge: 0,
   });
+  response.cookies.set(COOKIE_NAMES.refresh, "", {
+    ...refreshCookieOptions(),
+    maxAge: 0,
+  });
+  maintainRefreshCookieVariants(response);
 }
 
 export function clearAuthCookies(response: NextResponse): void {
@@ -446,6 +467,71 @@ function clearCookie(
   options: CookieOptions,
 ): void {
   response.cookies.set(name, "", { ...options, maxAge: 0 });
+}
+
+function maintainRefreshCookieVariants(response: NextResponse): void {
+  if (!REFRESH_COOKIE_MAINTENANCE.has(response)) {
+    // NextResponse exposes `cookies` through a Proxy whose `set` getter is a
+    // forwarding closure. Bind the concrete ResponseCookies prototype method
+    // so the compatibility hook cannot recursively call itself.
+    const originalSet = (
+      Object.getPrototypeOf(response.cookies) as {
+        set: (
+          ...args: Parameters<typeof response.cookies.set>
+        ) => ReturnType<typeof response.cookies.set>;
+      }
+    ).set.bind(response.cookies);
+    response.cookies.set = ((
+      ...args: Parameters<typeof response.cookies.set>
+    ) => {
+      const result = originalSet(...args);
+      rewriteRefreshCookieVariants(response);
+      return result;
+    }) as typeof response.cookies.set;
+    REFRESH_COOKIE_MAINTENANCE.add(response);
+  }
+  rewriteRefreshCookieVariants(response);
+}
+
+function rewriteRefreshCookieVariants(response: NextResponse): void {
+  const setCookies = response.headers.getSetCookie();
+  const currentRefreshCookie = setCookies.find(
+    (cookie) =>
+      cookie.startsWith(`${COOKIE_NAMES.refresh}=`) &&
+      cookie.includes("Path=/api/auth;") &&
+      !cookie.includes("Path=/api/auth/refresh;"),
+  );
+  const otherCookies = setCookies.filter(
+    (cookie) => !cookie.startsWith(`${COOKIE_NAMES.refresh}=`),
+  );
+  response.headers.delete("Set-Cookie");
+  for (const cookie of otherCookies)
+    response.headers.append("Set-Cookie", cookie);
+  appendSerializedCookie(response, COOKIE_NAMES.refresh, "", {
+    ...legacyRefreshCookieOptions(),
+    maxAge: 0,
+  });
+  if (currentRefreshCookie !== undefined)
+    response.headers.append("Set-Cookie", currentRefreshCookie);
+}
+
+function appendSerializedCookie(
+  response: NextResponse,
+  name: string,
+  value: string,
+  options: CookieOptions,
+): void {
+  const attributes = [
+    `Path=${options.path}`,
+    `Max-Age=${options.maxAge}`,
+    ...(options.secure ? ["Secure"] : []),
+    ...(options.httpOnly ? ["HttpOnly"] : []),
+    `SameSite=${options.sameSite}`,
+  ];
+  response.headers.append(
+    "Set-Cookie",
+    `${name}=${value}; ${attributes.join("; ")}`,
+  );
 }
 
 function sessionIssuedAtCookieOptions(): CookieOptions {
