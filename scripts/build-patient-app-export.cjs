@@ -64,14 +64,40 @@ function resolveExpoEnvironment() {
 fs.rmSync(outputDir, { recursive: true, force: true });
 fs.mkdirSync(outputDir, { recursive: true });
 
+// The app's hosted-config contract (its scripts/release/production-config-contract.cjs,
+// values from its eas.json) refuses a staging/production export unless these
+// exact public URLs are stamped in. The WEB bundle never reads them at runtime:
+// platform/auth/tokenSession.web.ts returns '' for the client base URL and every
+// call is rewritten onto the BFF proxy, so the cookie boundary is unaffected.
+// Local labels (local/e2e/dev map to e2e/development) keep the BFF-relative
+// default so a local export can never point a browser at a hosted origin.
+const HOSTED_PUBLIC_URLS = {
+  staging: {
+    api: "https://api.staging.spinesense.ai/api/v1",
+    stt: "https://app.staging.spinesense.ai",
+  },
+  production: {
+    api: "https://api.spinesense.ai/api/v1",
+    stt: "https://app.spinesense.ai",
+  },
+};
+
+const expoEnvironment = resolveExpoEnvironment();
+const hostedUrls = HOSTED_PUBLIC_URLS[expoEnvironment];
+const sttEdgeBaseUrl =
+  process.env.PATIENT_APP_STT_EDGE_BASE_URL ?? hostedUrls?.stt;
+
 const env = {
   ...process.env,
   SPINESENSE_PATIENT_WEB_EXPORT: "1",
   SPINESENSE_WEB_OUTPUT: "single",
   SPINESENSE_SKIP_REANIMATED_BABEL_PLUGIN: "1",
-  EXPO_PUBLIC_ENVIRONMENT: resolveExpoEnvironment(),
+  EXPO_PUBLIC_ENVIRONMENT: expoEnvironment,
   EXPO_PUBLIC_API_BASE_URL:
-    process.env.PATIENT_APP_API_BASE_URL ?? "/api/proxy/api/v1",
+    process.env.PATIENT_APP_API_BASE_URL ??
+    hostedUrls?.api ??
+    "/api/proxy/api/v1",
+  ...(sttEdgeBaseUrl ? { EXPO_PUBLIC_STT_EDGE_BASE_URL: sttEdgeBaseUrl } : {}),
   EXPO_PUBLIC_EPIC_FHIR_ENABLED:
     process.env.PATIENT_APP_EPIC_FHIR_ENABLED ?? "false",
 };
