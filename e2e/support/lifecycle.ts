@@ -37,11 +37,17 @@ function assertMutationLifecycle(identity: E2ERunIdentity): void {
       endpointLabel.startsWith("fde-patient-") &&
       endpointSegments.includes("dev") &&
       !endpointSegments.includes("prod");
+    // The VM-estate dev deployment serves the patient web app directly at
+    // app.dev.spinesense.ai (no Front Door in dev); accept it alongside the
+    // legacy dev Front Door endpoint.
+    const devVmOrigin = target.hostname === "app.dev.spinesense.ai";
+    const devOrigin =
+      devVmOrigin ||
+      (target.hostname.endsWith(".azurefd.net") && devFrontDoorEndpoint);
     if (
       target.protocol !== "https:" ||
       target.hostname.length === 0 ||
-      !target.hostname.endsWith(".azurefd.net") ||
-      !devFrontDoorEndpoint ||
+      !devOrigin ||
       target.port.length > 0 ||
       target.pathname !== "/" ||
       target.search.length > 0 ||
