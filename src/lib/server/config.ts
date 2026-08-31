@@ -56,7 +56,13 @@ const LOCAL_ORIGIN_ENVIRONMENTS = new Set([
 // "dev" appears in both sets: the historical local dev workflow uses
 // single-bucket, while the hosted VM-estate dev deployment (plan §13) runs
 // without a trusted client-IP contract and uses "unavailable".
-const HOSTED_ENVIRONMENTS = new Set(["staging", "production", "prod", "dev"]);
+const HOSTED_ENVIRONMENTS = new Set([
+  "staging",
+  "production",
+  "prod",
+  "dev",
+  "development",
+]);
 
 function splitList(value: string | undefined): string[] {
   if (!value) return [];
