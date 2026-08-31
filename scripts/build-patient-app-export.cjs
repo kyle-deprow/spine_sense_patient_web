@@ -84,8 +84,12 @@ const HOSTED_PUBLIC_URLS = {
 
 const expoEnvironment = resolveExpoEnvironment();
 const hostedUrls = HOSTED_PUBLIC_URLS[expoEnvironment];
+// Container builds pass these ARGs even when unset, so a BLANK override
+// means "no override", never "use the empty string".
+const blankAsUnset = (value) => (value ?? "").trim() || undefined;
+const apiBaseUrlOverride = blankAsUnset(process.env.PATIENT_APP_API_BASE_URL);
 const sttEdgeBaseUrl =
-  process.env.PATIENT_APP_STT_EDGE_BASE_URL ?? hostedUrls?.stt;
+  blankAsUnset(process.env.PATIENT_APP_STT_EDGE_BASE_URL) ?? hostedUrls?.stt;
 
 const env = {
   ...process.env,
@@ -94,9 +98,7 @@ const env = {
   SPINESENSE_SKIP_REANIMATED_BABEL_PLUGIN: "1",
   EXPO_PUBLIC_ENVIRONMENT: expoEnvironment,
   EXPO_PUBLIC_API_BASE_URL:
-    process.env.PATIENT_APP_API_BASE_URL ??
-    hostedUrls?.api ??
-    "/api/proxy/api/v1",
+    apiBaseUrlOverride ?? hostedUrls?.api ?? "/api/proxy/api/v1",
   ...(sttEdgeBaseUrl ? { EXPO_PUBLIC_STT_EDGE_BASE_URL: sttEdgeBaseUrl } : {}),
   EXPO_PUBLIC_EPIC_FHIR_ENABLED:
     process.env.PATIENT_APP_EPIC_FHIR_ENABLED ?? "false",

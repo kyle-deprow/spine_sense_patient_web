@@ -25,7 +25,10 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # unset exactly as before, and the RUNTIME tier is supplied by the container app
 # (Bicep sets ENVIRONMENT from runtimeEnvironment), never baked into the image.
 ARG ENVIRONMENT=production
-ARG PATIENT_APP_API_BASE_URL=/api/proxy/api/v1
+# Blank on purpose: the export script resolves the right value per tier
+# (canonical hosted URLs for staging/production, BFF-relative otherwise).
+# An explicit --build-arg still wins.
+ARG PATIENT_APP_API_BASE_URL=
 ARG PATIENT_APP_EPIC_FHIR_ENABLED=false
 ENV PATIENT_APP_API_BASE_URL=$PATIENT_APP_API_BASE_URL
 ENV PATIENT_APP_EPIC_FHIR_ENABLED=$PATIENT_APP_EPIC_FHIR_ENABLED
