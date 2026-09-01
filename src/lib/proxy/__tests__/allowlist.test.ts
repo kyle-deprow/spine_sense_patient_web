@@ -1195,4 +1195,24 @@ describe("proxy allowlist", () => {
     ).toBe(8 * 1024);
     expect(restoredProxyRequestBodyLimit("POST", "/api/v1/safety")).toBeNull();
   });
+
+  it("keeps restored mutation limits when an exact route has a trailing slash", () => {
+    const id = "10000000-0000-4000-8000-000000000001";
+    const cases = [
+      ["POST", "/api/v1/shares/", 32 * 1024],
+      ["POST", "/api/v1/patients/me/miscribe/recordings/setup/", 16 * 1024],
+      ["POST", "/api/v1/patients/me/link/", 8 * 1024],
+      ["POST", "/api/v1/invite-codes/validate/", 4 * 1024],
+      ["PUT", "/api/v1/patients/me/notification-preferences/", 8 * 1024],
+      [
+        "POST",
+        `/api/v1/patients/me/assessments/${id}/questions/R01/note/live-transcription-session/`,
+        8 * 1024,
+      ],
+    ] as const;
+
+    for (const [method, path, limit] of cases) {
+      expect(restoredProxyRequestBodyLimit(method, path)).toBe(limit);
+    }
+  });
 });

@@ -311,6 +311,25 @@ describe("Google OAuth BFF routes", () => {
     expect(authCookieMutations(response)).toEqual([]);
   });
 
+  it("rejects a link callback after the authenticated session changes", async () => {
+    const original = "spine_patient_sess=account-a-access";
+    const replacement = "spine_patient_sess=account-b-access";
+    const { state, cookies } = await startFlow("link", original);
+
+    const response = await completeGoogle(
+      new NextRequest(
+        `http://localhost/api/auth/google/callback?code=auth-code&state=${state}`,
+        { headers: { Cookie: `${replacement}; ${cookies}` } },
+      ),
+    );
+
+    expect(response.headers.get("location")).toBe(
+      "http://localhost/profile/linked-accounts?socialAuthError=session_required",
+    );
+    expect(googleFetch).not.toHaveBeenCalled();
+    expect(mockedBackendFetch).not.toHaveBeenCalled();
+  });
+
   it("links through the authenticated API contract without replacing session cookies", async () => {
     const existing = "spine_patient_sess=existing-access";
     const { state, nonce, cookies } = await startFlow("link", existing);

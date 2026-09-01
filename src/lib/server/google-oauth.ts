@@ -69,6 +69,7 @@ type GoogleFailureReason =
   | "state_mismatch";
 
 interface OAuthStateRecord {
+  linkSessionDigest: string | null;
   mode: GoogleAuthMode;
   nonce: string;
   returnTo: string;
@@ -88,6 +89,12 @@ function randomUrlToken(byteLength = 32): string {
 
 function stateKey(state: string): string {
   return `${STATE_KEY_PREFIX}${createHash("sha256").update(state).digest("base64url")}`;
+}
+
+function sessionDigest(accessToken: string): string {
+  return createHash("sha256")
+    .update(`spinesense.patient-web.google-link-session.v1\0${accessToken}`)
+    .digest("base64url");
 }
 
 async function issueState(record: OAuthStateRecord): Promise<string> {
@@ -167,6 +174,10 @@ function parseStateRecord(value: string): OAuthStateRecord | null {
       typeof parsed.verifier !== "string" ||
       parsed.verifier.length < 43 ||
       typeof parsed.returnTo !== "string" ||
+      (parsed.linkSessionDigest !== null &&
+        (typeof parsed.linkSessionDigest !== "string" ||
+          parsed.linkSessionDigest.length !== 43)) ||
+      (parsed.mode === "link") !== (parsed.linkSessionDigest !== null) ||
       safeReturnTo(
         parsed.returnTo,
         parsed.mode === "link" ? "/profile/linked-accounts" : "/",
@@ -176,6 +187,7 @@ function parseStateRecord(value: string): OAuthStateRecord | null {
     }
     return {
       mode: parsed.mode,
+      linkSessionDigest: parsed.linkSessionDigest,
       nonce: parsed.nonce,
       returnTo: parsed.returnTo,
       verifier: parsed.verifier,
@@ -335,7 +347,8 @@ export async function startGoogleOAuth(
   const auditContext = createAuditContext();
   const oauthConfig = getGoogleOAuthConfig();
   const origin = oauthPublicOrigin(request);
-  if (mode === "link" && !request.cookies.get(COOKIE_NAMES.access)?.value) {
+  const existingAccessToken = request.cookies.get(COOKIE_NAMES.access)?.value;
+  if (mode === "link" && !existingAccessToken) {
     return jsonNoStore({ error: "unauthorized" }, { status: 401 });
   }
   const rateLimitFailure = await oauthInitiationFailure(request);
@@ -347,7 +360,14 @@ export async function startGoogleOAuth(
   );
   const verifier = randomUrlToken(48);
   const nonce = randomUrlToken();
-  const state = await issueState({ mode, nonce, returnTo, verifier });
+  const state = await issueState({
+    mode,
+    nonce,
+    returnTo,
+    verifier,
+    linkSessionDigest:
+      mode === "link" ? sessionDigest(existingAccessToken as string) : null,
+  });
   const authUrl = new URL(GOOGLE_AUTH_URL);
   authUrl.searchParams.set("client_id", oauthConfig.clientId);
   authUrl.searchParams.set("redirect_uri", `${origin}${CALLBACK_PATH}`);
@@ -375,6 +395,7 @@ export async function startGoogleOAuth(
 export async function completeGoogleOAuth(
   request: NextRequest,
 ): Promise<NextResponse> {
+  oauthPublicOrigin(request);
   const auditContext = createAuditContext();
   const expectedState = request.cookies.get(OAUTH_STATE_COOKIE)?.value;
   const state = request.nextUrl.searchParams.get("state");
@@ -392,6 +413,13 @@ export async function completeGoogleOAuth(
   }
   const existingAccessToken = request.cookies.get(COOKIE_NAMES.access)?.value;
   if (transaction.mode === "link" && !existingAccessToken) {
+    return googleFailureRedirect(request, "link", "session_required");
+  }
+  if (
+    transaction.mode === "link" &&
+    transaction.linkSessionDigest !==
+      sessionDigest(existingAccessToken as string)
+  ) {
     return googleFailureRedirect(request, "link", "session_required");
   }
 

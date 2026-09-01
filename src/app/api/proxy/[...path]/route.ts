@@ -8,7 +8,6 @@ import {
   isPatientDocumentDeleteTarget,
   isPatientReportShareCollectionTarget,
   isPatientReportShareRevocationTarget,
-  isQuestionNoteTranscriptionTarget,
   restoredProxyRequestBodyLimit,
   validateProxyTarget,
 } from "@/lib/proxy/allowlist";
@@ -38,14 +37,6 @@ type ProxyContext = {
 };
 
 const DEFAULT_CSRF_CONTENT_TYPES = new Set(["application/json"]);
-const QUESTION_NOTE_CSRF_CONTENT_TYPES = new Set(["multipart/form-data"]);
-const QUESTION_NOTE_AUDIO_MAX_BYTES = 25 * 1024 * 1024;
-const QUESTION_NOTE_AUDIO_TYPES = new Set([
-  "audio/m4a",
-  "audio/mp4",
-  "audio/wav",
-  "audio/webm",
-]);
 const DOCUMENT_DELETE_BODY_PROBE_TIMEOUT_MS = 250;
 
 async function handler(request: NextRequest, context: ProxyContext) {
@@ -69,11 +60,6 @@ async function handler(request: NextRequest, context: ProxyContext) {
   }
 
   const resourceType = deriveResourceType(target.targetPath);
-  const isQuestionNoteTranscription = isQuestionNoteTranscriptionTarget(
-    request.method,
-    target.targetPath,
-  );
-
   if (!accessToken) {
     auditDenial(
       request.method,
@@ -108,9 +94,7 @@ async function handler(request: NextRequest, context: ProxyContext) {
     {
       csrfSecret: config.csrfSecret,
       allowedOrigins: config.allowedOrigins,
-      allowedContentTypes: isQuestionNoteTranscription
-        ? QUESTION_NOTE_CSRF_CONTENT_TYPES
-        : DEFAULT_CSRF_CONTENT_TYPES,
+      allowedContentTypes: DEFAULT_CSRF_CONTENT_TYPES,
       allowBodylessDelete: isDocumentDelete,
       ...(requestBodyEmpty !== undefined ? { requestBodyEmpty } : {}),
     },
@@ -166,22 +150,6 @@ async function handler(request: NextRequest, context: ProxyContext) {
     }
     const body = bodyResult.body;
     if (
-      isQuestionNoteTranscription &&
-      !(await isValidQuestionNoteMultipart(
-        body,
-        request.headers.get("content-type"),
-      ))
-    ) {
-      auditDenial(
-        request.method,
-        400,
-        "question_note_transcription_request_invalid",
-        auditContext,
-        resourceType,
-      );
-      return jsonNoStore({ error: "invalid_request" }, { status: 400 });
-    }
-    if (
       request.method.toUpperCase() === "POST" &&
       isReportShareCollection &&
       !isReportShareRequestBody(body)
@@ -236,21 +204,6 @@ async function handler(request: NextRequest, context: ProxyContext) {
         request.method,
         502,
         "report_share_response_invalid",
-        auditContext,
-        resourceType,
-      );
-      return jsonNoStore({ error: "service_unavailable" }, { status: 502 });
-    }
-    backendResponse = protectedResponse;
-  }
-
-  if (isQuestionNoteTranscription) {
-    const protectedResponse = await protectQuestionNoteResponse(backendResponse);
-    if (protectedResponse === null) {
-      auditDenial(
-        request.method,
-        502,
-        "question_note_transcription_response_invalid",
         auditContext,
         resourceType,
       );
@@ -418,48 +371,6 @@ async function readBoundedRequestBody(
   return { ok: true, body: body.buffer };
 }
 
-async function isValidQuestionNoteMultipart(
-  body: ArrayBuffer,
-  contentType: string | null,
-): Promise<boolean> {
-  if (
-    body.byteLength === 0 ||
-    contentType === null ||
-    !/^multipart\/form-data\s*;\s*boundary=(?:"[^"]{1,70}"|[^;\s]{1,70})$/i.test(
-      contentType,
-    )
-  ) {
-    return false;
-  }
-  try {
-    const form = await new Response(body, {
-      headers: { "Content-Type": contentType },
-    }).formData();
-    const keys = [...form.keys()].sort();
-    if (
-      keys.length !== 2 ||
-      keys[0] !== "audio" ||
-      keys[1] !== "question_id" ||
-      form.getAll("audio").length !== 1 ||
-      form.getAll("question_id").length !== 1
-    ) {
-      return false;
-    }
-    const questionId = form.get("question_id");
-    const audio = form.get("audio");
-    return (
-      typeof questionId === "string" &&
-      /^[A-Za-z0-9_-]{1,100}$/.test(questionId) &&
-      audio instanceof Blob &&
-      audio.size > 0 &&
-      audio.size <= QUESTION_NOTE_AUDIO_MAX_BYTES &&
-      QUESTION_NOTE_AUDIO_TYPES.has(audio.type.toLowerCase())
-    );
-  } catch {
-    return false;
-  }
-}
-
 const REPORT_SHARE_REQUEST_FIELDS = new Set([
   "report_share",
   "report_id",
@@ -527,45 +438,6 @@ async function protectReportShareResponse(
   }
   if (operation === "GET" && !isReportShareListResponse(parsed)) return null;
   return jsonNoStore(parsed, { status: response.status });
-}
-
-async function protectQuestionNoteResponse(
-  response: Response,
-): Promise<Response | null> {
-  if (!response.ok) return sanitizedProxyErrorResponse(response);
-  if (
-    response.status !== 200 ||
-    !response.headers.get("content-type")?.includes("application/json")
-  ) {
-    return null;
-  }
-  const parsed = await readBoundedJsonResponse(response, 64 * 1024);
-  if (
-    parsed === undefined ||
-    parsed === null ||
-    typeof parsed !== "object" ||
-    Array.isArray(parsed) ||
-    containsCredentialField(parsed)
-  ) {
-    return null;
-  }
-  return jsonNoStore(parsed, { status: 200 });
-}
-
-function containsCredentialField(value: unknown): boolean {
-  if (Array.isArray(value)) return value.some(containsCredentialField);
-  if (value === null || typeof value !== "object") return false;
-  return Object.entries(value).some(([key, nested]) => {
-    const normalized = key.toLowerCase().replace(/[^a-z]/g, "");
-    return (
-      normalized.includes("token") ||
-      normalized.includes("websocket") ||
-      normalized.includes("credential") ||
-      normalized.includes("authorization") ||
-      normalized.includes("bearer") ||
-      containsCredentialField(nested)
-    );
-  });
 }
 
 function isReportShareListResponse(value: unknown): boolean {

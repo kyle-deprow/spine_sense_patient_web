@@ -57,8 +57,8 @@ const MEDICATION_ITEM_RE = new RegExp(
   `^\\/api\\/v1\\/patients\\/me\\/medications\\/${UUID_RE}$`,
   "i",
 );
-const ASSESSMENT_QUESTION_NOTE_TRANSCRIPTION_RE = new RegExp(
-  `^\\/api\\/v1\\/assessments\\/${UUID_RE}\\/question-note-transcriptions$`,
+const ASSESSMENT_QUESTION_NOTE_SESSION_RE = new RegExp(
+  `${ASSESSMENT_RE}\\/questions\\/[A-Za-z0-9_-]{1,128}\\/note\\/live-transcription-session$`,
   "i",
 );
 const INTAKE_STORY_AUDIO_UPLOADS_RE =
@@ -157,9 +157,9 @@ export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
     pathPattern: ASSESSMENT_REPORT_RE,
   },
   {
-    prefix: "/api/v1/assessments",
+    prefix: "/api/v1/patients/me/assessments",
     methods: ["POST"],
-    pathPattern: ASSESSMENT_QUESTION_NOTE_TRANSCRIPTION_RE,
+    pathPattern: ASSESSMENT_QUESTION_NOTE_SESSION_RE,
   },
   {
     prefix: "/api/v1/patients/me/assessments",
@@ -484,52 +484,47 @@ export function isPatientReportShareRevocationTarget(
   return method.toUpperCase() === "DELETE" && SHARE_TOKEN_RE.test(targetPath);
 }
 
-export function isQuestionNoteTranscriptionTarget(
-  method: string,
-  targetPath: string,
-): boolean {
-  return (
-    method.toUpperCase() === "POST" &&
-    ASSESSMENT_QUESTION_NOTE_TRANSCRIPTION_RE.test(targetPath)
-  );
-}
-
 export function restoredProxyRequestBodyLimit(
   method: string,
   targetPath: string,
 ): number | null {
   const normalizedMethod = method.toUpperCase();
-  if (normalizedMethod === "POST" && targetPath === SHARES_PREFIX) {
+  const normalizedPath =
+    targetPath.length > 1 && targetPath.endsWith("/")
+      ? targetPath.slice(0, -1)
+      : targetPath;
+  if (normalizedMethod === "POST" && normalizedPath === SHARES_PREFIX) {
     return 32 * 1024;
   }
   if (
     normalizedMethod === "POST" &&
-    ASSESSMENT_QUESTION_NOTE_TRANSCRIPTION_RE.test(targetPath)
+    ASSESSMENT_QUESTION_NOTE_SESSION_RE.test(normalizedPath)
   ) {
-    return 25 * 1024 * 1024 + 64 * 1024;
+    return 8 * 1024;
   }
   if (normalizedMethod === "POST") {
-    if (INTAKE_STORY_AUDIO_UPLOADS_RE.test(targetPath)) return 4 * 1024;
-    if (INTAKE_STORY_SEGMENTS_SESSION_RE.test(targetPath)) return 0;
-    if (INTAKE_STORY_SEGMENTS_RE.test(targetPath)) return 8 * 1024;
-    if (INTAKE_STORY_SEGMENTS_FINALIZE_RE.test(targetPath)) return 4 * 1024;
-    if (targetPath === `${MISCRIBE_RECORDINGS_PREFIX}/setup`) return 16 * 1024;
-    if (MISCRIBE_RECORDING_ACTION_RE.test(targetPath)) return 4 * 1024;
-    if (targetPath === "/api/v1/patients/me/link") return 8 * 1024;
-    if (PATIENT_PROVIDER_REVOKE_RE.test(targetPath)) return 0;
-    if (targetPath === "/api/v1/invite-codes/validate") return 4 * 1024;
+    if (INTAKE_STORY_AUDIO_UPLOADS_RE.test(normalizedPath)) return 4 * 1024;
+    if (INTAKE_STORY_SEGMENTS_SESSION_RE.test(normalizedPath)) return 0;
+    if (INTAKE_STORY_SEGMENTS_RE.test(normalizedPath)) return 8 * 1024;
+    if (INTAKE_STORY_SEGMENTS_FINALIZE_RE.test(normalizedPath)) return 4 * 1024;
+    if (normalizedPath === `${MISCRIBE_RECORDINGS_PREFIX}/setup`)
+      return 16 * 1024;
+    if (MISCRIBE_RECORDING_ACTION_RE.test(normalizedPath)) return 4 * 1024;
+    if (normalizedPath === "/api/v1/patients/me/link") return 8 * 1024;
+    if (PATIENT_PROVIDER_REVOKE_RE.test(normalizedPath)) return 0;
+    if (normalizedPath === "/api/v1/invite-codes/validate") return 4 * 1024;
   }
   if (
     normalizedMethod === "PUT" &&
-    targetPath === "/api/v1/patients/me/notification-preferences"
+    normalizedPath === "/api/v1/patients/me/notification-preferences"
   ) {
     return 8 * 1024;
   }
   if (
     normalizedMethod === "DELETE" &&
-    (SHARE_TOKEN_RE.test(targetPath) ||
-      GOOGLE_SOCIAL_IDENTITY_RE.test(targetPath) ||
-      MISCRIBE_RECORDING_EXACT_RE.test(targetPath))
+    (SHARE_TOKEN_RE.test(normalizedPath) ||
+      GOOGLE_SOCIAL_IDENTITY_RE.test(normalizedPath) ||
+      MISCRIBE_RECORDING_EXACT_RE.test(normalizedPath))
   ) {
     return 0;
   }
