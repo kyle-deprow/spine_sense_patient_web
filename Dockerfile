@@ -6,7 +6,8 @@ RUN corepack enable pnpm
 
 # ── Dependencies ─────────────────────────────────────────────────
 FROM base AS deps
-COPY spine_sense_app/package.json spine_sense_app/pnpm-lock.yaml ./spine_sense_app/
+COPY spine_sense_app/package.json spine_sense_app/pnpm-lock.yaml spine_sense_app/pnpm-workspace.yaml ./spine_sense_app/
+COPY spine_sense_app/patches ./spine_sense_app/patches
 COPY spine_sense_patient_web/package.json spine_sense_patient_web/pnpm-lock.yaml ./spine_sense_patient_web/
 RUN cd spine_sense_app && pnpm install --frozen-lockfile
 RUN cd spine_sense_patient_web && pnpm install --frozen-lockfile
