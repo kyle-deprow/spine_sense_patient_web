@@ -29,7 +29,6 @@ import { runResultsReportStage } from "./stages/resultsReport";
 import { runAnalysisStage } from "./stages/reviewAnalysis";
 import { runReturnHomeStage } from "./stages/returnHome";
 import { runScreeningStage } from "./stages/screening";
-import { runStoryVoiceStage } from "./stages/storyVoice";
 import { withAuthorizedE2eLifecycle } from "./support/lifecycle";
 import { createScopedE2ERunIdentity } from "./support/runIdentity";
 import type { JourneyContext } from "./journey/context";
@@ -59,14 +58,6 @@ const SCOPED_JOURNEYS = {
     endState: "records_ready",
     tag: "@scope-consent-onboarding",
     runStage: runConsentOnboardingStage,
-  },
-  "story-voice": {
-    name: "story-voice",
-    spec: "e2e/scopes/story-voice.spec.ts",
-    startCheckpoint: "verified_pending_consent",
-    endState: "records_ready",
-    tag: "@scope-story-voice",
-    runStage: runStoryVoiceStage,
   },
   "onboarding-resume": {
     name: "onboarding-resume",

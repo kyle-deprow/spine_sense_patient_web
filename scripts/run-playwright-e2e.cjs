@@ -20,7 +20,6 @@ const APPROVED_SCOPES = [
   "legacy-journey",
   "auth",
   "consent-onboarding",
-  "story-voice",
   "onboarding-intro-idempotence",
   "onboarding-resume",
   "onboarding-draft-restore",

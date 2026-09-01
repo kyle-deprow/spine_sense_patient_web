@@ -4,7 +4,6 @@ export type ScopeName =
   | "legacy-journey"
   | "auth"
   | "consent-onboarding"
-  | "story-voice"
   | "onboarding-resume"
   | "onboarding-draft-restore"
   | "onboarding-intro-idempotence"
@@ -38,11 +37,6 @@ export const SCOPE_BOUNDARY_CONTRACTS: Readonly<
     analysisBehavior: "none",
   },
   "consent-onboarding": {
-    startCheckpoint: "verified_pending_consent",
-    endState: "records_ready",
-    analysisBehavior: "none",
-  },
-  "story-voice": {
     startCheckpoint: "verified_pending_consent",
     endState: "records_ready",
     analysisBehavior: "none",
