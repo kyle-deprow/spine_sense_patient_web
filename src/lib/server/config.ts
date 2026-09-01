@@ -9,13 +9,6 @@ export interface PatientWebConfig {
   auditActorSigningKeys: AuditActorSigningKeys;
   allowedOrigins: string[];
   storageOrigins: string[];
-  googleClientId: string;
-  googleClientSecret: string;
-  googleOauthBaaConfirmed: boolean;
-  fhirOauthEnabled: boolean;
-  fhirReleaseProfile: string;
-  fhirRedirectUri: string | null;
-  fhirAuthorizationEndpoints: string[];
   publicUrl: string | null;
   environment: string;
   frontDoorOriginGuardMode: FrontDoorOriginGuardMode;
@@ -289,17 +282,6 @@ function validateSigningKey(
   return { id, secret };
 }
 
-function parseBooleanEnv(name: string): boolean {
-  const value = process.env[name];
-  if (value === undefined || value === "") return false;
-
-  const normalized = value.toLowerCase();
-  if (normalized === "true") return true;
-  if (normalized === "false") return false;
-
-  throw new Error(`${name} must be true or false`);
-}
-
 function validateBackendUrl(url: string): void {
   let parsed: URL;
   try {
@@ -339,79 +321,6 @@ function validateBackendUrl(url: string): void {
   }
 }
 
-function isLocalHttpUrl(parsed: URL): boolean {
-  return (
-    parsed.protocol === "http:" &&
-    (parsed.hostname === "localhost" ||
-      parsed.hostname === "127.0.0.1" ||
-      parsed.hostname === "[::1]")
-  );
-}
-
-function validateFhirRedirectUri(
-  value: string | undefined,
-  environment: string,
-): string | null {
-  const redirectUri = value?.trim() ?? "";
-  if (!redirectUri) return null;
-  let parsed: URL;
-  try {
-    parsed = new URL(redirectUri);
-  } catch {
-    throw new Error("PATIENT_WEB_FHIR_REDIRECT_URI must be a valid URL");
-  }
-  const allowLocalHttp = LOCAL_ORIGIN_ENVIRONMENTS.has(environment);
-  const validTransport =
-    parsed.protocol === "https:" || (allowLocalHttp && isLocalHttpUrl(parsed));
-  if (
-    !validTransport ||
-    parsed.username !== "" ||
-    parsed.password !== "" ||
-    parsed.pathname !== "/api/fhir/callback" ||
-    parsed.search !== "" ||
-    parsed.hash !== "" ||
-    redirectUri !== parsed.toString().replace(/\/$/u, "")
-  ) {
-    throw new Error(
-      "PATIENT_WEB_FHIR_REDIRECT_URI must be an exact credential-free /api/fhir/callback URL",
-    );
-  }
-  return redirectUri;
-}
-
-function parseFhirAuthorizationEndpoints(
-  value: string | undefined,
-  environment: string,
-): string[] {
-  const allowLocalHttp = LOCAL_ORIGIN_ENVIRONMENTS.has(environment);
-  return splitList(value).map((entry) => {
-    let parsed: URL;
-    try {
-      parsed = new URL(entry);
-    } catch {
-      throw new Error(
-        "PATIENT_WEB_FHIR_AUTHORIZATION_ENDPOINTS must contain exact URLs",
-      );
-    }
-    const validTransport =
-      parsed.protocol === "https:" ||
-      (allowLocalHttp && isLocalHttpUrl(parsed));
-    if (
-      !validTransport ||
-      parsed.username !== "" ||
-      parsed.password !== "" ||
-      parsed.search !== "" ||
-      parsed.hash !== "" ||
-      entry !== `${parsed.origin}${parsed.pathname}`
-    ) {
-      throw new Error(
-        "PATIENT_WEB_FHIR_AUTHORIZATION_ENDPOINTS must contain exact authorization endpoint URLs",
-      );
-    }
-    return entry;
-  });
-}
-
 export function getPatientWebConfig(): PatientWebConfig {
   const isDevelopment = process.env.NODE_ENV === "development";
   const csrfSecret = requireSecretBytes(
@@ -428,53 +337,9 @@ export function getPatientWebConfig(): PatientWebConfig {
     process.env.PATIENT_WEB_ALLOWED_ORIGINS,
     process.env.ENVIRONMENT,
   );
-  const googleClientId = process.env.GOOGLE_CLIENT_ID ?? "";
-  const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET ?? "";
-  const googleOauthBaaConfirmed = parseBooleanEnv("GOOGLE_OAUTH_BAA_CONFIRMED");
   const frontDoorOriginGuard = getFrontDoorOriginGuardConfig();
-  const rawEnvironment = process.env.ENVIRONMENT?.trim();
-  const normalizedEnvironment = rawEnvironment || frontDoorOriginGuard.environment;
-  const isExplicitLocalEnvironment =
-    rawEnvironment !== undefined && LOCAL_ORIGIN_ENVIRONMENTS.has(rawEnvironment);
-  if (
-    !isExplicitLocalEnvironment &&
-    (googleClientId || googleClientSecret) &&
-    !googleOauthBaaConfirmed
-  ) {
-    throw new Error(
-      "Google OAuth production traffic requires GOOGLE_OAUTH_BAA_CONFIRMED=true",
-    );
-  }
   const clientIpMode = parseClientIpMode();
   const rateLimitConfig = parseCredentialRateLimitConfig();
-  const fhirOauthEnabled = parseBooleanEnv("PATIENT_WEB_FHIR_OAUTH_ENABLED");
-  const fhirReleaseProfile =
-    process.env.PATIENT_WEB_FHIR_RELEASE_PROFILE?.trim() ?? "";
-  const fhirRedirectUri = validateFhirRedirectUri(
-    process.env.PATIENT_WEB_FHIR_REDIRECT_URI,
-    normalizedEnvironment,
-  );
-  const fhirAuthorizationEndpoints = parseFhirAuthorizationEndpoints(
-    process.env.PATIENT_WEB_FHIR_AUTHORIZATION_ENDPOINTS,
-    normalizedEnvironment,
-  );
-  if (fhirOauthEnabled) {
-    if (fhirReleaseProfile !== "confidential_private_key_jwt") {
-      throw new Error(
-        "Patient web FHIR OAuth requires the confidential_private_key_jwt release profile",
-      );
-    }
-    if (fhirRedirectUri === null) {
-      throw new Error(
-        "PATIENT_WEB_FHIR_REDIRECT_URI is required when patient web FHIR OAuth is enabled",
-      );
-    }
-    if (fhirAuthorizationEndpoints.length === 0) {
-      throw new Error(
-        "PATIENT_WEB_FHIR_AUTHORIZATION_ENDPOINTS is required when patient web FHIR OAuth is enabled",
-      );
-    }
-  }
   if (
     clientIpMode === "azure-front-door" &&
     frontDoorOriginGuard.expectedFrontDoorId === null
@@ -490,13 +355,6 @@ export function getPatientWebConfig(): PatientWebConfig {
     auditActorSigningKeys: auditActorSigningKeys(),
     allowedOrigins,
     storageOrigins: splitList(process.env.NEXT_PUBLIC_STORAGE_DOMAINS),
-    googleClientId,
-    googleClientSecret,
-    googleOauthBaaConfirmed,
-    fhirOauthEnabled,
-    fhirReleaseProfile,
-    fhirRedirectUri,
-    fhirAuthorizationEndpoints,
     publicUrl: process.env.PATIENT_WEB_PUBLIC_URL ?? null,
     environment: frontDoorOriginGuard.environment,
     frontDoorOriginGuardMode: frontDoorOriginGuard.mode,

@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 import { CSRF_HEADER, createCsrfToken } from "@/lib/auth/csrf";
-import { signAuditActorCookie } from "@/lib/auth/cookies";
 import {
   BackendUnavailableError,
   LONG_BACKEND_TIMEOUT_MS,
@@ -958,6 +957,16 @@ describe("proxy route handler", () => {
     ).toBe(false);
     expect(
       isLongRunningBackendCall(
+        "/api/v1/patients/me/intake/story/transcriptions",
+      ),
+    ).toBe(false);
+    expect(
+      isLongRunningBackendCall(
+        "/api/v1/patients/me/intake/story/transcriptions/audio",
+      ),
+    ).toBe(false);
+    expect(
+      isLongRunningBackendCall(
         "/api/v1/patients/me/intake/story/transcriptions/extra",
       ),
     ).toBe(false);
@@ -965,7 +974,7 @@ describe("proxy route handler", () => {
       isLongRunningBackendCall(
         "/api/v1/patients/me/miscribe/recordings/10000000-0000-4000-8000-00000000000A/process",
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isLongRunningBackendCall(
         "/api/v1/patients/me/miscribe/recordings/10000000-0000-4000-8000-000000000001/upload-complete",
@@ -987,41 +996,44 @@ describe("proxy route handler", () => {
     "/api/v1/patients/me/intake/story/transcriptions",
     "/api/v1/patients/me/intake/story/transcriptions/audio",
     "/api/v1/patients/me/intake/story/live-transcription-session",
-  ])("blocks retired intake story route before backend forwarding: %s", async (targetPath) => {
-    const csrf = createCsrfToken(CSRF_SECRET, "retired-story-route");
-    const request = makeProxyRequest(
-      `/api/proxy${targetPath}`,
-      "POST",
-      { spine_patient_sess: "access-token", spine_patient_csrf: csrf },
-      {
-        "Content-Type": "audio/webm",
-        [CSRF_HEADER]: csrf,
-        Origin: ORIGIN,
-      },
-      new Blob(["synthetic transcript"], { type: "audio/webm" }),
-    );
+  ])(
+    "blocks retired intake story route before backend forwarding: %s",
+    async (targetPath) => {
+      const csrf = createCsrfToken(CSRF_SECRET, "retired-story-route");
+      const request = makeProxyRequest(
+        `/api/proxy${targetPath}`,
+        "POST",
+        { spine_patient_sess: "access-token", spine_patient_csrf: csrf },
+        {
+          "Content-Type": "audio/webm",
+          [CSRF_HEADER]: csrf,
+          Origin: ORIGIN,
+        },
+        new Blob(["synthetic transcript"], { type: "audio/webm" }),
+      );
 
-    const response = await POST(
-      request,
-      makeContext(targetPath.slice(1).split("/")),
-    );
+      const response = await POST(
+        request,
+        makeContext(targetPath.slice(1).split("/")),
+      );
 
-    expect(response.status).toBe(404);
-    await expect(response.json()).resolves.toEqual({
-      error: "proxy_path_not_allowed",
-    });
-    expect(mockedBackendFetch).not.toHaveBeenCalled();
-    expect(mockedAuditLog).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "phi.proxy.denied",
-        reason: "proxy_path_not_allowed",
-        status: 404,
-      }),
-    );
-    expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain(
-      "synthetic transcript",
-    );
-  });
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toEqual({
+        error: "proxy_path_not_allowed",
+      });
+      expect(mockedBackendFetch).not.toHaveBeenCalled();
+      expect(mockedAuditLog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "phi.proxy.denied",
+          reason: "proxy_path_not_allowed",
+          status: 404,
+        }),
+      );
+      expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain(
+        "synthetic transcript",
+      );
+    },
+  );
 
   it("returns 405 when HTTP method is not allowed for the matched route", async () => {
     // /api/v1/patients/me/dashboard only allows GET
@@ -1120,257 +1132,69 @@ describe("proxy route handler", () => {
     );
   });
 
-  describe("MyScribe proxy boundary", () => {
-    const recordingId = "10000000-0000-4000-8000-000000000001";
-    const prefix = "/api/proxy/api/v1/patients/me/miscribe";
-    const segments = ["api", "v1", "patients", "me", "miscribe"];
-
-    it("injects cookie auth server-side, replaces browser request IDs, and forwards query parameters", async () => {
-      const issuedAt = Math.floor(Date.now() / 1000);
-      mockedBackendFetch.mockResolvedValue(
-        Response.json([{ id: recordingId }], {
-          headers: {
-            Authorization: "must-not-reach-browser",
-            "Set-Cookie": "backend_session=must-not-reach-browser",
-            "X-Internal-Debug": "private",
-          },
-        }),
-      );
-
+  it.each([
+    [
+      "POST",
+      "/api/v1/patients/me/assessments/10000000-0000-4000-8000-000000000001/questions/R01/note/live-transcription-session",
+    ],
+    ["POST", "/api/v1/patients/me/intake/story/audio-uploads"],
+    ["POST", "/api/v1/patients/me/intake/story/segments/session"],
+    ["POST", "/api/v1/patients/me/intake/story/segments"],
+    ["POST", "/api/v1/patients/me/intake/story/segments/finalize"],
+    ["GET", "/api/v1/patients/me/miscribe/recordings"],
+    [
+      "POST",
+      "/api/v1/patients/me/miscribe/recordings/10000000-0000-4000-8000-000000000001/process",
+    ],
+    ["GET", "/api/v1/patients/me/providers"],
+    ["POST", "/api/v1/patients/me/link"],
+    [
+      "POST",
+      "/api/v1/patients/me/providers/10000000-0000-4000-8000-000000000001/revoke",
+    ],
+    ["POST", "/api/v1/invite-codes/validate"],
+    ["POST", "/api/v1/shares"],
+    ["GET", "/api/v1/fhir/policy"],
+    [
+      "POST",
+      "/api/v1/fhir/connections/10000000-0000-4000-8000-000000000001/sync",
+    ],
+  ] as const)(
+    "blocks removed Tranche 3A proxy target before forwarding: %s %s",
+    async (method, targetPath) => {
+      const csrf = createCsrfToken(CSRF_SECRET, "removed-route-denial");
       const request = makeProxyRequest(
-        `${prefix}/recordings?status=ready&limit=10`,
-        "GET",
+        `/api/proxy${targetPath}`,
+        method,
         {
-          spine_patient_sess: "cookie-access-token",
-          spine_patient_sess_iat: String(issuedAt),
-          spine_patient_audit_actor:
-            signAuditActorCookie(recordingId, "cookie-access-token", issuedAt, {
-              id: "test-current",
-              secret: "patient-web-test-actor-signing-key-32-bytes",
-            }) ?? "",
+          spine_patient_sess: "access-token",
+          spine_patient_csrf: csrf,
         },
         {
-          Authorization: "Bearer browser-controlled-token",
-          "X-Request-Id": "patient@example.test?note=private",
+          "Content-Type": "application/json",
+          [CSRF_HEADER]: csrf,
+          Origin: ORIGIN,
         },
+        method === "GET" ? undefined : "{}",
       );
-      const response = await GET(
-        request,
-        makeContext([...segments, "recordings"]),
-      );
+      const context = makeContext(targetPath.slice(1).split("/"));
+      const response =
+        method === "GET"
+          ? await GET(request, context)
+          : await POST(request, context);
 
-      expect(response.status).toBe(200);
-      expect(mockedBackendFetch).toHaveBeenCalledWith(
-        "/api/v1/patients/me/miscribe/recordings?status=ready&limit=10",
-        expect.any(Object),
-        {},
-      );
-      const forwardedHeaders = new Headers(
-        mockedBackendFetch.mock.calls[0]?.[1]?.headers,
-      );
-      expect(forwardedHeaders.get("Authorization")).toBe(
-        "Bearer cookie-access-token",
-      );
-      expect(forwardedHeaders.get("X-Request-Id")).toMatch(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-      );
-      expect(forwardedHeaders.get("X-Request-Id")).not.toContain(
-        "patient@example.test",
-      );
-      expect(response.headers.get("Cache-Control")).toBe("no-store");
-      expect(response.headers.get("Pragma")).toBe("no-cache");
-      expect(response.headers.get("Authorization")).toBeNull();
-      expect(response.headers.get("Set-Cookie")).toBeNull();
-      expect(response.headers.get("X-Internal-Debug")).toBeNull();
-      expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain(
-        "status=ready",
-      );
-      expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain(
-        "cookie-access-token",
-      );
-      expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain(
-        "patient@example.test",
-      );
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toEqual({
+        error: "proxy_path_not_allowed",
+      });
+      expect(mockedBackendFetch).not.toHaveBeenCalled();
       expect(mockedAuditLog).toHaveBeenCalledWith(
         expect.objectContaining({
-          event: "phi.proxy.access",
-          resourceType: "patients.miscribe",
-          actorId: recordingId,
-          sessionCorrelation: sessionCorrelationFromToken(
-            "cookie-access-token",
-          ),
-          status: 200,
+          event: "phi.proxy.denied",
+          reason: "proxy_path_not_allowed",
+          status: 404,
         }),
       );
-      expect(mockedAuditLog.mock.calls[0]?.[0]).not.toHaveProperty("userId");
-      expect(mockedAuditLog.mock.calls[0]?.[0]?.requestId).not.toBe(
-        "patient@example.test?note=private",
-      );
-    });
-
-    it("does not trust a browser-forged audit actor cookie", async () => {
-      mockedBackendFetch.mockResolvedValue(Response.json([]));
-      const forged = `v1.${recordingId}.${"a".repeat(43)}`;
-      const request = makeProxyRequest(`${prefix}/recordings`, "GET", {
-        spine_patient_sess: "cookie-access-token",
-        spine_patient_audit_actor: forged,
-      });
-
-      const response = await GET(
-        request,
-        makeContext([...segments, "recordings"]),
-      );
-
-      expect(response.status).toBe(200);
-      expect(mockedAuditLog.mock.calls[0]?.[0]).not.toHaveProperty("actorId");
-    });
-
-    it("forwards MyScribe POST query and body without adding content to audit metadata", async () => {
-      mockedBackendFetch.mockResolvedValue(
-        Response.json({ id: recordingId }, { status: 201 }),
-      );
-      const csrf = createCsrfToken(CSRF_SECRET, "miscribe-setup-test");
-      const requestBody = JSON.stringify({
-        visit_type: "follow-up",
-        clinical_note: "private text",
-      });
-
-      const request = makeProxyRequest(
-        `${prefix}/recordings/setup?source=web`,
-        "POST",
-        { spine_patient_sess: "cookie-access-token", spine_patient_csrf: csrf },
-        {
-          "Content-Type": "application/json",
-          [CSRF_HEADER]: csrf,
-          Origin: ORIGIN,
-        },
-        requestBody,
-      );
-      const response = await POST(
-        request,
-        makeContext([...segments, "recordings", "setup"]),
-      );
-
-      expect(response.status).toBe(201);
-      expect(mockedBackendFetch.mock.calls[0]?.[0]).toBe(
-        "/api/v1/patients/me/miscribe/recordings/setup?source=web",
-      );
-      const forwardedBody = mockedBackendFetch.mock.calls[0]?.[1]?.body;
-      expect(Buffer.from(forwardedBody as ArrayBuffer).toString("utf8")).toBe(
-        requestBody,
-      );
-      expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain(
-        "follow-up",
-      );
-      expect(JSON.stringify(mockedAuditLog.mock.calls)).not.toContain(
-        "private text",
-      );
-    });
-
-    it("uses the long backend timeout for MyScribe transcription and summary processing", async () => {
-      mockedBackendFetch.mockResolvedValue(
-        Response.json({ id: "summary-1", recording_id: recordingId }),
-      );
-      const csrf = createCsrfToken(CSRF_SECRET, "miscribe-process-test");
-      const request = makeProxyRequest(
-        `${prefix}/recordings/${recordingId}/process`,
-        "POST",
-        { spine_patient_sess: "cookie-access-token", spine_patient_csrf: csrf },
-        {
-          "Content-Type": "application/json",
-          [CSRF_HEADER]: csrf,
-          Origin: ORIGIN,
-        },
-        "{}",
-      );
-
-      const response = await POST(
-        request,
-        makeContext([...segments, "recordings", recordingId, "process"]),
-      );
-
-      expect(response.status).toBe(200);
-      expect(mockedBackendFetch).toHaveBeenCalledWith(
-        `/api/v1/patients/me/miscribe/recordings/${recordingId}/process`,
-        expect.any(Object),
-        { timeoutMs: LONG_BACKEND_TIMEOUT_MS },
-      );
-    });
-
-    it.each([
-      [
-        "POST",
-        `${prefix}/recordings/setup`,
-        [...segments, "recordings", "setup"],
-      ],
-      [
-        "DELETE",
-        `${prefix}/recordings/${recordingId}`,
-        [...segments, "recordings", recordingId],
-      ],
-    ] as const)(
-      "rejects MyScribe %s without CSRF proof",
-      async (method, pathname, path) => {
-        const request = makeProxyRequest(
-          pathname,
-          method,
-          { spine_patient_sess: "cookie-access-token" },
-          { "Content-Type": "application/json", Origin: ORIGIN },
-        );
-        const response =
-          method === "POST"
-            ? await POST(request, makeContext(path))
-            : await DELETE(request, makeContext(path));
-
-        expect(response.status).toBe(403);
-        expect(mockedBackendFetch).not.toHaveBeenCalled();
-        expect(mockedAuditLog).toHaveBeenCalledWith(
-          expect.objectContaining({
-            event: "phi.proxy.denied",
-            reason: "csrf_missing",
-            status: 403,
-          }),
-        );
-      },
-    );
-
-    it("preserves a MyScribe DELETE 204 while stripping headers and disabling storage", async () => {
-      mockedBackendFetch.mockResolvedValue(
-        new Response(null, {
-          status: 204,
-          headers: {
-            "Set-Cookie": "backend_session=private",
-            "X-Internal-Debug": "private",
-          },
-        }),
-      );
-      const csrf = createCsrfToken(CSRF_SECRET, "miscribe-delete-test");
-      const request = makeProxyRequest(
-        `${prefix}/recordings/${recordingId}`,
-        "DELETE",
-        { spine_patient_sess: "cookie-access-token", spine_patient_csrf: csrf },
-        {
-          "Content-Type": "application/json",
-          [CSRF_HEADER]: csrf,
-          Origin: ORIGIN,
-        },
-      );
-
-      const response = await DELETE(
-        request,
-        makeContext([...segments, "recordings", recordingId]),
-      );
-
-      expect(response.status).toBe(204);
-      await expect(response.text()).resolves.toBe("");
-      expect(response.headers.get("Cache-Control")).toBe("no-store");
-      expect(response.headers.get("Pragma")).toBe("no-cache");
-      expect(response.headers.get("Set-Cookie")).toBeNull();
-      expect(response.headers.get("X-Internal-Debug")).toBeNull();
-      const requestInit = mockedBackendFetch.mock.calls[0]?.[1];
-      expect(requestInit?.method).toBe("DELETE");
-      expect(requestInit).not.toHaveProperty("body");
-      expect(new Headers(requestInit?.headers).has("content-type")).toBe(false);
-    });
-  });
+    },
+  );
 });

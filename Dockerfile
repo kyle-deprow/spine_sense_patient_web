@@ -29,9 +29,7 @@ ARG ENVIRONMENT=production
 # (canonical hosted URLs for staging/production, BFF-relative otherwise).
 # An explicit --build-arg still wins.
 ARG PATIENT_APP_API_BASE_URL=
-ARG PATIENT_APP_EPIC_FHIR_ENABLED=false
 ENV PATIENT_APP_API_BASE_URL=$PATIENT_APP_API_BASE_URL
-ENV PATIENT_APP_EPIC_FHIR_ENABLED=$PATIENT_APP_EPIC_FHIR_ENABLED
 RUN ENVIRONMENT="$ENVIRONMENT" pnpm build:patient-app
 RUN test -f patient-app-export/index.html
 RUN mkdir -p public

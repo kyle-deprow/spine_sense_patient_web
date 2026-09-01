@@ -35,7 +35,7 @@ describe("proxy allowlist", () => {
     ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
   });
 
-  it("allows canonical assessment question-note live transcription session token minting", () => {
+  it("blocks assessment question-note live transcription session token minting", () => {
     const assessmentId = "10000000-0000-4000-8000-000000000001";
     const questionId = "R_NEURO-2";
 
@@ -56,10 +56,7 @@ describe("proxy allowlist", () => {
         "POST",
         `/api/proxy/api/v1/patients/me/assessments/${assessmentId}/questions/${questionId}/note/live-transcription-session`,
       ),
-    ).toEqual({
-      ok: true,
-      targetPath: `/api/v1/patients/me/assessments/${assessmentId}/questions/${questionId}/note/live-transcription-session`,
-    });
+    ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
   });
 
   it("allows combined adaptive answer save and completion through the assessment proxy", () => {
@@ -124,57 +121,15 @@ describe("proxy allowlist", () => {
     });
   });
 
-  it("allows only canonical completed-file onboarding story audio routes", () => {
+  it("blocks intake story audio upload and segment routes", () => {
     const cases = [
-      "/api/v1/patients/me/intake/story/audio-uploads",
-    ] as const;
-
-    for (const targetPath of cases) {
-      expect(
-        validateProxyTarget(
-          targetPath.slice(1).split("/"),
-          "POST",
-          `/api/proxy${targetPath}`,
-        ),
-      ).toEqual({
-        ok: true,
-        targetPath,
-      });
-    }
-  });
-
-  it("allows canonical segmented intake story POST routes", () => {
-    const cases = [
-      "/api/v1/patients/me/intake/story/segments/session",
-      "/api/v1/patients/me/intake/story/segments",
-      "/api/v1/patients/me/intake/story/segments/finalize",
-    ] as const;
-
-    for (const targetPath of cases) {
-      expect(
-        validateProxyTarget(
-          targetPath.slice(1).split("/"),
-          "POST",
-          `/api/proxy${targetPath}`,
-        ),
-      ).toEqual({
-        ok: true,
-        targetPath,
-      });
-    }
-  });
-
-  it("keeps segmented intake story routes exact and POST-only", () => {
-    const cases = [
-      [
-        "GET",
-        "/api/v1/patients/me/intake/story/segments/session",
-      ],
+      ["POST", "/api/v1/patients/me/intake/story/audio-uploads"],
+      ["POST", "/api/v1/patients/me/intake/story/segments/session"],
+      ["POST", "/api/v1/patients/me/intake/story/segments"],
+      ["POST", "/api/v1/patients/me/intake/story/segments/finalize"],
+      ["GET", "/api/v1/patients/me/intake/story/segments/session"],
       ["PUT", "/api/v1/patients/me/intake/story/segments"],
-      [
-        "POST",
-        "/api/v1/patients/me/intake/story/segments/finalize/extra",
-      ],
+      ["POST", "/api/v1/patients/me/intake/story/segments/finalize/extra"],
     ] as const;
 
     for (const [method, targetPath] of cases) {
@@ -184,14 +139,7 @@ describe("proxy allowlist", () => {
           method,
           `/api/proxy${targetPath}`,
         ),
-      ).toEqual({
-        ok: false,
-        status: method === "POST" ? 404 : 405,
-        code:
-          method === "POST"
-            ? "proxy_path_not_allowed"
-            : "proxy_method_not_allowed",
-      });
+      ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
     }
   });
 
@@ -292,26 +240,6 @@ describe("proxy allowlist", () => {
         ok: false,
         status: 404,
         code: "proxy_path_not_allowed",
-      });
-    }
-  });
-
-  it("blocks method mismatches on canonical onboarding story audio routes", () => {
-    const cases = [
-      ["GET", "/api/v1/patients/me/intake/story/audio-uploads"],
-    ] as const;
-
-    for (const [method, targetPath] of cases) {
-      expect(
-        validateProxyTarget(
-          targetPath.slice(1).split("/"),
-          method,
-          `/api/proxy${targetPath}`,
-        ),
-      ).toEqual({
-        ok: false,
-        status: 405,
-        code: "proxy_method_not_allowed",
       });
     }
   });
@@ -445,7 +373,7 @@ describe("proxy allowlist", () => {
     ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
   });
 
-  it("allows report email-self and third-party share creation for the web app", () => {
+  it("allows report email-self for the web app", () => {
     const reportId = "10000000-0000-4000-8000-000000000002";
 
     expect(
@@ -458,20 +386,9 @@ describe("proxy allowlist", () => {
       ok: true,
       targetPath: `/api/v1/patients/me/reports/${reportId}/email-self`,
     });
-
-    expect(
-      validateProxyTarget(
-        ["api", "v1", "shares"],
-        "POST",
-        "/api/proxy/api/v1/shares",
-      ),
-    ).toEqual({
-      ok: true,
-      targetPath: "/api/v1/shares",
-    });
   });
 
-  it("keeps report email-self and share creation narrow at the BFF boundary", () => {
+  it("keeps report email-self narrow and blocks public share routes", () => {
     const reportId = "10000000-0000-4000-8000-000000000002";
 
     // Wrong method on email-self must not be forwarded.
@@ -492,37 +409,20 @@ describe("proxy allowlist", () => {
       ),
     ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
 
-    // Wrong method on the share collection must not be forwarded.
-    expect(
-      validateProxyTarget(
-        ["api", "v1", "shares"],
-        "GET",
-        "/api/proxy/api/v1/shares",
-      ),
-    ).toEqual({
-      ok: false,
-      status: 405,
-      code: "proxy_method_not_allowed",
-    });
-
-    // `match: 'exact'` must not open child paths under the share collection.
-    expect(
-      validateProxyTarget(
-        ["api", "v1", "shares", "some-token"],
-        "GET",
-        "/api/proxy/api/v1/shares/some-token",
-      ),
-    ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
-
-    // The public recipient serve route (singular /share/{token}/report) is a
-    // direct-to-API path and must never be reachable through the patient BFF.
-    expect(
-      validateProxyTarget(
-        ["api", "v1", "share", "some-token", "report"],
-        "GET",
-        "/api/proxy/api/v1/share/some-token/report",
-      ),
-    ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
+    for (const [method, targetPath] of [
+      ["POST", "/api/v1/shares"],
+      ["GET", "/api/v1/shares"],
+      ["GET", "/api/v1/shares/some-token"],
+      ["GET", "/api/v1/share/some-token/report"],
+    ] as const) {
+      expect(
+        validateProxyTarget(
+          targetPath.slice(1).split("/"),
+          method,
+          `/api/proxy${targetPath}`,
+        ),
+      ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
+    }
   });
 
   it("allows only implemented patient document routes and methods", () => {
@@ -759,7 +659,7 @@ describe("proxy allowlist", () => {
     }
   });
 
-  it("allows only the implemented MyScribe route and method combinations", () => {
+  it("blocks previously implemented patient MyScribe routes", () => {
     const recordingId = "10000000-0000-4000-8000-000000000001";
     const routes = [
       ["GET", "/api/v1/patients/me/miscribe/recording-policy"],
@@ -798,10 +698,7 @@ describe("proxy allowlist", () => {
           method,
           `/api/proxy${targetPath}`,
         ),
-      ).toEqual({
-        ok: true,
-        targetPath,
-      });
+      ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
     }
   });
 
@@ -830,7 +727,7 @@ describe("proxy allowlist", () => {
     }
   });
 
-  it("blocks method mismatches on implemented MyScribe paths", () => {
+  it("blocks all method variants on patient MyScribe paths", () => {
     const recordingId = "10000000-0000-4000-8000-000000000001";
     const cases = [
       ["POST", "/api/v1/patients/me/miscribe/recording-policy"],
@@ -852,11 +749,7 @@ describe("proxy allowlist", () => {
           method,
           `/api/proxy${targetPath}`,
         ),
-      ).toEqual({
-        ok: false,
-        status: 405,
-        code: "proxy_method_not_allowed",
-      });
+      ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
     }
   });
 
@@ -1029,7 +922,7 @@ describe("proxy allowlist", () => {
     ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
   });
 
-  it("allows patient-owned FHIR management and import routes through the PHI proxy", () => {
+  it("blocks patient-owned FHIR management and import routes", () => {
     const connectionId = "10000000-0000-4000-8000-000000000001";
     const importId = "10000000-0000-4000-8000-000000000002";
     const cases = [
@@ -1055,10 +948,7 @@ describe("proxy allowlist", () => {
           method,
           `/api/proxy${targetPath}`,
         ),
-      ).toEqual({
-        ok: true,
-        targetPath,
-      });
+      ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
     }
   });
 
@@ -1077,21 +967,11 @@ describe("proxy allowlist", () => {
           method,
           `/api/proxy${targetPath}`,
         ),
-      ).toEqual({
-        ok: false,
-        status:
-          method === "POST" && targetPath === "/api/v1/fhir/connections"
-            ? 405
-            : 404,
-        code:
-          method === "POST" && targetPath === "/api/v1/fhir/connections"
-            ? "proxy_method_not_allowed"
-            : "proxy_path_not_allowed",
-      });
+      ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
     }
   });
 
-  it("allows patient provider linking routes through the PHI proxy", () => {
+  it("blocks patient provider linking routes", () => {
     const linkId = "10000000-0000-4000-8000-000000000001";
     const cases = [
       ["POST", "/api/v1/invite-codes/validate"],
@@ -1107,10 +987,7 @@ describe("proxy allowlist", () => {
           method,
           `/api/proxy${targetPath}`,
         ),
-      ).toEqual({
-        ok: true,
-        targetPath,
-      });
+      ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
     }
   });
 
@@ -1129,9 +1006,7 @@ describe("proxy allowlist", () => {
     }
   });
 
-  it("scopes the linking routes to their exact methods and UUID link ids", () => {
-    // The exact-match POST entry makes the path itself known, so every other
-    // verb on it is a method violation rather than an unknown path.
+  it("keeps all method and malformed-id variants of linking routes blocked", () => {
     for (const method of ["GET", "DELETE"] as const) {
       expect(
         validateProxyTarget(
@@ -1139,18 +1014,15 @@ describe("proxy allowlist", () => {
           method,
           "/api/proxy/api/v1/patients/me/link",
         ),
-      ).toEqual({ ok: false, status: 405, code: "proxy_method_not_allowed" });
+      ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
     }
 
-    // A malformed link id never matches the anchored revoke pattern. The only
-    // remaining match is the pre-existing read-only providers prefix entry, so
-    // the write is rejected as a method violation and never reaches the API.
     expect(
       validateProxyTarget(
         ["api", "v1", "patients", "me", "providers", "not-a-uuid", "revoke"],
         "POST",
         "/api/proxy/api/v1/patients/me/providers/not-a-uuid/revoke",
       ),
-    ).toEqual({ ok: false, status: 405, code: "proxy_method_not_allowed" });
+    ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
   });
 });

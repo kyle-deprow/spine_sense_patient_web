@@ -15,7 +15,8 @@
     "test:watch": "vitest",
     "test:e2e": "node scripts/run-playwright-e2e.cjs test",
     "smoke:bundle": "node scripts/check-browser-bundle.cjs",
-    "validate:local": "pnpm lint && pnpm type-check && pnpm test && pnpm build:patient-app && pnpm build && pnpm smoke:bundle",
+    "validate:tranche3a-manifest": "vitest run src/lib/proxy/__tests__/tranche3a-absence.test.ts",
+    "validate:local": "pnpm lint && pnpm type-check && pnpm test && pnpm build:patient-app && pnpm build && pnpm validate:tranche3a-manifest && pnpm smoke:bundle",
     "release:validate": "pnpm validate:local",
     "format": "prettier --write \"src/**/*.{ts,tsx,json,css,md}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,json,css,md}\""

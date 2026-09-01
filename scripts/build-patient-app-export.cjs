@@ -91,8 +91,15 @@ const apiBaseUrlOverride = blankAsUnset(process.env.PATIENT_APP_API_BASE_URL);
 const sttEdgeBaseUrl =
   blankAsUnset(process.env.PATIENT_APP_STT_EDGE_BASE_URL) ?? hostedUrls?.stt;
 
+function withoutDeferredCapabilityEnvironment(sourceEnvironment) {
+  const inheritedEnvironment = { ...sourceEnvironment };
+  delete inheritedEnvironment.PATIENT_APP_EPIC_FHIR_ENABLED;
+  delete inheritedEnvironment.EXPO_PUBLIC_EPIC_FHIR_ENABLED;
+  return inheritedEnvironment;
+}
+
 const env = {
-  ...process.env,
+  ...withoutDeferredCapabilityEnvironment(process.env),
   SPINESENSE_PATIENT_WEB_EXPORT: "1",
   SPINESENSE_WEB_OUTPUT: "single",
   SPINESENSE_SKIP_REANIMATED_BABEL_PLUGIN: "1",
@@ -100,8 +107,6 @@ const env = {
   EXPO_PUBLIC_API_BASE_URL:
     apiBaseUrlOverride ?? hostedUrls?.api ?? "/api/proxy/api/v1",
   ...(sttEdgeBaseUrl ? { EXPO_PUBLIC_STT_EDGE_BASE_URL: sttEdgeBaseUrl } : {}),
-  EXPO_PUBLIC_EPIC_FHIR_ENABLED:
-    process.env.PATIENT_APP_EPIC_FHIR_ENABLED ?? "false",
 };
 
 const args = [

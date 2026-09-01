@@ -28,19 +28,7 @@ const ASSESSMENT_DOCUMENT_CONFIRM_RE = new RegExp(
   "i",
 );
 const ASSESSMENT_REPORT_RE = new RegExp(`${ASSESSMENT_RE}\\/reports$`, "i");
-const ASSESSMENT_QUESTION_NOTE_LIVE_TRANSCRIPTION_SESSION_RE = new RegExp(
-  `${ASSESSMENT_RE}\\/questions\\/[A-Za-z0-9_-]+\\/note\\/live-transcription-session$`,
-  "i",
-);
-const INTAKE_STORY_AUDIO_UPLOADS_RE =
-  /^\/api\/v1\/patients\/me\/intake\/story\/audio-uploads$/i;
 const INTAKE_STORY_EXACT_RE = /^\/api\/v1\/patients\/me\/intake\/story$/i;
-const INTAKE_STORY_SEGMENTS_SESSION_RE =
-  /^\/api\/v1\/patients\/me\/intake\/story\/segments\/session$/i;
-const INTAKE_STORY_SEGMENTS_RE =
-  /^\/api\/v1\/patients\/me\/intake\/story\/segments$/i;
-const INTAKE_STORY_SEGMENTS_FINALIZE_RE =
-  /^\/api\/v1\/patients\/me\/intake\/story\/segments\/finalize$/i;
 const INTAKE_ALLOWED_RE =
   /^\/api\/v1\/patients\/me\/intake(?:\/(?:progress|progress\/latest|progress\/complete|steps|steps\/[^/]+(?:\/draft)?|complete))?$/i;
 const INTAKE_ROUTE_RE = /^\/api\/v1\/patients\/me\/intake\/route$/i;
@@ -69,46 +57,6 @@ const MEDICATION_ITEM_RE = new RegExp(
   `^\\/api\\/v1\\/patients\\/me\\/medications\\/${UUID_RE}$`,
   "i",
 );
-const MISCRIBE_PREFIX = "/api/v1/patients/me/miscribe";
-const MISCRIBE_RECORDINGS_PREFIX = `${MISCRIBE_PREFIX}/recordings`;
-const MISCRIBE_RECORDING_RE = `^\\/api\\/v1\\/patients\\/me\\/miscribe\\/recordings\\/${UUID_RE}`;
-const MISCRIBE_RECORDING_EXACT_RE = new RegExp(
-  `${MISCRIBE_RECORDING_RE}$`,
-  "i",
-);
-const MISCRIBE_RECORDING_ACTION_RE = new RegExp(
-  `${MISCRIBE_RECORDING_RE}\\/(?:all-party-attestation|begin|abandon|upload-url|upload-complete|process)$`,
-  "i",
-);
-const MISCRIBE_RECORDING_SUMMARY_RE = new RegExp(
-  `${MISCRIBE_RECORDING_RE}\\/summary$`,
-  "i",
-);
-const PATIENT_PROVIDER_REVOKE_RE = new RegExp(
-  `^\\/api\\/v1\\/patients\\/me\\/providers\\/${UUID_RE}\\/revoke$`,
-  "i",
-);
-const FHIR_CONNECTION_RE = `^\\/api\\/v1\\/fhir\\/connections\\/${UUID_RE}`;
-const FHIR_CONNECTION_EXACT_RE = new RegExp(`${FHIR_CONNECTION_RE}$`, "i");
-const FHIR_CONNECTION_PERMISSION_RE = new RegExp(
-  `${FHIR_CONNECTION_RE}\\/permission$`,
-  "i",
-);
-const FHIR_CONNECTION_ATTEMPT_RE = new RegExp(
-  `${FHIR_CONNECTION_RE}\\/attempt$`,
-  "i",
-);
-const FHIR_CONNECTION_SYNC_RE = new RegExp(
-  `${FHIR_CONNECTION_RE}\\/sync$`,
-  "i",
-);
-const FHIR_CONNECTION_IMPORT_STATUS_RE = new RegExp(
-  `${FHIR_CONNECTION_RE}\\/import-status$`,
-  "i",
-);
-const FHIR_IMPORT_RE = `^\\/api\\/v1\\/fhir\\/imports\\/${UUID_RE}`;
-const FHIR_IMPORT_PREVIEW_RE = new RegExp(`${FHIR_IMPORT_RE}\\/preview$`, "i");
-const FHIR_IMPORT_COMMIT_RE = new RegExp(`${FHIR_IMPORT_RE}\\/commit$`, "i");
 
 export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
   {
@@ -157,11 +105,6 @@ export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
   },
   {
     prefix: "/api/v1/patients/me/assessments",
-    methods: ["POST"],
-    pathPattern: ASSESSMENT_QUESTION_NOTE_LIVE_TRANSCRIPTION_SESSION_RE,
-  },
-  {
-    prefix: "/api/v1/patients/me/assessments",
     methods: ["DELETE"],
     pathPattern: ASSESSMENT_DOCUMENT_RE,
   },
@@ -183,26 +126,6 @@ export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
   {
     prefix: "/api/v1/patients/me/consents",
     methods: ["GET", "POST", "PUT", "PATCH"],
-  },
-  {
-    prefix: "/api/v1/patients/me/intake",
-    methods: ["POST"],
-    pathPattern: INTAKE_STORY_AUDIO_UPLOADS_RE,
-  },
-  {
-    prefix: "/api/v1/patients/me/intake",
-    methods: ["POST"],
-    pathPattern: INTAKE_STORY_SEGMENTS_SESSION_RE,
-  },
-  {
-    prefix: "/api/v1/patients/me/intake",
-    methods: ["POST"],
-    pathPattern: INTAKE_STORY_SEGMENTS_RE,
-  },
-  {
-    prefix: "/api/v1/patients/me/intake",
-    methods: ["POST"],
-    pathPattern: INTAKE_STORY_SEGMENTS_FINALIZE_RE,
   },
   {
     prefix: "/api/v1/patients/me/intake",
@@ -313,110 +236,8 @@ export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
     methods: ["POST"],
     pathPattern: INTAKE_ROUTE_RE,
   },
-  {
-    prefix: `${MISCRIBE_PREFIX}/recording-policy`,
-    methods: ["GET"],
-    match: "exact",
-  },
-  { prefix: MISCRIBE_RECORDINGS_PREFIX, methods: ["GET"], match: "exact" },
-  {
-    prefix: `${MISCRIBE_RECORDINGS_PREFIX}/setup`,
-    methods: ["POST"],
-    match: "exact",
-  },
-  {
-    prefix: MISCRIBE_RECORDINGS_PREFIX,
-    methods: ["GET", "DELETE"],
-    pathPattern: MISCRIBE_RECORDING_EXACT_RE,
-  },
-  {
-    prefix: MISCRIBE_RECORDINGS_PREFIX,
-    methods: ["POST"],
-    pathPattern: MISCRIBE_RECORDING_ACTION_RE,
-  },
-  {
-    prefix: MISCRIBE_RECORDINGS_PREFIX,
-    methods: ["GET"],
-    pathPattern: MISCRIBE_RECORDING_SUMMARY_RE,
-  },
-  { prefix: "/api/v1/patients/me/providers", methods: ["GET"] },
-  // Patient-initiated provider linking. Redeeming an invite code links the
-  // signed-in patient to a practice; revoke tears a single link down by id.
-  // Both are patient-scoped writes the backend authorizes against the session
-  // cookie, and both are mounted slash-free on the backend, so neither needs a
-  // BACKEND_ROOT_PATHS_WITH_TRAILING_SLASH entry. Revoke is UUID-anchored so no
-  // other child of /providers becomes writable through the BFF.
-  {
-    prefix: "/api/v1/patients/me/link",
-    methods: ["POST"],
-    match: "exact",
-  },
-  {
-    prefix: "/api/v1/patients/me/providers",
-    methods: ["POST"],
-    pathPattern: PATIENT_PROVIDER_REVOKE_RE,
-  },
   { prefix: "/api/v1/patients/me", methods: ["GET", "PATCH"], match: "exact" },
-  // Public invite-code validation only. This replaces a bare
-  // /api/v1/invite-codes prefix entry that also reached the STAFF-ONLY create
-  // (POST) and list (GET) endpoints, which the backend mounts with a trailing
-  // slash. The backend 403s a patient session on those, but the BFF boundary is
-  // least-privilege, so only the slash-free validate route stays exposed.
-  {
-    prefix: "/api/v1/invite-codes/validate",
-    methods: ["POST"],
-    match: "exact",
-  },
   { prefix: "/api/v1/safety", methods: ["GET", "POST"] },
-  // Patient creating a third-party share token for a completed report. Kept
-  // exact + POST-only so only the collection endpoint is reachable; the public
-  // recipient serve route (GET /api/v1/share/{token}/report) is deliberately
-  // NOT exposed here — external recipients hit the API directly, not the BFF.
-  { prefix: "/api/v1/shares", methods: ["POST"], match: "exact" },
-  { prefix: "/api/v1/fhir/policy", methods: ["GET"], match: "exact" },
-  { prefix: "/api/v1/fhir/endpoints", methods: ["GET"], match: "exact" },
-  { prefix: "/api/v1/fhir/connections", methods: ["GET"], match: "exact" },
-  {
-    prefix: "/api/v1/fhir/connections",
-    methods: ["GET", "DELETE"],
-    pathPattern: FHIR_CONNECTION_EXACT_RE,
-  },
-  {
-    prefix: "/api/v1/fhir/connections",
-    methods: ["DELETE"],
-    pathPattern: FHIR_CONNECTION_PERMISSION_RE,
-  },
-  {
-    prefix: "/api/v1/fhir/connections",
-    methods: ["DELETE"],
-    pathPattern: FHIR_CONNECTION_ATTEMPT_RE,
-  },
-  {
-    prefix: "/api/v1/fhir/connections",
-    methods: ["POST"],
-    pathPattern: FHIR_CONNECTION_SYNC_RE,
-  },
-  {
-    prefix: "/api/v1/fhir/connections",
-    methods: ["GET"],
-    pathPattern: FHIR_CONNECTION_IMPORT_STATUS_RE,
-  },
-  {
-    prefix: "/api/v1/fhir/imports",
-    methods: ["GET"],
-    pathPattern: FHIR_IMPORT_PREVIEW_RE,
-  },
-  {
-    prefix: "/api/v1/fhir/imports",
-    methods: ["POST"],
-    pathPattern: FHIR_IMPORT_COMMIT_RE,
-  },
-  { prefix: "/api/v1/fhir/import-history", methods: ["GET"], match: "exact" },
-  {
-    prefix: "/api/v1/fhir/import-history/export",
-    methods: ["GET"],
-    match: "exact",
-  },
 ];
 
 export type ProxyPathValidation =
