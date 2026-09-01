@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isPatientAssessmentDocumentDeleteTarget,
   isPatientDocumentDeleteTarget,
+  restoredProxyRequestBodyLimit,
   validateProxyTarget,
 } from "@/lib/proxy/allowlist";
 
@@ -35,7 +36,7 @@ describe("proxy allowlist", () => {
     ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
   });
 
-  it("blocks assessment question-note live transcription session token minting", () => {
+  it("allows assessment question-note live transcription session token minting", () => {
     const assessmentId = "10000000-0000-4000-8000-000000000001";
     const questionId = "R_NEURO-2";
 
@@ -56,7 +57,10 @@ describe("proxy allowlist", () => {
         "POST",
         `/api/proxy/api/v1/patients/me/assessments/${assessmentId}/questions/${questionId}/note/live-transcription-session`,
       ),
-    ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
+    ).toEqual({
+      ok: true,
+      targetPath: `/api/v1/patients/me/assessments/${assessmentId}/questions/${questionId}/note/live-transcription-session`,
+    });
   });
 
   it("allows combined adaptive answer save and completion through the assessment proxy", () => {
@@ -121,15 +125,12 @@ describe("proxy allowlist", () => {
     });
   });
 
-  it("blocks intake story audio upload and segment routes", () => {
+  it("allows intake story audio upload and segment routes", () => {
     const cases = [
       ["POST", "/api/v1/patients/me/intake/story/audio-uploads"],
       ["POST", "/api/v1/patients/me/intake/story/segments/session"],
       ["POST", "/api/v1/patients/me/intake/story/segments"],
       ["POST", "/api/v1/patients/me/intake/story/segments/finalize"],
-      ["GET", "/api/v1/patients/me/intake/story/segments/session"],
-      ["PUT", "/api/v1/patients/me/intake/story/segments"],
-      ["POST", "/api/v1/patients/me/intake/story/segments/finalize/extra"],
     ] as const;
 
     for (const [method, targetPath] of cases) {
@@ -139,8 +140,33 @@ describe("proxy allowlist", () => {
           method,
           `/api/proxy${targetPath}`,
         ),
-      ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
+      ).toEqual({ ok: true, targetPath });
     }
+
+    expect(
+      validateProxyTarget(
+        ["api", "v1", "patients", "me", "intake", "story", "segments"],
+        "PUT",
+        "/api/proxy/api/v1/patients/me/intake/story/segments",
+      ),
+    ).toEqual({ ok: false, status: 405, code: "proxy_method_not_allowed" });
+    expect(
+      validateProxyTarget(
+        [
+          "api",
+          "v1",
+          "patients",
+          "me",
+          "intake",
+          "story",
+          "segments",
+          "finalize",
+          "extra",
+        ],
+        "POST",
+        "/api/proxy/api/v1/patients/me/intake/story/segments/finalize/extra",
+      ),
+    ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
   });
 
   it("allows only the exact intake live-story HTTP control-plane shapes", () => {
@@ -410,8 +436,6 @@ describe("proxy allowlist", () => {
     ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
 
     for (const [method, targetPath] of [
-      ["POST", "/api/v1/shares"],
-      ["GET", "/api/v1/shares"],
       ["GET", "/api/v1/shares/some-token"],
       ["GET", "/api/v1/share/some-token/report"],
     ] as const) {
@@ -659,7 +683,7 @@ describe("proxy allowlist", () => {
     }
   });
 
-  it("blocks previously implemented patient MyScribe routes", () => {
+  it("allows the patient MyScribe routes", () => {
     const recordingId = "10000000-0000-4000-8000-000000000001";
     const routes = [
       ["GET", "/api/v1/patients/me/miscribe/recording-policy"],
@@ -698,7 +722,7 @@ describe("proxy allowlist", () => {
           method,
           `/api/proxy${targetPath}`,
         ),
-      ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
+      ).toEqual({ ok: true, targetPath });
     }
   });
 
@@ -727,7 +751,7 @@ describe("proxy allowlist", () => {
     }
   });
 
-  it("blocks all method variants on patient MyScribe paths", () => {
+  it("keeps patient MyScribe methods narrow", () => {
     const recordingId = "10000000-0000-4000-8000-000000000001";
     const cases = [
       ["POST", "/api/v1/patients/me/miscribe/recording-policy"],
@@ -749,7 +773,7 @@ describe("proxy allowlist", () => {
           method,
           `/api/proxy${targetPath}`,
         ),
-      ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
+      ).toEqual({ ok: false, status: 405, code: "proxy_method_not_allowed" });
     }
   });
 
@@ -775,6 +799,37 @@ describe("proxy allowlist", () => {
       status: 404,
       code: "proxy_auth_blocked",
     });
+  });
+
+  it("allows Google linked-account listing and revocation but no other auth proxy", () => {
+    const identityId = "10000000-0000-4000-8000-000000000001";
+    expect(
+      validateProxyTarget(
+        ["api", "v1", "auth", "social-identities"],
+        "GET",
+        "/api/proxy/api/v1/auth/social-identities",
+      ),
+    ).toEqual({
+      ok: true,
+      targetPath: "/api/v1/auth/social-identities",
+    });
+    expect(
+      validateProxyTarget(
+        ["api", "v1", "auth", "social-identities", identityId],
+        "DELETE",
+        `/api/proxy/api/v1/auth/social-identities/${identityId}`,
+      ),
+    ).toEqual({
+      ok: true,
+      targetPath: `/api/v1/auth/social-identities/${identityId}`,
+    });
+    expect(
+      validateProxyTarget(
+        ["api", "v1", "auth", "social-identities", "not-a-uuid"],
+        "DELETE",
+        "/api/proxy/api/v1/auth/social-identities/not-a-uuid",
+      ),
+    ).toEqual({ ok: false, status: 404, code: "proxy_auth_blocked" });
   });
 
   it("rejects encoded traversal and double slash prefix bypasses", () => {
@@ -971,16 +1026,37 @@ describe("proxy allowlist", () => {
     }
   });
 
-  it("blocks patient provider linking routes", () => {
+  it("allows patient provider linking, directory, and invite routes", () => {
     const linkId = "10000000-0000-4000-8000-000000000001";
     const cases = [
       ["POST", "/api/v1/invite-codes/validate"],
       ["POST", "/api/v1/patients/me/link"],
       ["GET", "/api/v1/patients/me/providers"],
       ["POST", `/api/v1/patients/me/providers/${linkId}/revoke`],
+      ["GET", "/api/v1/patient-directory"],
+      ["GET", `/api/v1/patient-directory/${linkId}`],
     ] as const;
 
     for (const [method, targetPath] of cases) {
+      expect(
+        validateProxyTarget(
+          targetPath.slice(1).split("/"),
+          method,
+          `/api/proxy${targetPath}`,
+        ),
+      ).toEqual({ ok: true, targetPath });
+    }
+  });
+
+  it("blocks unused provider alias and directory families", () => {
+    const linkId = "10000000-0000-4000-8000-000000000001";
+    for (const [method, targetPath] of [
+      ["GET", "/api/v1/provider-links"],
+      ["POST", "/api/v1/provider-links"],
+      ["PATCH", `/api/v1/provider-links/${linkId}/revoke`],
+      ["GET", "/api/v1/providers/directory"],
+      ["GET", `/api/v1/providers/directory/${linkId}`],
+    ] as const) {
       expect(
         validateProxyTarget(
           targetPath.slice(1).split("/"),
@@ -1014,7 +1090,7 @@ describe("proxy allowlist", () => {
           method,
           "/api/proxy/api/v1/patients/me/link",
         ),
-      ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
+      ).toEqual({ ok: false, status: 405, code: "proxy_method_not_allowed" });
     }
 
     expect(
@@ -1024,5 +1100,99 @@ describe("proxy allowlist", () => {
         "/api/proxy/api/v1/patients/me/providers/not-a-uuid/revoke",
       ),
     ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
+  });
+
+  it("allows consented assessment-report sharing and revocation only", () => {
+    const shareId = "10000000-0000-4000-8000-000000000001";
+    for (const [method, targetPath] of [
+      ["GET", "/api/v1/shares"],
+      ["POST", "/api/v1/shares"],
+      ["DELETE", `/api/v1/shares/${shareId}`],
+    ] as const) {
+      expect(
+        validateProxyTarget(
+          targetPath.slice(1).split("/"),
+          method,
+          `/api/proxy${targetPath}`,
+        ),
+      ).toEqual({ ok: true, targetPath });
+    }
+    for (const [method, targetPath] of [
+      ["GET", "/api/v1/share/raw-bearer-token/report"],
+      ["POST", `/api/v1/shares/${shareId}`],
+      ["DELETE", "/api/v1/shares/not-a-uuid"],
+    ] as const) {
+      expect(
+        validateProxyTarget(
+          targetPath.slice(1).split("/"),
+          method,
+          `/api/proxy${targetPath}`,
+        ),
+      ).toEqual(
+        method === "POST"
+          ? { ok: false, status: 405, code: "proxy_method_not_allowed" }
+          : { ok: false, status: 404, code: "proxy_path_not_allowed" },
+      );
+    }
+  });
+
+  it("allows notification preferences but never browser device registration", () => {
+    for (const method of ["GET", "PUT"] as const) {
+      expect(
+        validateProxyTarget(
+          ["api", "v1", "patients", "me", "notification-preferences"],
+          method,
+          "/api/proxy/api/v1/patients/me/notification-preferences",
+        ),
+      ).toEqual({
+        ok: true,
+        targetPath: "/api/v1/patients/me/notification-preferences",
+      });
+    }
+    expect(
+      validateProxyTarget(
+        ["api", "v1", "patients", "me", "devices"],
+        "POST",
+        "/api/proxy/api/v1/patients/me/devices",
+      ),
+    ).toEqual({ ok: false, status: 404, code: "proxy_path_not_allowed" });
+  });
+
+  it("assigns route-specific limits to every restored mutation body", () => {
+    const id = "10000000-0000-4000-8000-000000000001";
+    expect(restoredProxyRequestBodyLimit("POST", "/api/v1/shares")).toBe(
+      32 * 1024,
+    );
+    expect(
+      restoredProxyRequestBodyLimit(
+        "POST",
+        `/api/v1/patients/me/assessments/${id}/questions/R01/note/live-transcription-session`,
+      ),
+    ).toBe(8 * 1024);
+    expect(
+      restoredProxyRequestBodyLimit(
+        "POST",
+        "/api/v1/patients/me/intake/story/segments/session",
+      ),
+    ).toBe(0);
+    expect(
+      restoredProxyRequestBodyLimit(
+        "POST",
+        "/api/v1/patients/me/intake/story/segments",
+      ),
+    ).toBe(8 * 1024);
+    expect(
+      restoredProxyRequestBodyLimit(
+        "POST",
+        `/api/v1/patients/me/miscribe/recordings/${id}/process`,
+      ),
+    ).toBe(4 * 1024);
+    expect(
+      restoredProxyRequestBodyLimit(
+        "PUT",
+        "/api/v1/patients/me/notification-preferences",
+      ),
+    ).toBe(8 * 1024);
+    expect(restoredProxyRequestBodyLimit("POST", "/api/v1/safety")).toBeNull();
   });
 });

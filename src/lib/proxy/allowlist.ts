@@ -57,8 +57,61 @@ const MEDICATION_ITEM_RE = new RegExp(
   `^\\/api\\/v1\\/patients\\/me\\/medications\\/${UUID_RE}$`,
   "i",
 );
+const ASSESSMENT_QUESTION_NOTE_TRANSCRIPTION_RE = new RegExp(
+  `^\\/api\\/v1\\/assessments\\/${UUID_RE}\\/question-note-transcriptions$`,
+  "i",
+);
+const INTAKE_STORY_AUDIO_UPLOADS_RE =
+  /^\/api\/v1\/patients\/me\/intake\/story\/audio-uploads$/i;
+const INTAKE_STORY_SEGMENTS_SESSION_RE =
+  /^\/api\/v1\/patients\/me\/intake\/story\/segments\/session$/i;
+const INTAKE_STORY_SEGMENTS_RE =
+  /^\/api\/v1\/patients\/me\/intake\/story\/segments$/i;
+const INTAKE_STORY_SEGMENTS_FINALIZE_RE =
+  /^\/api\/v1\/patients\/me\/intake\/story\/segments\/finalize$/i;
+const MISCRIBE_PREFIX = "/api/v1/patients/me/miscribe";
+const MISCRIBE_RECORDINGS_PREFIX = `${MISCRIBE_PREFIX}/recordings`;
+const MISCRIBE_RECORDING_RE = `^\\/api\\/v1\\/patients\\/me\\/miscribe\\/recordings\\/${UUID_RE}`;
+const MISCRIBE_RECORDING_EXACT_RE = new RegExp(
+  `${MISCRIBE_RECORDING_RE}$`,
+  "i",
+);
+const MISCRIBE_RECORDING_ACTION_RE = new RegExp(
+  `${MISCRIBE_RECORDING_RE}\\/(?:all-party-attestation|begin|abandon|upload-url|upload-complete|process)$`,
+  "i",
+);
+const MISCRIBE_RECORDING_SUMMARY_RE = new RegExp(
+  `${MISCRIBE_RECORDING_RE}\\/summary$`,
+  "i",
+);
+const PATIENT_PROVIDER_REVOKE_RE = new RegExp(
+  `^\\/api\\/v1\\/patients\\/me\\/providers\\/${UUID_RE}\\/revoke$`,
+  "i",
+);
+const PATIENT_DIRECTORY_RE = /^\/api\/v1\/patient-directory\/?$/i;
+const PATIENT_DIRECTORY_PROFILE_RE = new RegExp(
+  `^\\/api\\/v1\\/patient-directory\\/${UUID_RE}\\/?$`,
+  "i",
+);
+const SHARE_TOKEN_RE = new RegExp(`^\\/api\\/v1\\/shares\\/${UUID_RE}$`, "i");
+const SHARES_PREFIX = "/api/v1/shares";
+const GOOGLE_SOCIAL_IDENTITIES_PREFIX = "/api/v1/auth/social-identities";
+const GOOGLE_SOCIAL_IDENTITY_RE = new RegExp(
+  `^\\/api\\/v1\\/auth\\/social-identities\\/${UUID_RE}$`,
+  "i",
+);
 
 export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
+  {
+    prefix: GOOGLE_SOCIAL_IDENTITIES_PREFIX,
+    methods: ["GET"],
+    match: "exact",
+  },
+  {
+    prefix: GOOGLE_SOCIAL_IDENTITIES_PREFIX,
+    methods: ["DELETE"],
+    pathPattern: GOOGLE_SOCIAL_IDENTITY_RE,
+  },
   {
     prefix: "/api/v1/patients/me/assessments",
     methods: ["GET", "POST"],
@@ -102,6 +155,11 @@ export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
     prefix: "/api/v1/patients/me/assessments",
     methods: ["POST"],
     pathPattern: ASSESSMENT_REPORT_RE,
+  },
+  {
+    prefix: "/api/v1/assessments",
+    methods: ["POST"],
+    pathPattern: ASSESSMENT_QUESTION_NOTE_TRANSCRIPTION_RE,
   },
   {
     prefix: "/api/v1/patients/me/assessments",
@@ -236,8 +294,99 @@ export const ALLOWED_PROXY_ROUTES: readonly AllowedProxyRoute[] = [
     methods: ["POST"],
     pathPattern: INTAKE_ROUTE_RE,
   },
+  {
+    prefix: "/api/v1/patients/me/intake",
+    methods: ["POST"],
+    pathPattern: INTAKE_STORY_AUDIO_UPLOADS_RE,
+  },
+  {
+    prefix: "/api/v1/patients/me/intake",
+    methods: ["POST"],
+    pathPattern: INTAKE_STORY_SEGMENTS_SESSION_RE,
+  },
+  {
+    prefix: "/api/v1/patients/me/intake",
+    methods: ["POST"],
+    pathPattern: INTAKE_STORY_SEGMENTS_RE,
+  },
+  {
+    prefix: "/api/v1/patients/me/intake",
+    methods: ["POST"],
+    pathPattern: INTAKE_STORY_SEGMENTS_FINALIZE_RE,
+  },
+  {
+    prefix: `${MISCRIBE_PREFIX}/recording-policy`,
+    methods: ["GET"],
+    match: "exact",
+  },
+  { prefix: MISCRIBE_RECORDINGS_PREFIX, methods: ["GET"], match: "exact" },
+  {
+    prefix: `${MISCRIBE_RECORDINGS_PREFIX}/setup`,
+    methods: ["POST"],
+    match: "exact",
+  },
+  {
+    prefix: MISCRIBE_RECORDINGS_PREFIX,
+    methods: ["GET", "DELETE"],
+    pathPattern: MISCRIBE_RECORDING_EXACT_RE,
+  },
+  {
+    prefix: MISCRIBE_RECORDINGS_PREFIX,
+    methods: ["POST"],
+    pathPattern: MISCRIBE_RECORDING_ACTION_RE,
+  },
+  {
+    prefix: MISCRIBE_RECORDINGS_PREFIX,
+    methods: ["GET"],
+    pathPattern: MISCRIBE_RECORDING_SUMMARY_RE,
+  },
+  {
+    prefix: "/api/v1/patients/me/providers",
+    methods: ["GET"],
+    match: "exact",
+  },
+  {
+    prefix: "/api/v1/patients/me/link",
+    methods: ["POST"],
+    match: "exact",
+  },
+  {
+    prefix: "/api/v1/patients/me/providers",
+    methods: ["POST"],
+    pathPattern: PATIENT_PROVIDER_REVOKE_RE,
+  },
+  {
+    prefix: "/api/v1/patient-directory",
+    methods: ["GET"],
+    pathPattern: PATIENT_DIRECTORY_RE,
+  },
+  {
+    prefix: "/api/v1/patient-directory",
+    methods: ["GET"],
+    pathPattern: PATIENT_DIRECTORY_PROFILE_RE,
+  },
+  {
+    prefix: "/api/v1/invite-codes/validate",
+    methods: ["POST"],
+    match: "exact",
+  },
+  {
+    prefix: "/api/v1/patients/me/notification-preferences",
+    methods: ["GET", "PUT"],
+    match: "exact",
+  },
   { prefix: "/api/v1/patients/me", methods: ["GET", "PATCH"], match: "exact" },
   { prefix: "/api/v1/safety", methods: ["GET", "POST"] },
+  {
+    prefix: SHARES_PREFIX,
+    methods: ["GET", "POST"],
+    match: "exact",
+  },
+  {
+    prefix: SHARES_PREFIX,
+    methods: ["DELETE"],
+    pathPattern: SHARE_TOKEN_RE,
+  },
 ];
 
 export type ProxyPathValidation =
@@ -255,7 +404,7 @@ export function validateProxyTarget(
   if (rawPathname.includes("//")) {
     return { ok: false, status: 400, code: "proxy_path_invalid" };
   }
-  if (hasEncodedTraversal(rawPathname)) {
+  if (hasEncodedPathEscape(rawPathname)) {
     return { ok: false, status: 400, code: "proxy_path_invalid" };
   }
 
@@ -265,7 +414,10 @@ export function validateProxyTarget(
     BACKEND_ROOT_PATHS_WITH_TRAILING_SLASH.has(baseTargetPath)
       ? `${baseTargetPath}/`
       : baseTargetPath;
-  if (targetPath.startsWith(`${AUTH_PREFIX}/`) || targetPath === AUTH_PREFIX) {
+  if (
+    (targetPath.startsWith(`${AUTH_PREFIX}/`) || targetPath === AUTH_PREFIX) &&
+    !isGoogleSocialIdentityTarget(targetPath)
+  ) {
     return { ok: false, status: 404, code: "proxy_auth_blocked" };
   }
   if (targetPath.includes("\\") || targetPath.includes("://")) {
@@ -315,6 +467,83 @@ export function isPatientAssessmentDocumentDeleteTarget(
   );
 }
 
+export function isPatientReportShareCollectionTarget(
+  method: string,
+  targetPath: string,
+): boolean {
+  return (
+    ["GET", "POST"].includes(method.toUpperCase()) &&
+    (targetPath === SHARES_PREFIX || targetPath === `${SHARES_PREFIX}/`)
+  );
+}
+
+export function isPatientReportShareRevocationTarget(
+  method: string,
+  targetPath: string,
+): boolean {
+  return method.toUpperCase() === "DELETE" && SHARE_TOKEN_RE.test(targetPath);
+}
+
+export function isQuestionNoteTranscriptionTarget(
+  method: string,
+  targetPath: string,
+): boolean {
+  return (
+    method.toUpperCase() === "POST" &&
+    ASSESSMENT_QUESTION_NOTE_TRANSCRIPTION_RE.test(targetPath)
+  );
+}
+
+export function restoredProxyRequestBodyLimit(
+  method: string,
+  targetPath: string,
+): number | null {
+  const normalizedMethod = method.toUpperCase();
+  if (normalizedMethod === "POST" && targetPath === SHARES_PREFIX) {
+    return 32 * 1024;
+  }
+  if (
+    normalizedMethod === "POST" &&
+    ASSESSMENT_QUESTION_NOTE_TRANSCRIPTION_RE.test(targetPath)
+  ) {
+    return 25 * 1024 * 1024 + 64 * 1024;
+  }
+  if (normalizedMethod === "POST") {
+    if (INTAKE_STORY_AUDIO_UPLOADS_RE.test(targetPath)) return 4 * 1024;
+    if (INTAKE_STORY_SEGMENTS_SESSION_RE.test(targetPath)) return 0;
+    if (INTAKE_STORY_SEGMENTS_RE.test(targetPath)) return 8 * 1024;
+    if (INTAKE_STORY_SEGMENTS_FINALIZE_RE.test(targetPath)) return 4 * 1024;
+    if (targetPath === `${MISCRIBE_RECORDINGS_PREFIX}/setup`) return 16 * 1024;
+    if (MISCRIBE_RECORDING_ACTION_RE.test(targetPath)) return 4 * 1024;
+    if (targetPath === "/api/v1/patients/me/link") return 8 * 1024;
+    if (PATIENT_PROVIDER_REVOKE_RE.test(targetPath)) return 0;
+    if (targetPath === "/api/v1/invite-codes/validate") return 4 * 1024;
+  }
+  if (
+    normalizedMethod === "PUT" &&
+    targetPath === "/api/v1/patients/me/notification-preferences"
+  ) {
+    return 8 * 1024;
+  }
+  if (
+    normalizedMethod === "DELETE" &&
+    (SHARE_TOKEN_RE.test(targetPath) ||
+      GOOGLE_SOCIAL_IDENTITY_RE.test(targetPath) ||
+      MISCRIBE_RECORDING_EXACT_RE.test(targetPath))
+  ) {
+    return 0;
+  }
+  return null;
+}
+
+function isGoogleSocialIdentityTarget(targetPath: string): boolean {
+  return (
+    targetPath === GOOGLE_SOCIAL_IDENTITIES_PREFIX ||
+    targetPath === `${GOOGLE_SOCIAL_IDENTITIES_PREFIX}/` ||
+    GOOGLE_SOCIAL_IDENTITY_RE.test(targetPath)
+  );
+}
+
 function matchesRoute(targetPath: string, route: AllowedProxyRoute): boolean {
   if (route.pathPattern) return route.pathPattern.test(targetPath);
   if (targetPath === route.prefix) return true;
@@ -323,14 +552,6 @@ function matchesRoute(targetPath: string, route: AllowedProxyRoute): boolean {
   return targetPath.startsWith(`${route.prefix}/`);
 }
 
-function hasEncodedTraversal(pathname: string): boolean {
-  const lower = pathname.toLowerCase();
-  return (
-    lower.includes("%2e") ||
-    lower.includes("%2f") ||
-    lower.includes("%5c") ||
-    lower.includes("%252e") ||
-    lower.includes("%252f") ||
-    lower.includes("%255c")
-  );
+function hasEncodedPathEscape(pathname: string): boolean {
+  return pathname.includes("%");
 }

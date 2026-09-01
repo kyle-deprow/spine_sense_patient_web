@@ -32,7 +32,6 @@ interface RateLimitStore {
   consume(key: string, limit: number, windowMs: number): Promise<boolean>
   clear(): Promise<void>
 }
-
 // Map<key, timestamps[]> — timestamps are ms since epoch, sorted ascending
 const store = new Map<string, number[]>()
 

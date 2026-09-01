@@ -405,6 +405,7 @@ describe("proxy route handler", () => {
       expect.any(Object),
       {},
     );
+    expect(mockedBackendFetch.mock.calls[0]?.[1]?.signal).toBe(request.signal);
   });
 
   it("uses the long backend timeout for LLM-backed assessment proxy calls", async () => {
@@ -974,7 +975,7 @@ describe("proxy route handler", () => {
       isLongRunningBackendCall(
         "/api/v1/patients/me/miscribe/recordings/10000000-0000-4000-8000-00000000000A/process",
       ),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       isLongRunningBackendCall(
         "/api/v1/patients/me/miscribe/recordings/10000000-0000-4000-8000-000000000001/upload-complete",
@@ -1133,34 +1134,13 @@ describe("proxy route handler", () => {
   });
 
   it.each([
-    [
-      "POST",
-      "/api/v1/patients/me/assessments/10000000-0000-4000-8000-000000000001/questions/R01/note/live-transcription-session",
-    ],
-    ["POST", "/api/v1/patients/me/intake/story/audio-uploads"],
-    ["POST", "/api/v1/patients/me/intake/story/segments/session"],
-    ["POST", "/api/v1/patients/me/intake/story/segments"],
-    ["POST", "/api/v1/patients/me/intake/story/segments/finalize"],
-    ["GET", "/api/v1/patients/me/miscribe/recordings"],
-    [
-      "POST",
-      "/api/v1/patients/me/miscribe/recordings/10000000-0000-4000-8000-000000000001/process",
-    ],
-    ["GET", "/api/v1/patients/me/providers"],
-    ["POST", "/api/v1/patients/me/link"],
-    [
-      "POST",
-      "/api/v1/patients/me/providers/10000000-0000-4000-8000-000000000001/revoke",
-    ],
-    ["POST", "/api/v1/invite-codes/validate"],
-    ["POST", "/api/v1/shares"],
     ["GET", "/api/v1/fhir/policy"],
     [
       "POST",
       "/api/v1/fhir/connections/10000000-0000-4000-8000-000000000001/sync",
     ],
   ] as const)(
-    "blocks removed Tranche 3A proxy target before forwarding: %s %s",
+    "blocks excluded proxy target before forwarding: %s %s",
     async (method, targetPath) => {
       const csrf = createCsrfToken(CSRF_SECRET, "removed-route-denial");
       const request = makeProxyRequest(
@@ -1197,4 +1177,348 @@ describe("proxy route handler", () => {
       );
     },
   );
+
+  it("fails closed when a report-share request includes generic sharing fields", async () => {
+    const csrf = createCsrfToken(CSRF_SECRET, "report-share-invalid-body");
+    const request = makeProxyRequest(
+      "/api/proxy/api/v1/shares",
+      "POST",
+      { spine_patient_sess: "access-token", spine_patient_csrf: csrf },
+      {
+        "Content-Type": "application/json",
+        [CSRF_HEADER]: csrf,
+        Origin: ORIGIN,
+      },
+      JSON.stringify({
+        scope_elements: ["visit_recordings"],
+        ttl_hours: 72,
+      }),
+    );
+
+    const response = await POST(request, makeContext(["api", "v1", "shares"]));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "invalid_report_share_request",
+    });
+    expect(mockedBackendFetch).not.toHaveBeenCalled();
+  });
+
+  it("never forwards a raw share token returned by the backend", async () => {
+    const csrf = createCsrfToken(CSRF_SECRET, "report-share-raw-token");
+    mockedBackendFetch.mockResolvedValueOnce(
+      Response.json(
+        {
+          token: "raw-bearer-token",
+          token_id: "10000000-0000-4000-8000-000000000001",
+        },
+        { status: 201 },
+      ),
+    );
+    const request = makeProxyRequest(
+      "/api/proxy/api/v1/shares",
+      "POST",
+      { spine_patient_sess: "access-token", spine_patient_csrf: csrf },
+      {
+        "Content-Type": "application/json",
+        [CSRF_HEADER]: csrf,
+        Origin: ORIGIN,
+      },
+      JSON.stringify({
+        report_share: true,
+        report_id: "10000000-0000-4000-8000-000000000001",
+        recipient_email: "recipient@example.test",
+        acknowledged: true,
+        acknowledgment_version: "share-consent-2026-01-01",
+      }),
+    );
+
+    const response = await POST(request, makeContext(["api", "v1", "shares"]));
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: "service_unavailable",
+    });
+    expect(mockedBackendFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when a share listing contains a non-report scope", async () => {
+    mockedBackendFetch.mockResolvedValueOnce(
+      Response.json({
+        items: [{ scope_elements: ["visit_recordings"] }],
+        total: 1,
+      }),
+    );
+
+    const response = await GET(
+      makeProxyRequest("/api/proxy/api/v1/shares", "GET", {
+        spine_patient_sess: "access-token",
+      }),
+      makeContext(["api", "v1", "shares"]),
+    );
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: "service_unavailable",
+    });
+    expect(mockedBackendFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts only the strict report-share create receipt", async () => {
+    const csrf = createCsrfToken(CSRF_SECRET, "report-share-valid-receipt");
+    const receipt = {
+      token_id: "10000000-0000-4000-8000-000000000001",
+      expires_at: "2026-09-08T12:00:00Z",
+      acknowledgment_version: "share-consent-2026-01-01",
+      acknowledged_at: "2026-09-01T12:00:00Z",
+      accepted: true,
+      queued: true,
+    };
+    mockedBackendFetch.mockResolvedValueOnce(
+      Response.json(receipt, { status: 201 }),
+    );
+    const response = await POST(
+      makeProxyRequest(
+        "/api/proxy/api/v1/shares",
+        "POST",
+        { spine_patient_sess: "access-token", spine_patient_csrf: csrf },
+        {
+          "Content-Type": "application/json",
+          [CSRF_HEADER]: csrf,
+          Origin: ORIGIN,
+        },
+        JSON.stringify({
+          report_share: true,
+          report_id: "10000000-0000-4000-8000-000000000002",
+          recipient_email: "recipient@example.test",
+          acknowledged: true,
+          acknowledgment_version: "share-consent-2026-01-01",
+        }),
+      ),
+      makeContext(["api", "v1", "shares"]),
+    );
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toEqual(receipt);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("rejects unknown nested report fields including transcripts", async () => {
+    const csrf = createCsrfToken(CSRF_SECRET, "report-share-nested-field");
+    mockedBackendFetch.mockResolvedValueOnce(
+      Response.json(
+        {
+          token_id: "10000000-0000-4000-8000-000000000001",
+          expires_at: "2026-09-08T12:00:00Z",
+          acknowledgment_version: "share-consent-2026-01-01",
+          acknowledged_at: "2026-09-01T12:00:00Z",
+          accepted: true,
+          queued: true,
+          metadata: { transcript: "must-not-cross-the-BFF" },
+        },
+        { status: 201 },
+      ),
+    );
+    const response = await POST(
+      makeProxyRequest(
+        "/api/proxy/api/v1/shares",
+        "POST",
+        { spine_patient_sess: "access-token", spine_patient_csrf: csrf },
+        {
+          "Content-Type": "application/json",
+          [CSRF_HEADER]: csrf,
+          Origin: ORIGIN,
+        },
+        JSON.stringify({
+          report_share: true,
+          report_id: "10000000-0000-4000-8000-000000000002",
+          recipient_email: "recipient@example.test",
+          acknowledged: true,
+          acknowledgment_version: "share-consent-2026-01-01",
+        }),
+      ),
+      makeContext(["api", "v1", "shares"]),
+    );
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: "service_unavailable",
+    });
+  });
+
+  it("accepts only strict report-share list items", async () => {
+    const list = {
+      items: [
+        {
+          id: "10000000-0000-4000-8000-000000000001",
+          scope_elements: ["assessment_report"],
+          target_provider_profile_id: null,
+          expires_at: "2026-09-08T12:00:00Z",
+          created_at: "2026-09-01T12:00:00Z",
+          revoked_at: null,
+          access_count: 0,
+          last_accessed_at: null,
+          status: "active",
+        },
+      ],
+      total: 1,
+      limit: 20,
+      offset: 0,
+      has_more: false,
+    };
+    mockedBackendFetch.mockResolvedValueOnce(Response.json(list));
+
+    const response = await GET(
+      makeProxyRequest("/api/proxy/api/v1/shares", "GET", {
+        spine_patient_sess: "access-token",
+      }),
+      makeContext(["api", "v1", "shares"]),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual(list);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("sanitizes report-share backend errors to an allowlisted schema", async () => {
+    mockedBackendFetch.mockResolvedValueOnce(
+      Response.json(
+        {
+          error: "private_backend_error",
+          token: "raw-token",
+          nested: { answers: ["private-answer"] },
+        },
+        { status: 409 },
+      ),
+    );
+    const shareId = "10000000-0000-4000-8000-000000000001";
+    const csrf = createCsrfToken(CSRF_SECRET, "share-delete-error");
+    const response = await DELETE(
+      makeProxyRequest(
+        `/api/proxy/api/v1/shares/${shareId}`,
+        "DELETE",
+        { spine_patient_sess: "access-token", spine_patient_csrf: csrf },
+        {
+          "Content-Type": "application/json",
+          [CSRF_HEADER]: csrf,
+          Origin: ORIGIN,
+        },
+        "",
+      ),
+      makeContext(["api", "v1", "shares", shareId]),
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({ error: "conflict" });
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("accepts only a bodyless 204 report-share revocation receipt", async () => {
+    mockedBackendFetch.mockResolvedValueOnce(
+      new Response(null, { status: 204 }),
+    );
+    const shareId = "10000000-0000-4000-8000-000000000001";
+    const csrf = createCsrfToken(CSRF_SECRET, "share-delete-success");
+    const response = await DELETE(
+      makeProxyRequest(
+        `/api/proxy/api/v1/shares/${shareId}`,
+        "DELETE",
+        { spine_patient_sess: "access-token", spine_patient_csrf: csrf },
+        {
+          "Content-Type": "application/json",
+          [CSRF_HEADER]: csrf,
+          Origin: ORIGIN,
+        },
+        "",
+      ),
+      makeContext(["api", "v1", "shares", shareId]),
+    );
+
+    expect(response.status).toBe(204);
+    await expect(response.text()).resolves.toBe("");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("rejects an oversized restored body from Content-Length before buffering", async () => {
+    const csrf = createCsrfToken(CSRF_SECRET, "body-limit-content-length");
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([123]));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const response = await POST(
+      makeProxyRequest(
+        "/api/proxy/api/v1/patients/me/intake/story/segments",
+        "POST",
+        { spine_patient_sess: "access-token", spine_patient_csrf: csrf },
+        {
+          "Content-Type": "application/json",
+          "Content-Length": String(8 * 1024 + 1),
+          [CSRF_HEADER]: csrf,
+          Origin: ORIGIN,
+        },
+        stream,
+      ),
+      makeContext([
+        "api",
+        "v1",
+        "patients",
+        "me",
+        "intake",
+        "story",
+        "segments",
+      ]),
+    );
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({
+      error: "payload_too_large",
+    });
+    expect(cancelled).toBe(true);
+    expect(mockedBackendFetch).not.toHaveBeenCalled();
+  });
+
+  it("cancels an oversized chunked restored body with no Content-Length", async () => {
+    const csrf = createCsrfToken(CSRF_SECRET, "body-limit-chunked");
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(5 * 1024));
+        controller.enqueue(new Uint8Array(4 * 1024));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const response = await POST(
+      makeProxyRequest(
+        "/api/proxy/api/v1/patients/me/intake/story/segments",
+        "POST",
+        { spine_patient_sess: "access-token", spine_patient_csrf: csrf },
+        {
+          "Content-Type": "application/json",
+          [CSRF_HEADER]: csrf,
+          Origin: ORIGIN,
+        },
+        stream,
+      ),
+      makeContext([
+        "api",
+        "v1",
+        "patients",
+        "me",
+        "intake",
+        "story",
+        "segments",
+      ]),
+    );
+
+    expect(response.status).toBe(413);
+    expect(cancelled).toBe(true);
+    expect(mockedBackendFetch).not.toHaveBeenCalled();
+  });
 });

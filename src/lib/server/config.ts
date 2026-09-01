@@ -47,8 +47,8 @@ const LOCAL_ORIGIN_ENVIRONMENTS = new Set([
   "e2e",
 ]);
 // "dev" appears in both sets: the historical local dev workflow uses
-// single-bucket, while the hosted VM-estate dev deployment (plan §13) runs
-// without a trusted client-IP contract and uses "unavailable".
+// single-bucket, while the hosted VM-estate dev deployment runs without a
+// trusted client-IP contract and uses "unavailable".
 const HOSTED_ENVIRONMENTS = new Set([
   "staging",
   "production",
@@ -130,6 +130,48 @@ function requireSecretBytes(
     throw new Error(`${name} must be at least ${minimumBytes} bytes`);
   }
   return value;
+}
+
+function parseBooleanEnv(name: string): boolean {
+  const value = process.env[name]?.trim().toLowerCase();
+  if (!value) return false;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  throw new Error(`${name} must be true or false`);
+}
+
+export interface GoogleOAuthConfig {
+  clientId: string;
+  clientSecret: string;
+  enabled: true;
+  publicUrl: string;
+}
+
+function parsePublicUrl(
+  value: string | undefined,
+  allowedOrigins: string[],
+): string | null {
+  const publicUrl = value?.trim() ?? "";
+  if (!publicUrl) return null;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(publicUrl);
+  } catch {
+    throw new Error("PATIENT_WEB_PUBLIC_URL must be an exact allowed origin");
+  }
+  if (
+    parsed.username ||
+    parsed.password ||
+    (parsed.pathname !== "/" && parsed.pathname !== "") ||
+    parsed.search ||
+    parsed.hash ||
+    publicUrl !== parsed.origin ||
+    !allowedOrigins.includes(parsed.origin)
+  ) {
+    throw new Error("PATIENT_WEB_PUBLIC_URL must be an exact allowed origin");
+  }
+  return parsed.origin;
 }
 
 export function parseClientIpMode(
@@ -355,7 +397,7 @@ export function getPatientWebConfig(): PatientWebConfig {
     auditActorSigningKeys: auditActorSigningKeys(),
     allowedOrigins,
     storageOrigins: splitList(process.env.NEXT_PUBLIC_STORAGE_DOMAINS),
-    publicUrl: process.env.PATIENT_WEB_PUBLIC_URL ?? null,
+    publicUrl: process.env.PATIENT_WEB_PUBLIC_URL?.trim() || null,
     environment: frontDoorOriginGuard.environment,
     frontDoorOriginGuardMode: frontDoorOriginGuard.mode,
     azureFrontDoorId: frontDoorOriginGuard.expectedFrontDoorId,
@@ -363,4 +405,39 @@ export function getPatientWebConfig(): PatientWebConfig {
     credentialRateLimitStore: rateLimitConfig.store,
     redisUrl: rateLimitConfig.redisUrl,
   };
+}
+
+export function getGoogleOAuthConfig(): GoogleOAuthConfig {
+  const enabled = parseBooleanEnv("GOOGLE_OAUTH_ENABLED");
+  const clientId = process.env.GOOGLE_CLIENT_ID?.trim() ?? "";
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim() ?? "";
+  if (Boolean(clientId) !== Boolean(clientSecret)) {
+    throw new Error(
+      "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set together",
+    );
+  }
+  if (!enabled) throw new Error("Google OAuth is disabled");
+
+  const patientWebConfig = getPatientWebConfig();
+  if (!clientId || !clientSecret) {
+    throw new Error("Google OAuth credentials are required when enabled");
+  }
+  const publicUrl = parsePublicUrl(
+    patientWebConfig.publicUrl ?? undefined,
+    patientWebConfig.allowedOrigins,
+  );
+  if (publicUrl === null) {
+    throw new Error(
+      "PATIENT_WEB_PUBLIC_URL is required when Google OAuth is enabled",
+    );
+  }
+  if (
+    patientWebConfig.clientIpMode !== "single-bucket" &&
+    patientWebConfig.frontDoorOriginGuardMode !== "enforce"
+  ) {
+    throw new Error(
+      "Hosted Google OAuth requires the Front Door origin guard in enforce mode",
+    );
+  }
+  return { clientId, clientSecret, enabled: true, publicUrl };
 }

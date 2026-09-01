@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  getGoogleOAuthConfig,
   getPatientWebConfig,
   parseAllowedOrigins,
   parseClientIpMode,
@@ -23,6 +24,69 @@ describe("patient web config", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it("accepts an explicitly enabled complete Google OAuth configuration", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("ENVIRONMENT", "production");
+    vi.stubEnv("PATIENT_WEB_CLIENT_IP_MODE", "azure-front-door");
+    vi.stubEnv("FRONT_DOOR_ORIGIN_GUARD_MODE", "enforce");
+    vi.stubEnv("AZURE_FRONT_DOOR_ID", "12345678-1234-1234-1234-123456789abc");
+    vi.stubEnv("PATIENT_WEB_ALLOWED_ORIGINS", "https://patient.example.test");
+    vi.stubEnv("PATIENT_WEB_PUBLIC_URL", "https://patient.example.test");
+    vi.stubEnv("GOOGLE_CLIENT_ID", "google-web-client-id");
+    vi.stubEnv("GOOGLE_CLIENT_SECRET", "google-web-client-secret");
+    vi.stubEnv("GOOGLE_OAUTH_ENABLED", "True");
+
+    expect(getGoogleOAuthConfig()).toEqual({
+      clientId: "google-web-client-id",
+      clientSecret: "google-web-client-secret",
+      enabled: true,
+      publicUrl: "https://patient.example.test",
+    });
+  });
+
+  it("keeps the BFF available when disabled Google settings are incomplete", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("ENVIRONMENT", "production");
+    vi.stubEnv("PATIENT_WEB_CLIENT_IP_MODE", "unavailable");
+    vi.stubEnv("GOOGLE_CLIENT_ID", "google-web-client-id");
+    vi.stubEnv("GOOGLE_CLIENT_SECRET", "");
+    vi.stubEnv("GOOGLE_OAUTH_ENABLED", "false");
+
+    expect(() => getPatientWebConfig()).not.toThrow();
+    expect(() => getGoogleOAuthConfig()).toThrow(
+      "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set together",
+    );
+  });
+
+  it("requires credentials and an exact public URL only on Google routes", () => {
+    vi.stubEnv("GOOGLE_OAUTH_ENABLED", "true");
+    vi.stubEnv("GOOGLE_CLIENT_ID", "google-web-client-id");
+    vi.stubEnv("GOOGLE_CLIENT_SECRET", "google-web-client-secret");
+    vi.stubEnv("PATIENT_WEB_PUBLIC_URL", "");
+
+    expect(() => getPatientWebConfig()).not.toThrow();
+    expect(() => getGoogleOAuthConfig()).toThrow(
+      "PATIENT_WEB_PUBLIC_URL is required",
+    );
+  });
+
+  it("never treats a hosted dev label as local Google configuration", () => {
+    vi.stubEnv("ENVIRONMENT", "dev");
+    vi.stubEnv("PATIENT_WEB_CLIENT_IP_MODE", "unavailable");
+    vi.stubEnv("GOOGLE_OAUTH_ENABLED", "true");
+    vi.stubEnv("GOOGLE_CLIENT_ID", "google-web-client-id");
+    vi.stubEnv("GOOGLE_CLIENT_SECRET", "google-web-client-secret");
+    vi.stubEnv(
+      "PATIENT_WEB_ALLOWED_ORIGINS",
+      "https://patient-dev.example.test",
+    );
+    vi.stubEnv("PATIENT_WEB_PUBLIC_URL", "https://patient-dev.example.test");
+
+    expect(() => getGoogleOAuthConfig()).toThrow(
+      "Hosted Google OAuth requires the Front Door origin guard in enforce mode",
+    );
   });
 
   it("includes the explicit Front Door origin guard configuration", () => {
@@ -125,7 +189,7 @@ describe("patient web config", () => {
     },
   );
 
-  it.each(["production", "prod", "staging"])(
+  it.each(["production", "prod", "staging", "dev", "development"])(
     "permits unavailable and Azure Front Door modes for hosted label %s",
     (environment) => {
       expect(parseClientIpMode("unavailable", environment)).toBe("unavailable");
@@ -135,7 +199,7 @@ describe("patient web config", () => {
     },
   );
 
-  it.each(["local", "development", "dev", "test", "e2e", "unknown", undefined])(
+  it.each(["local", "test", "e2e", "unknown", undefined])(
     "rejects hosted rate-limit modes for local or unknown label %s",
     (environment) => {
       expect(() => parseClientIpMode("unavailable", environment)).toThrow();

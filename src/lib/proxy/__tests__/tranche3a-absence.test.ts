@@ -17,7 +17,6 @@ import * as ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GET as appCatchAllGet } from "@/app/[...path]/route";
-import { GET as authCatchAllGet } from "@/app/api/auth/[...path]/route";
 import {
   ALLOWED_PROXY_ROUTES,
   validateProxyTarget,
@@ -37,13 +36,9 @@ const SELECTED_CONTRIBUTORS = [
   ".env.example",
 ] as const;
 const DELETED_SOURCE = [
-  "src/app/api/auth/google/start/route.ts",
-  "src/app/api/auth/google/callback/route.ts",
-  "src/app/api/auth/google/route.test.ts",
   "src/app/api/fhir/start/route.ts",
   "src/app/api/fhir/callback/route.ts",
   "src/app/api/fhir/route.test.ts",
-  "src/lib/server/google-oauth.ts",
   "src/lib/server/fhir-oauth.ts",
 ] as const;
 const REGULAR_NEXT_ROUTE_MANIFESTS = [
@@ -399,13 +394,6 @@ function deferredExposureLabels(
     contributorEvidence(relativePath, source),
   );
   if (evidence.some(({ fhir }) => fhir)) labels.push("fhir");
-  if (
-    evidence.some(({ google }) => google) &&
-    evidence.some(({ auth }) => auth)
-  ) {
-    labels.push("google-auth");
-  }
-
   return labels;
 }
 
@@ -430,7 +418,7 @@ function isDeferredManifestRoute(value: string): boolean {
   const words = semanticWords(value);
   if (!words.includes("api")) return false;
   if (hasFhirWords(words)) return true;
-  return words.includes("google") && hasAuthWords(words);
+  return false;
 }
 
 function missingRequiredManifestGroups(
@@ -486,16 +474,6 @@ describe("Tranche 3A public exposure inventory", () => {
 
   it.each([
     [
-      "src/app/api/auth/provider/route.ts",
-      `const provider = "goo" + "gle"; const action = "call" + "back";`,
-      "google-auth",
-    ],
-    [
-      "src/lib/server/identity-helper.ts",
-      `const beginLogin = () => provider("Google");`,
-      "google-auth",
-    ],
-    [
       "src/lib/server/config.ts",
       `const key = "EXPO_PUBLIC_EPIC_" + "FH" + "IR_ENABLED";`,
       "fhir",
@@ -546,7 +524,7 @@ describe("Tranche 3A public exposure inventory", () => {
     },
   );
 
-  it("detects Google provider and auth evidence across contributors", () => {
+  it("does not classify the restored Google provider and auth contract as deferred", () => {
     expect(
       deferredExposureLabels([
         {
@@ -558,10 +536,10 @@ describe("Tranche 3A public exposure inventory", () => {
           source: "export async function callback() {}",
         },
       ]),
-    ).toContain("google-auth");
+    ).toEqual([]);
   });
 
-  it("detects Google login evidence without a proximity limit", () => {
+  it("does not classify unrelated Google login wording as deferred", () => {
     expect(
       deferredExposureLabels([
         {
@@ -569,7 +547,7 @@ describe("Tranche 3A public exposure inventory", () => {
           source: `const provider = "Google";${" ".repeat(220)}function login() {}`,
         },
       ]),
-    ).toContain("google-auth");
+    ).toEqual([]);
   });
 
   it.each([
@@ -716,17 +694,8 @@ fs.writeFileSync(path.join(outputDir, "spawn-env.json"), JSON.stringify({
     );
 
     for (const removedTarget of [
-      "live-transcription-session",
-      "intake/story/audio-uploads",
-      "intake/story/segments",
-      "patients/me/miscribe",
-      "patients/me/providers",
-      "patients/me/link",
-      "invite-codes/validate",
-      "/api/v1/shares",
       "/api/v1/fhir",
       "push-notification",
-      "notification-preferences",
       "patient-devices",
     ]) {
       expect(activeInventory).not.toContain(compact(removedTarget));
@@ -734,27 +703,6 @@ fs.writeFileSync(path.join(outputDir, "spawn-env.json"), JSON.stringify({
   });
 
   it.each([
-    [
-      "POST",
-      `/api/v1/patients/me/assessments/${ASSESSMENT_ID}/questions/R01/note/live-transcription-session`,
-    ],
-    ["POST", "/api/v1/patients/me/intake/story/audio-uploads"],
-    ["POST", "/api/v1/patients/me/intake/story/segments/session"],
-    ["POST", "/api/v1/patients/me/intake/story/segments"],
-    ["POST", "/api/v1/patients/me/intake/story/segments/finalize"],
-    ["GET", "/api/v1/patients/me/miscribe/recording-policy"],
-    ["GET", "/api/v1/patients/me/miscribe/recordings"],
-    ["POST", "/api/v1/patients/me/miscribe/recordings/setup"],
-    [
-      "POST",
-      `/api/v1/patients/me/miscribe/recordings/${ASSESSMENT_ID}/process`,
-    ],
-    ["DELETE", `/api/v1/patients/me/miscribe/recordings/${ASSESSMENT_ID}`],
-    ["GET", "/api/v1/patients/me/providers"],
-    ["POST", "/api/v1/patients/me/link"],
-    ["POST", `/api/v1/patients/me/providers/${ASSESSMENT_ID}/revoke`],
-    ["POST", "/api/v1/invite-codes/validate"],
-    ["POST", "/api/v1/shares"],
     ["GET", "/api/v1/fhir/policy"],
     ["GET", "/api/v1/fhir/endpoints"],
     ["GET", "/api/v1/fhir/connections"],
@@ -768,8 +716,8 @@ fs.writeFileSync(path.join(outputDir, "spawn-env.json"), JSON.stringify({
     ["POST", `/api/v1/fhir/imports/${SECOND_ID}/commit`],
     ["GET", "/api/v1/fhir/import-history"],
     ["GET", "/api/v1/fhir/import-history/export"],
-    ["GET", "/api/v1/patients/me/notification-preferences"],
     ["POST", "/api/v1/patients/me/devices"],
+    ["DELETE", `/api/v1/patients/me/devices/${ASSESSMENT_ID}`],
   ] as const)("blocks removed proxy target: %s %s", (method, targetPath) => {
     expect(validation(method, targetPath)).toEqual({
       ok: false,
@@ -777,18 +725,6 @@ fs.writeFileSync(path.join(outputDir, "spawn-env.json"), JSON.stringify({
       code: "proxy_path_not_allowed",
     });
   });
-
-  it.each(["google/start", "google/callback"])(
-    "rejects removed Google request through generic auth catch-all: %s",
-    async (authPath) => {
-      const response = await authCatchAllGet(
-        new NextRequest(`http://localhost/api/auth/${authPath}`),
-        { params: Promise.resolve({ path: authPath.split("/") }) },
-      );
-      expect(response.status).toBe(404);
-      await expect(response.json()).resolves.toEqual({ error: "not_found" });
-    },
-  );
 
   it.each(["/api/fhir/start", "/api/fhir/callback"])(
     "rejects removed FHIR request through generic app catch-all: %s",
@@ -826,6 +762,8 @@ fs.writeFileSync(path.join(outputDir, "spawn-env.json"), JSON.stringify({
   it.each([
     "src/app/api/auth/login/route.ts",
     "src/app/api/auth/register/route.ts",
+    "src/app/api/auth/google/start/route.ts",
+    "src/app/api/auth/google/callback/route.ts",
     "src/app/api/auth/mfa/verify/route.ts",
     "src/app/api/auth/refresh/route.ts",
     "src/app/api/proxy/[...path]/route.ts",
