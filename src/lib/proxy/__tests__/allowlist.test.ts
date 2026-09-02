@@ -1174,7 +1174,7 @@ describe("proxy allowlist", () => {
         "POST",
         "/api/v1/patients/me/intake/story/segments/session",
       ),
-    ).toBe(0);
+    ).toBe(64);
     expect(
       restoredProxyRequestBodyLimit(
         "POST",

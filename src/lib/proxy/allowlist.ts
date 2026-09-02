@@ -504,7 +504,13 @@ export function restoredProxyRequestBodyLimit(
   }
   if (normalizedMethod === "POST") {
     if (INTAKE_STORY_AUDIO_UPLOADS_RE.test(normalizedPath)) return 4 * 1024;
-    if (INTAKE_STORY_SEGMENTS_SESSION_RE.test(normalizedPath)) return 0;
+    // The backend session-begin handler takes no body, but the patient client
+    // always serializes an empty `{}` stub on unsafe methods so the JSON
+    // Content-Type (and with it the CSRF header) survives. A 0-byte cap
+    // rejected that 2-byte stub with 413 before it ever reached the backend,
+    // which stalled voice capture. Admit the stub only; this is not a data
+    // channel.
+    if (INTAKE_STORY_SEGMENTS_SESSION_RE.test(normalizedPath)) return 64;
     if (INTAKE_STORY_SEGMENTS_RE.test(normalizedPath)) return 8 * 1024;
     if (INTAKE_STORY_SEGMENTS_FINALIZE_RE.test(normalizedPath)) return 4 * 1024;
     if (normalizedPath === `${MISCRIBE_RECORDINGS_PREFIX}/setup`)

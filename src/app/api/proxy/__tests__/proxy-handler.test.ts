@@ -1482,6 +1482,43 @@ describe("proxy route handler", () => {
     expect(mockedBackendFetch).not.toHaveBeenCalled();
   });
 
+  it("forwards the empty {} stub the client sends to begin a segmented story session", async () => {
+    // The patient client always serializes an empty `{}` body on unsafe
+    // methods so the JSON Content-Type (and CSRF header) survives. A prior
+    // 0-byte cap on this route rejected that 2-byte stub with 413 before the
+    // request ever reached the backend, which stalled voice capture. The
+    // route must admit the stub and forward it.
+    mockedBackendFetch.mockResolvedValue(Response.json({ generation: "gen" }));
+    const csrf = createCsrfToken(CSRF_SECRET, "segments-session-stub");
+    const response = await POST(
+      makeProxyRequest(
+        "/api/proxy/api/v1/patients/me/intake/story/segments/session",
+        "POST",
+        { spine_patient_sess: "access-token", spine_patient_csrf: csrf },
+        {
+          "Content-Type": "application/json",
+          "Content-Length": "2",
+          [CSRF_HEADER]: csrf,
+          Origin: ORIGIN,
+        },
+        "{}",
+      ),
+      makeContext([
+        "api",
+        "v1",
+        "patients",
+        "me",
+        "intake",
+        "story",
+        "segments",
+        "session",
+      ]),
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockedBackendFetch).toHaveBeenCalled();
+  });
+
   it("cancels an oversized chunked restored body with no Content-Length", async () => {
     const csrf = createCsrfToken(CSRF_SECRET, "body-limit-chunked");
     let cancelled = false;
